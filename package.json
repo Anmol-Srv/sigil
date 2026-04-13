@@ -1,8 +1,8 @@
 {
   "name": "@anmol-srv/cortex",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
-  "description": "Persistent memory layer for Claude Code sessions — ingests documents, extracts facts, answers questions via MCP",
+  "description": "Persistent memory for Claude Code — zero-install setup, embedded database, semantic search over your knowledge",
   "bin": {
     "cortex": "src/cli.js"
   },
@@ -21,6 +21,7 @@
   },
   "files": [
     "src/**/*.js",
+    "src/db/migrations/",
     "!src/**/*.test.js",
     "!src/scripts/",
     "prompts/",
@@ -41,6 +42,8 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@clack/prompts": "^1.2.0",
+    "@electric-sql/pglite": "^0.4.4",
     "@fastify/cors": "^11.2.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "dayjs": "^1.11.19",

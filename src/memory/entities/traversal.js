@@ -6,7 +6,8 @@ import { listRelationsForEntity } from './relations.js';
  * Walk the graph outward from an entity using recursive CTE.
  * Returns all reachable entities up to maxDepth, with cycle prevention.
  */
-async function findRelated(entityId, { maxDepth = 2, relationType, limit = 30 } = {}) {
+async function findRelated(entityId, { maxDepth: rawDepth = 2, relationType, limit = 30 } = {}) {
+  const maxDepth = Math.min(Math.max(rawDepth, 1), 6);
   const params = [entityId, entityId];
   const typeFilter = relationType
     ? 'AND r.relation_type = ?'
@@ -74,7 +75,8 @@ async function getEntityNeighborhood(entityId, { depth = 1, limit = 50 } = {}) {
  * BFS shortest path between two entities via recursive CTE.
  * Returns the path as an array of entities, or null if no path exists.
  */
-async function findPath(sourceEntityId, targetEntityId, { maxDepth = 4 } = {}) {
+async function findPath(sourceEntityId, targetEntityId, { maxDepth: rawDepth = 4 } = {}) {
+  const maxDepth = Math.min(Math.max(rawDepth, 1), 6);
   const { rows } = await cortexDb.raw(`
     WITH RECURSIVE search AS (
       SELECT r.target_id AS current_id,

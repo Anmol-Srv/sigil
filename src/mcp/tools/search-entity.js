@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { searchByName, listByType } from '../../memory/entities/store.js';
+import { textResponse } from '../utils.js';
 
 function registerSearchEntityTool(server) {
   server.tool(
@@ -39,10 +40,6 @@ Returns compact entity list. Use get_entity_context(entityId) for full details.`
       return textResponse(`${header} (${results.length}):\n${lines.join('\n')}\n\n_Use get_entity_context(entityId=<id>) for details or traverse_graph(startEntityId=<id>) for connections._`);
     },
   );
-}
-
-function textResponse(text) {
-  return { content: [{ type: 'text', text }] };
 }
 
 export { registerSearchEntityTool };

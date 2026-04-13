@@ -3,6 +3,7 @@ import { groupBy } from 'lodash-es';
 
 import { findById } from '../../memory/entities/store.js';
 import { getEntityNeighborhood, findPath, findRelated } from '../../memory/entities/traversal.js';
+import { textResponse } from '../utils.js';
 
 function registerTraverseGraphTool(server) {
   server.tool(
@@ -111,10 +112,6 @@ async function formatRelated(label, entity, opts) {
   }
 
   return textResponse(parts.join('\n'));
-}
-
-function textResponse(text) {
-  return { content: [{ type: 'text', text }] };
 }
 
 export { registerTraverseGraphTool };

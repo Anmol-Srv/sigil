@@ -1,4 +1,5 @@
 import cortexDb from '../../db/cortex.js';
+import { pgVector } from '../../lib/vectors.js';
 
 async function insertChunks(documentId, chunks, namespace) {
   // Delete existing chunks for this document (re-ingestion)
@@ -13,7 +14,7 @@ async function insertChunks(documentId, chunks, namespace) {
     contextualPrefix: chunk.contextualPrefix || null,
     sectionHeading: chunk.sectionHeading || null,
     namespace,
-    embedding: chunk.embedding ? pgVector(chunk.embedding) : null,
+    embedding: pgVector(chunk.embedding),
   }));
 
   const inserted = await cortexDb('chunk')
@@ -32,10 +33,6 @@ async function insertChunks(documentId, chunks, namespace) {
 
 async function deleteByDocument(documentId) {
   return cortexDb('chunk').where({ documentId }).del();
-}
-
-function pgVector(arr) {
-  return `[${arr.join(',')}]`;
 }
 
 export { insertChunks, deleteByDocument };

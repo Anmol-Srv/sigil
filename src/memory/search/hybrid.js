@@ -1,6 +1,7 @@
 import { keyBy } from 'lodash-es';
 
 import { embed, embedBatch } from '../../ingestion/embedder.js';
+import config from '../../config.js';
 import { findByName, searchByName } from '../entities/store.js';
 import { getFactsForEntity } from '../facts/entity-linker.js';
 import { recordAccess } from '../facts/store.js';
@@ -56,7 +57,7 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
 async function detectEntity(query, namespaces) {
   if (query.length < 2 || query.length > MAX_ENTITY_QUERY_LENGTH) return null;
 
-  const ns = namespaces[0] || 'default';
+  const ns = namespaces[0] || config.defaults.namespace;
 
   // Exact case-insensitive match first
   const exact = await findByName(query, ns);

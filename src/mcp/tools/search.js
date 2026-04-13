@@ -3,8 +3,7 @@ import { groupBy, sortBy } from 'lodash-es';
 
 import { search } from '../../memory/search/hybrid.js';
 import config from '../../config.js';
-
-const FACT_TRUNCATE = 200;
+import { textResponse, truncate, FACT_TRUNCATE } from '../utils.js';
 
 function registerSearchTool(server) {
   server.tool(
@@ -39,8 +38,7 @@ Set format="compact" for token-efficient output (one line per category, no IDs/m
       });
 
       if (format === 'compact') {
-        const text = formatCompact(facts, matchedEntity);
-        return { content: [{ type: 'text', text }] };
+        return textResponse(formatCompact(facts, matchedEntity));
       }
 
       const parts = [];
@@ -87,7 +85,7 @@ Set format="compact" for token-efficient output (one line per category, no IDs/m
         parts.push(`\n_Drill down: get_entity_context(entityId=${matchedEntity.id}) for full details about ${matchedEntity.name}_`);
       }
 
-      return { content: [{ type: 'text', text: parts.join('\n') }] };
+      return textResponse(parts.join('\n'));
     },
   );
 }
@@ -113,11 +111,6 @@ function formatCompact(facts, matchedEntity) {
   }
 
   return parts.join('\n');
-}
-
-function truncate(text, max) {
-  if (!text || text.length <= max) return text;
-  return text.slice(0, max) + '...';
 }
 
 export { registerSearchTool };

@@ -3,14 +3,13 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { promptJson } from '../../lib/llm.js';
+import { TtlCache } from '../../lib/cache.js';
 import config from '../../config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROMPT_PATH = join(__dirname, '../../../prompts/query-router.md');
 
-const CACHE_MAX_SIZE = 200;
-const CACHE_TTL_MS = 10 * 60 * 1000;
-const cache = new Map();
+const cache = new TtlCache({ maxSize: 200, ttlMs: 10 * 60 * 1000 });
 
 const VALID_INTENTS = ['preference', 'factual', 'entity_lookup', 'exploratory', 'temporal'];
 
@@ -24,7 +23,7 @@ const INTENT_DEFAULTS = {
 
 async function routeQuery(query) {
   const cacheKey = query.trim().toLowerCase();
-  const cached = getCached(cacheKey);
+  const cached = cache.get(cacheKey);
   if (cached) return cached;
 
   const systemPrompt = await readFile(PROMPT_PATH, 'utf8');
@@ -44,7 +43,7 @@ Respond with ONLY a JSON object: { "intent": "preference|factual|entity_lookup|e
 
     if (!result || !VALID_INTENTS.includes(result.intent)) {
       const fb = buildDecision('factual', {});
-      setCached(cacheKey, fb);
+      cache.set(cacheKey, fb);
       return fb;
     }
 
@@ -60,7 +59,7 @@ Respond with ONLY a JSON object: { "intent": "preference|factual|entity_lookup|e
       reasoning: result.reasoning || '',
     };
 
-    setCached(cacheKey, decision);
+    cache.set(cacheKey, decision);
     return decision;
   } catch (err) {
     console.error('[query-router] Failed:', err.message);
@@ -81,24 +80,6 @@ function buildDecision(intent, overrides = {}) {
     reasoning: '',
     ...overrides,
   };
-}
-
-function getCached(key) {
-  const entry = cache.get(key);
-  if (!entry) return undefined;
-  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
-    cache.delete(key);
-    return undefined;
-  }
-  return entry.value;
-}
-
-function setCached(key, value) {
-  if (cache.size >= CACHE_MAX_SIZE) {
-    const oldestKey = cache.keys().next().value;
-    cache.delete(oldestKey);
-  }
-  cache.set(key, { value, timestamp: Date.now() });
 }
 
 export { routeQuery };

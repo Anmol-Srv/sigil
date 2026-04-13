@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 import { ingestDocument } from '../../ingestion/pipeline.js';
-import { readSource } from '../../ingestion/sources/file.js';
-import { fetchSource } from '../../ingestion/sources/url.js';
+import { resolveSource } from '../../ingestion/resolve-source.js';
+import { textResponse } from '../utils.js';
 
 function registerIngestTool(server) {
   server.tool(
@@ -21,23 +21,9 @@ Use when: adding documents to the knowledge base, ingesting files, URLs, or raw 
       skipEntities: z.boolean().optional().default(false).describe('Skip entity linking'),
     },
     async ({ content, filePath, url, title, namespace, sourceType, skipFacts, skipEntities }) => {
-      let source;
-
-      if (filePath) {
-        source = await readSource(filePath);
-      } else if (url) {
-        source = await fetchSource(url);
-      } else if (content) {
-        source = {
-          content,
-          title: title || 'Untitled',
-          sourcePath: `raw/${Date.now()}`,
-          sourceType: sourceType || 'raw',
-          contentType: 'text/plain',
-          metadata: {},
-        };
-      } else {
-        return { content: [{ type: 'text', text: 'Error: provide content, filePath, or url.' }] };
+      const source = await resolveSource({ content, filePath, url, title, sourceType });
+      if (!source) {
+        return textResponse('Error: provide content, filePath, or url.');
       }
 
       const result = await ingestDocument({
@@ -63,7 +49,7 @@ Use when: adding documents to the knowledge base, ingesting files, URLs, or raw 
             result.md ? `- Output: ${result.md.url}` : '',
           ].filter(Boolean).join('\n');
 
-      return { content: [{ type: 'text', text }] };
+      return textResponse(text);
     },
   );
 }

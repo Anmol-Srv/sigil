@@ -1,6 +1,5 @@
 import { ingestDocument } from '../../ingestion/pipeline.js';
-import { readSource } from '../../ingestion/sources/file.js';
-import { fetchSource } from '../../ingestion/sources/url.js';
+import { resolveSource } from '../../ingestion/resolve-source.js';
 import * as jobs from '../../queue/jobs.js';
 import config from '../../config.js';
 import { AppError } from '../../lib/errors.js';
@@ -41,26 +40,12 @@ const batchSchema = {
   },
 };
 
-// Resolve the source payload from request body (fetch URL / read file / use raw content)
-async function resolveSource(body) {
-  const { content, url, filePath, title, namespace, sourceType, sourcePath, metadata } = body;
-
-  if (!content && !url && !filePath) {
+async function resolveSourceOrThrow(body) {
+  const source = await resolveSource(body);
+  if (!source) {
     throw new AppError({ errorCode: 'BAD_REQUEST', message: 'content, url, or filePath required' });
   }
-
-  if (url) return fetchSource(url);
-
-  if (filePath) return readSource(filePath);
-
-  return {
-    content,
-    title: title || 'Untitled',
-    sourcePath: sourcePath || `raw/${Date.now()}`,
-    sourceType: sourceType || 'raw',
-    contentType: 'text/plain',
-    metadata: metadata || {},
-  };
+  return source;
 }
 
 async function runIngest(body, source) {
@@ -83,7 +68,7 @@ async function runIngest(body, source) {
 }
 
 async function handleIngest(request, reply) {
-  const source = await resolveSource(request.body);
+  const source = await resolveSourceOrThrow(request.body);
   const isAsync = request.body.async !== false;
 
   if (!isAsync) {

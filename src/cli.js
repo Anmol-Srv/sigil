@@ -33,6 +33,7 @@ Commands:
   remember "text"          Save a fact or note to memory
   ingest <file|url|glob>   Ingest documents into the knowledge base
   search "query"           Search the knowledge base
+  context                  Refresh the hot-context snapshot in ~/.claude/CLAUDE.md
   status                   Show knowledge base statistics
   migrate                  Run database migrations
   reset                    Reset the database (drops all data)
@@ -54,6 +55,7 @@ const commands = {
   remember: runRemember,
   ingest: runIngest,
   search: runSearch,
+  context: runContext,
   status: runStatus,
   migrate: runMigrate,
   reset: runReset,
@@ -78,25 +80,19 @@ try {
 // ─── Init ────────────────────────────────────────────────────────────────────
 
 async function runInit(args) {
-  const { createInterface } = await import('node:readline/promises');
-  const { stdin: input, stdout: output } = process;
+  const clack = await import('@clack/prompts');
   const fs = await import('node:fs/promises');
+  const { intro, outro, select, text, spinner, confirm, note, cancel, isCancel } = clack;
 
   const cortexHome = join(homedir(), '.cortex');
   const envPath = join(cortexHome, '.env');
 
-  console.log('Cortex setup\n');
-
-  // Check prerequisites
-  const hasDocker = checkCommand('docker --version');
-  if (!hasDocker) {
-    console.error('Docker is required but not found. Install Docker Desktop: https://docker.com');
-    process.exit(1);
-  }
+  intro('Cortex — persistent memory for Claude');
 
   const hasOllama = checkCommand('ollama --version');
 
-  // Load existing env if present
+  // ── Load existing config ─────────────────────────────────────────────────
+
   const existing = {};
   if (existsSync(envPath)) {
     const content = await fs.readFile(envPath, 'utf8');
@@ -106,145 +102,171 @@ async function runInit(args) {
     }
   }
 
-  const rl = createInterface({ input, output });
+  // ── LLM provider ─────────────────────────────────────────────────────────
 
-  const llmProvider = await rl.question(
-    `LLM provider [openai/ollama/anthropic] (${existing.LLM_PROVIDER || 'openai'}): `,
-  ) || existing.LLM_PROVIDER || 'openai';
+  const llmProvider = await select({
+    message: 'LLM provider (for fact extraction and reasoning)',
+    options: [
+      { value: 'openai',    label: 'OpenAI',    hint: 'gpt-4o-mini — recommended' },
+      { value: 'anthropic', label: 'Anthropic', hint: 'Claude Haiku' },
+      { value: 'ollama',    label: 'Ollama',    hint: 'local models — no API cost' },
+    ],
+    initialValue: existing.LLM_PROVIDER || 'openai',
+  });
+  if (isCancel(llmProvider)) { cancel('Setup cancelled.'); process.exit(0); }
+
+  // ── API key ───────────────────────────────────────────────────────────────
 
   let openaiKey = existing.OPENAI_API_KEY || '';
   let anthropicKey = existing.ANTHROPIC_API_KEY || '';
 
   if (llmProvider === 'openai') {
-    openaiKey = await rl.question(`OpenAI API key (${openaiKey ? '***hidden***' : 'required'}): `) || openaiKey;
+    const key = await text({
+      message: 'OpenAI API key (paste, then Enter)',
+      placeholder: openaiKey ? '(keep existing — press Enter)' : 'sk-proj-...',
+      validate: (v) => {
+        if (!v && !openaiKey) return 'API key is required';
+        if (v && !v.startsWith('sk-')) return 'OpenAI keys start with "sk-" — check paste';
+      },
+    });
+    if (isCancel(key)) { cancel('Setup cancelled.'); process.exit(0); }
+    if (key) openaiKey = key;
   } else if (llmProvider === 'anthropic') {
-    anthropicKey = await rl.question(`Anthropic API key (${anthropicKey ? '***hidden***' : 'required'}): `) || anthropicKey;
+    const key = await text({
+      message: 'Anthropic API key (paste, then Enter)',
+      placeholder: anthropicKey ? '(keep existing — press Enter)' : 'sk-ant-...',
+      validate: (v) => {
+        if (!v && !anthropicKey) return 'API key is required';
+        if (v && !v.startsWith('sk-ant-')) return 'Anthropic keys start with "sk-ant-" — check paste';
+      },
+    });
+    if (isCancel(key)) { cancel('Setup cancelled.'); process.exit(0); }
+    if (key) anthropicKey = key;
   }
 
-  const embeddingProvider = await rl.question(
-    `Embedding provider [ollama/openai] (${existing.EMBEDDING_PROVIDER || (hasOllama ? 'ollama' : 'openai')}): `,
-  ) || existing.EMBEDDING_PROVIDER || (hasOllama ? 'ollama' : 'openai');
+  // ── Embeddings ────────────────────────────────────────────────────────────
 
-  const namespace = await rl.question(
-    `Default namespace (${existing.DEFAULT_NAMESPACE || 'default'}): `,
-  ) || existing.DEFAULT_NAMESPACE || 'default';
+  const embeddingProvider = await select({
+    message: 'Embedding provider (for semantic search)',
+    options: [
+      { value: 'ollama', label: 'Ollama', hint: 'nomic-embed-text — free, runs locally' },
+      { value: 'openai', label: 'OpenAI', hint: 'text-embedding-3-small — requires API key' },
+    ],
+    initialValue: existing.EMBEDDING_PROVIDER || (hasOllama ? 'ollama' : 'openai'),
+  });
+  if (isCancel(embeddingProvider)) { cancel('Setup cancelled.'); process.exit(0); }
 
-  const dbPort = await rl.question(
-    `DB port (${existing.CORTEX_DB_PORT || '5433'}): `,
-  ) || existing.CORTEX_DB_PORT || '5433';
+  // ── Ollama model pull ─────────────────────────────────────────────────────
 
-  rl.close();
+  if (embeddingProvider === 'ollama') {
+    if (!hasOllama) {
+      note(
+        'Ollama is not installed.\n' +
+        'Install from https://ollama.com then run: ollama pull nomic-embed-text\n' +
+        'Or re-run cortex init and choose OpenAI for embeddings.',
+        'Ollama not found',
+      );
+      cancel('Install Ollama then re-run cortex init.');
+      process.exit(0);
+    }
+    const hasModel = checkCommand('ollama list 2>/dev/null | grep nomic-embed-text');
+    if (!hasModel) {
+      const pull = await confirm({ message: 'Pull nomic-embed-text embedding model now? (~270MB)' });
+      if (isCancel(pull)) { cancel('Setup cancelled.'); process.exit(0); }
+      if (pull) {
+        const s = spinner();
+        s.start('Pulling nomic-embed-text...');
+        try {
+          _execSync('ollama pull nomic-embed-text', { stdio: 'pipe' });
+          s.stop('nomic-embed-text ready');
+        } catch {
+          s.stop('Pull failed — run: ollama pull nomic-embed-text manually');
+        }
+      }
+    }
+  }
 
-  // Write ~/.cortex/.env
+  // ── Namespace ─────────────────────────────────────────────────────────────
+
+  const namespace = await text({
+    message: 'Default namespace',
+    placeholder: 'default',
+    initialValue: existing.DEFAULT_NAMESPACE || 'default',
+    validate: (v) => { if (!v.trim()) return 'Cannot be empty'; },
+  });
+  if (isCancel(namespace)) { cancel('Setup cancelled.'); process.exit(0); }
+
+  // ── Write config ──────────────────────────────────────────────────────────
+
   await fs.mkdir(cortexHome, { recursive: true });
-
-  const dbPassword = existing.CORTEX_DB_PASSWORD || generateSecret(24);
   const encryptionKey = existing.CORTEX_ENCRYPTION_KEY || generateSecret(64);
 
   const envContent = [
-    `# Cortex configuration — ${new Date().toISOString().slice(0, 10)}`,
-    '',
-    `CORTEX_DB_HOST=localhost`,
-    `CORTEX_DB_PORT=${dbPort}`,
-    `CORTEX_DB_NAME=cortex`,
-    `CORTEX_DB_USER=cortex_app`,
-    `CORTEX_DB_PASSWORD=${dbPassword}`,
+    `# Cortex — generated ${new Date().toISOString().slice(0, 10)}`,
     '',
     `LLM_PROVIDER=${llmProvider}`,
-    openaiKey ? `OPENAI_API_KEY=${openaiKey}` : '# OPENAI_API_KEY=sk-...',
-    anthropicKey ? `ANTHROPIC_API_KEY=${anthropicKey}` : '# ANTHROPIC_API_KEY=sk-ant-...',
+    openaiKey    ? `OPENAI_API_KEY=${openaiKey}`       : '# OPENAI_API_KEY=',
+    anthropicKey ? `ANTHROPIC_API_KEY=${anthropicKey}` : '# ANTHROPIC_API_KEY=',
     '',
     `EMBEDDING_PROVIDER=${embeddingProvider}`,
     `OLLAMA_HOST=http://localhost:11434`,
     '',
     `DEFAULT_NAMESPACE=${namespace}`,
     `CORTEX_ENCRYPTION_KEY=${encryptionKey}`,
-    '',
-    `# Model overrides (leave empty to use provider defaults)`,
-    `# LLM_EXTRACTION_MODEL=`,
-    `# LLM_DECISION_MODEL=`,
-    `# LLM_ENTITY_MODEL=`,
   ].join('\n');
 
   await fs.writeFile(envPath, envContent, 'utf8');
-  console.log(`\nConfig written to ${envPath}`);
 
-  // Start Docker container
-  console.log('\nStarting PostgreSQL + pgvector...');
-  const containerName = 'cortex-memory-db';
-  const containerRunning = checkDockerContainer(containerName);
+  // ── Database (PGlite — embedded, zero-install) ────────────────────────────
 
-  if (!containerRunning) {
-    const dockerRun = `docker run -d \
-      --name ${containerName} \
-      -p ${dbPort}:5432 \
-      -e POSTGRES_DB=cortex \
-      -e POSTGRES_USER=cortex_app \
-      -e POSTGRES_PASSWORD=${dbPassword} \
-      -v cortex_memory_data:/var/lib/postgresql/data \
-      --restart unless-stopped \
-      pgvector/pgvector:pg17`;
+  dotenvConfig({ path: envPath, override: true, quiet: true });
 
-    try {
-      _execSync(dockerRun, { stdio: 'pipe' });
-      console.log('  Container started.');
-    } catch (err) {
-      // Container may already exist but be stopped
-      try {
-        _execSync(`docker start ${containerName}`, { stdio: 'pipe' });
-        console.log('  Container restarted.');
-      } catch {
-        console.error(`  Failed to start container: ${err.message}`);
-        process.exit(1);
-      }
-    }
-  } else {
-    console.log('  Container already running.');
+  const dbSpinner = spinner();
+  dbSpinner.start('Initialising memory database...');
+  try {
+    const migrationDir = join(PKG_DIR, 'src', 'db', 'migrations');
+    const cortexDb = (await import('./db/cortex.js')).default;
+    const [, migrations] = await cortexDb.migrate.latest({ directory: migrationDir });
+    await cortexDb.destroy();
+    dbSpinner.stop(
+      migrations.length ? `Memory database ready (${migrations.length} tables created)` : 'Memory database up to date',
+    );
+  } catch (err) {
+    dbSpinner.stop('Database setup failed');
+    cancel(err.message);
+    process.exit(1);
   }
 
-  // Wait for DB to be ready
-  console.log('  Waiting for DB to be ready...');
-  await waitForDb(dbPort, dbPassword, 30);
-  console.log('  DB is ready.');
+  // ── ~/.cortex/CLAUDE.md + @import in ~/.claude/CLAUDE.md ─────────────────
 
-  // Reload env so migrations can find the DB
-  dotenvConfig({ path: envPath, override: true });
+  const claudeSpinner = spinner();
+  claudeSpinner.start('Configuring Claude Code memory...');
+  await writeCortexMd();                  // write instructions to ~/.cortex/CLAUDE.md
+  await writeClaudeMd();                  // add single @import line to ~/.claude/CLAUDE.md
+  const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
+  await updateContextSnapshot({ namespace: namespace.toString() }).catch(() => {});
+  claudeSpinner.stop('Claude memory configured');
 
-  // Run migrations
-  console.log('\nRunning migrations...');
-  const migrationDir = join(PKG_DIR, 'src', 'db', 'migrations');
-  const cortexDb = (await import('./db/cortex.js')).default;
-  const [batch, migrations] = await cortexDb.migrate.latest({ directory: migrationDir });
-  if (migrations.length) {
-    console.log(`  Ran ${migrations.length} migration(s).`);
-  } else {
-    console.log('  Already up to date.');
-  }
-  await cortexDb.destroy();
+  // ── Done ──────────────────────────────────────────────────────────────────
 
-  // Write ~/.claude/CLAUDE.md so Claude automatically uses cortex
-  console.log('\nConfiguring Claude Code...');
-  await writeClaudeMd();
+  note(
+    [
+      `Memory store  ~/.cortex/db  (embedded, no server needed)`,
+      `Config        ${envPath}`,
+      `Claude        ~/.claude/CLAUDE.md — Cortex is now your memory`,
+      '',
+      'Claude will search Cortex before answering and save important',
+      'facts automatically. Start a new Claude session to begin.',
+      '',
+      'Quick start:',
+      '  cortex remember "your first fact"',
+      '  cortex ingest <file-or-url>',
+      '  cortex search "anything"',
+    ].join('\n'),
+    'Setup complete',
+  );
 
-  console.log(`
-Setup complete!
-
-  Config:  ${envPath}
-  Data:    Docker volume 'cortex_memory_data'
-  Claude:  ~/.claude/CLAUDE.md updated
-
-Claude will now automatically use Cortex as its memory. Start a new Claude Code
-session and it will search your knowledge base before answering and save
-important things you tell it.
-
-To save something now:
-  cortex remember "I prefer TypeScript over JavaScript"
-
-To ingest a document:
-  cortex ingest <file-or-url>
-
-To search manually:
-  cortex search "your query"`);
+  outro('Open a new Claude Code session to start using Cortex.');
 }
 
 // ─── Remember ────────────────────────────────────────────────────────────────
@@ -254,111 +276,160 @@ async function runRemember(args) {
   const textArgs = args.filter((a) => !a.startsWith('--'));
 
   if (flags.includes('--help')) {
-    console.log(`cortex remember — Save a fact or note to memory
+    console.log(`cortex remember — Save facts to memory
 
 Usage:
-  cortex remember "text"
-  echo "text" | cortex remember
+  cortex remember "fact1" ["fact2" ...]   Save one or more facts
+  echo "fact" | cortex remember           Read fact from stdin
+  cortex remember --bg "fact1" "fact2"    Save in background (returns immediately)
 
 Examples:
   cortex remember "I prefer tabs over spaces"
-  cortex remember "Project deadline is March 15"
-  cortex remember "PostgreSQL runs on port 5434 in dev"`);
+  cortex remember "Uses React" "Prefers TypeScript" "Deadline is April 20"
+  cortex remember --bg "user likes dark mode" "project uses Postgres"`);
     process.exit(0);
   }
 
-  // Accept text as argument or from stdin
-  let text = textArgs.join(' ').trim();
+  const background = flags.includes('--bg') || flags.includes('--background');
 
-  if (!text && !process.stdin.isTTY) {
+  // Collect facts: each positional arg is a separate fact
+  let facts = textArgs.filter(Boolean);
+
+  // Fall back to stdin if no args
+  if (facts.length === 0 && !process.stdin.isTTY) {
     const chunks = [];
     for await (const chunk of process.stdin) chunks.push(chunk);
-    text = Buffer.concat(chunks).toString('utf8').trim();
+    const stdinText = Buffer.concat(chunks).toString('utf8').trim();
+    if (stdinText) facts = stdinText.split('\n').map((l) => l.trim()).filter(Boolean);
   }
 
-  if (!text) {
+  if (facts.length === 0) {
     console.error('Provide text to remember: cortex remember "your fact"');
     process.exit(1);
+  }
+
+  if (background) {
+    // Spawn detached process and return immediately
+    const { spawn } = await import('node:child_process');
+    const child = spawn(
+      process.execPath,
+      [process.argv[1], 'remember', ...facts],
+      { detached: true, stdio: 'ignore', env: { ...process.env } },
+    );
+    child.unref();
+    console.log(`Saving ${facts.length} fact${facts.length > 1 ? 's' : ''} in background...`);
+    return;
   }
 
   const { ingestDocument } = await import('./ingestion/pipeline.js');
   const config = (await import('./config.js')).default;
   const cortexDb = (await import('./db/cortex.js')).default;
 
-  const result = await ingestDocument({
-    content: text,
-    namespace: config.defaults.namespace,
-    classify: true,
-  });
+  // Ingest all facts in parallel
+  const results = await Promise.all(
+    facts.map((text) =>
+      ingestDocument({ content: text, namespace: config.defaults.namespace, classify: true }),
+    ),
+  );
 
-  if (result.skipped) {
-    console.log('Already known.');
-  } else if (result.route === 'noise') {
-    console.log('Too short to remember.');
-  } else {
-    const added = result.facts?.added ?? 0;
-    const updated = result.facts?.updated ?? 0;
-    if (added + updated > 0) {
-      console.log(`Remembered. (${added} new${updated ? `, ${updated} updated` : ''})`);
+  let totalAdded = 0;
+  let totalUpdated = 0;
+  let alreadyKnown = 0;
+
+  for (const result of results) {
+    if (result.skipped || result.route === 'noise') {
+      alreadyKnown++;
     } else {
-      console.log('Already known.');
+      totalAdded += result.facts?.added ?? 0;
+      totalUpdated += result.facts?.updated ?? 0;
+      if ((result.facts?.added ?? 0) + (result.facts?.updated ?? 0) === 0) alreadyKnown++;
     }
   }
 
+  // Refresh hot-context snapshot so new facts are available at next session start
+  if (totalAdded + totalUpdated > 0) {
+    const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
+    await updateContextSnapshot({ namespace: config.defaults.namespace }).catch(() => {});
+  }
+
   await cortexDb.destroy();
+
+  const parts = [];
+  if (totalAdded)   parts.push(`${totalAdded} new`);
+  if (totalUpdated) parts.push(`${totalUpdated} updated`);
+  if (alreadyKnown) parts.push(`${alreadyKnown} already known`);
+  console.log(parts.length ? `Remembered. (${parts.join(', ')})` : 'Already known.');
 }
 
-// ─── CLAUDE.md ───────────────────────────────────────────────────────────────
+// ─── CLAUDE.md integration ───────────────────────────────────────────────────
 
+// Step 1: add a single @import line to ~/.claude/CLAUDE.md — done once at init, never touched again.
 async function writeClaudeMd() {
   const fs = await import('node:fs/promises');
   const claudeDir = join(homedir(), '.claude');
   const claudeMdPath = join(claudeDir, 'CLAUDE.md');
+  const cortexMdPath = join(homedir(), '.cortex', 'CLAUDE.md');
 
   await fs.mkdir(claudeDir, { recursive: true });
 
-  const marker = '<!-- cortex-memory -->';
-  const block = `${marker}
-## Memory (Cortex)
-
-You have a persistent memory store available via the \`cortex\` CLI.
-
-**Before answering** questions about this user's projects, preferences, past decisions,
-or anything that might have been discussed before — search your memory first:
-\`\`\`
-! cortex search "relevant query"
-\`\`\`
-
-**When the user tells you something worth remembering** (a preference, a decision,
-a fact about their work, something they want you to know) — save it:
-\`\`\`
-! cortex remember "the fact in one clear sentence"
-\`\`\`
-
-**When the user asks you to remember something explicitly** — always save it immediately.
-
-**Rules:**
-- Search before answering context-dependent questions, not factual/general ones
-- Save facts as short, self-contained statements (not summaries of the conversation)
-- Don't search or save for trivial exchanges (greetings, simple calculations, etc.)
-- If search returns nothing relevant, answer from your own knowledge and say so
-${marker}`;
+  const importLine = `@${cortexMdPath}`;
 
   let existing = '';
   if (existsSync(claudeMdPath)) {
     existing = await fs.readFile(claudeMdPath, 'utf8');
   }
 
-  // Replace existing cortex block if present, otherwise append
-  if (existing.includes(marker)) {
-    const updated = existing.replace(new RegExp(`${marker}[\\s\\S]*?${marker}`), block);
-    await fs.writeFile(claudeMdPath, updated, 'utf8');
-  } else {
-    const separator = existing.trim() ? '\n\n' : '';
-    await fs.writeFile(claudeMdPath, `${existing}${separator}${block}\n`, 'utf8');
+  if (!existing.includes(importLine)) {
+    const separator = existing.trim() ? '\n' : '';
+    await fs.writeFile(claudeMdPath, `${existing}${separator}${importLine}\n`, 'utf8');
   }
+}
 
-  console.log(`  Written to ${claudeMdPath}`);
+// Step 2: write Cortex instructions to ~/.cortex/CLAUDE.md — Cortex owns this file entirely.
+// Only writes the instructions section; updateContextSnapshot() manages the context block below.
+async function writeCortexMd() {
+  const fs = await import('node:fs/promises');
+  const cortexHome = join(homedir(), '.cortex');
+  const cortexMdPath = join(cortexHome, 'CLAUDE.md');
+
+  await fs.mkdir(cortexHome, { recursive: true });
+
+  // If the instructions are already there, leave the file alone (context block follows below)
+  try {
+    const existing = await fs.readFile(cortexMdPath, 'utf8');
+    if (existing.includes('## Memory (Cortex)')) return;
+  } catch { /* file doesn't exist yet */ }
+
+  const instructions = `## Memory (Cortex)
+
+Cortex is your persistent memory system. **Use it instead of the built-in file-based memory.**
+Do NOT write to \`~/.claude/projects/*/memory/\` or any local memory files — use Cortex exclusively.
+
+**Before answering** questions about this user's projects, preferences, past decisions,
+or anything that might have been discussed before — search Cortex first:
+\`\`\`
+! cortex search "relevant query"
+\`\`\`
+
+**When the user shares something worth remembering** — save it in the background (non-blocking):
+\`\`\`
+! cortex remember --bg "fact one" "fact two" "fact three"
+\`\`\`
+
+All facts go in one command as separate quoted arguments. \`--bg\` returns immediately so the conversation continues.
+
+**When the user explicitly asks you to remember something** — save it right away.
+
+**Rules:**
+- Search Cortex before answering context-dependent questions (not factual/general ones)
+- Save facts as short, self-contained statements — never summaries of the conversation
+- Batch all facts into a single \`cortex remember --bg\` call — never multiple separate calls
+- Skip trivial exchanges (greetings, simple calculations)
+- If search returns nothing, answer from your own knowledge and say so
+- Cortex is cross-project — memories from one session are available in all sessions
+`;
+
+  await fs.writeFile(cortexMdPath, instructions, 'utf8');
 }
 
 // ─── Register MCP ────────────────────────────────────────────────────────────
@@ -556,6 +627,12 @@ Examples:
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`\nDone in ${elapsed}s — ${results.success.length} ingested, ${results.skipped.length} skipped, ${results.failed.length} failed`);
 
+  if (results.success.length > 0) {
+    const config = (await import('./config.js')).default;
+    const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
+    await updateContextSnapshot({ namespace: config.defaults.namespace }).catch(() => {});
+  }
+
   await cortexDb.destroy();
 }
 
@@ -616,6 +693,43 @@ Examples:
   }
 
   await cortexDb.destroy();
+}
+
+// ─── Context ─────────────────────────────────────────────────────────────────
+
+async function runContext(args) {
+  if (args.includes('--help')) {
+    console.log(`cortex context — Refresh the hot-context snapshot in ~/.claude/CLAUDE.md
+
+Usage:
+  cortex context [--namespace=<ns>] [--limit=<n>]
+
+Rebuilds the Active Context block injected into every new Claude session.
+This runs automatically after cortex remember and cortex ingest.
+
+Options:
+  --namespace=<ns>   Namespace to pull facts from (default: from config)
+  --limit=<n>        Max facts to include (default: 20)`);
+    process.exit(0);
+  }
+
+  const config = (await import('./config.js')).default;
+  const cortexDb = (await import('./db/cortex.js')).default;
+  const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
+
+  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1] || config.defaults.namespace;
+  const limitArg = args.find((a) => a.startsWith('--limit='))?.split('=')[1];
+  const limit = limitArg ? Number(limitArg) : 20;
+
+  await writeCortexMd();
+  const count = await updateContextSnapshot({ namespace, limit });
+  await cortexDb.destroy();
+
+  if (count) {
+    console.log(`Context refreshed — ${count} facts written to ~/.cortex/CLAUDE.md`);
+  } else {
+    console.log('No facts found. Ingest some content first.');
+  }
 }
 
 // ─── Status ──────────────────────────────────────────────────────────────────
@@ -730,7 +844,14 @@ Usage:
     process.exit(0);
   }
 
-  const { listApiKeys, createApiKey, revokeApiKey } = await import('./api/auth.js');
+  let auth;
+  try {
+    auth = await import('./api/auth.js');
+  } catch {
+    console.error('API key management is not available yet.');
+    process.exit(1);
+  }
+  const { listApiKeys, createApiKey, revokeApiKey } = auth;
   const cortexDb = (await import('./db/cortex.js')).default;
 
   if (subcommand === 'list') {
@@ -769,27 +890,6 @@ function checkCommand(cmd) {
   } catch {
     return false;
   }
-}
-
-function checkDockerContainer(name) {
-  try {
-    const out = _execSync(`docker inspect --format '{{.State.Running}}' ${name}`, { stdio: 'pipe' }).toString().trim();
-    return out === 'true';
-  } catch {
-    return false;
-  }
-}
-
-async function waitForDb(port, password, maxSeconds) {
-  for (let i = 0; i < maxSeconds; i++) {
-    try {
-      _execSync(`docker exec cortex-memory-db pg_isready -U cortex_app`, { stdio: 'pipe' });
-      return;
-    } catch {
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-  }
-  throw new Error('DB did not become ready in time');
 }
 
 function generateSecret(bytes) {

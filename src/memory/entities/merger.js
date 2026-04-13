@@ -15,56 +15,65 @@ async function mergeEntities(primaryId, duplicateId) {
 
   if (primaryId === duplicateId) return primary;
 
-  // 1. Redirect all relations from duplicate to primary
-  await cortexDb('relation')
-    .where({ sourceId: duplicateId })
-    .update({ sourceId: primaryId });
+  const newMentionCount = (primary.mentionCount || 0) + (duplicate.mentionCount || 0);
 
-  await cortexDb('relation')
-    .where({ targetId: duplicateId })
-    .update({ targetId: primaryId });
+  await cortexDb.transaction(async (trx) => {
+    // 1. Redirect all relations from duplicate to primary
+    await trx('relation')
+      .where({ sourceId: duplicateId })
+      .update({ sourceId: primaryId });
 
-  // Remove self-referencing relations created by redirect
-  await cortexDb('relation').whereRaw('source_id = target_id').del();
+    await trx('relation')
+      .where({ targetId: duplicateId })
+      .update({ targetId: primaryId });
 
-  // Deduplicate relations that now share (source, target, type)
+    // Remove self-referencing relations created by redirect
+    await trx('relation').whereRaw('source_id = target_id').del();
+
+    // 2. Merge fact_entity links via INSERT ON CONFLICT
+    await trx.raw(`
+      INSERT INTO fact_entity (fact_id, entity_id, mention_type, mention_count, created_at, updated_at)
+      SELECT fact_id, ?, mention_type, mention_count, NOW(), NOW()
+      FROM fact_entity
+      WHERE entity_id = ?
+      ON CONFLICT (fact_id, entity_id, mention_type)
+      DO UPDATE SET mention_count = fact_entity.mention_count + EXCLUDED.mention_count
+    `, [primaryId, duplicateId]);
+
+    await trx('fact_entity').where({ entityId: duplicateId }).del();
+
+    // 3. Sum mention counts
+    await trx('entity')
+      .where({ id: primaryId })
+      .update({ mentionCount: newMentionCount });
+
+    // 4. Mark duplicate as merged (non-lossy)
+    await trx('entity')
+      .where({ id: duplicateId })
+      .update({ mergedWith: primaryId });
+  });
+
+  // Deduplicate relations outside transaction (reads + deletes, safe to retry)
   await deduplicateRelations(primaryId);
 
-  // 2. Merge fact_entity links via INSERT ON CONFLICT
-  await cortexDb.raw(`
-    INSERT INTO fact_entity (fact_id, entity_id, mention_type, mention_count, created_at, updated_at)
-    SELECT fact_id, ?, mention_type, mention_count, NOW(), NOW()
-    FROM fact_entity
-    WHERE entity_id = ?
-    ON CONFLICT (fact_id, entity_id, mention_type)
-    DO UPDATE SET mention_count = fact_entity.mention_count + EXCLUDED.mention_count
-  `, [primaryId, duplicateId]);
-
-  await cortexDb('fact_entity').where({ entityId: duplicateId }).del();
-
-  // 3. Merge entity types
-  const duplicateTypes = duplicate.entityTypes
-    ? JSON.parse(duplicate.entityTypes)
-    : [duplicate.entityType];
-
+  // Merge entity types (calls updateEntityTypes which does its own read-then-write)
+  const duplicateTypes = safeParseEntityTypes(duplicate);
   for (const type of duplicateTypes) {
     await updateEntityTypes(primaryId, type);
   }
 
-  // 4. Sum mention counts
-  const newMentionCount = (primary.mentionCount || 0) + (duplicate.mentionCount || 0);
-  await cortexDb('entity')
-    .where({ id: primaryId })
-    .update({ mentionCount: newMentionCount });
-
-  // 5. Mark duplicate as merged (non-lossy)
-  await cortexDb('entity')
-    .where({ id: duplicateId })
-    .update({ mergedWith: primaryId });
-
   console.log(`[entity-merge] Merged ${duplicateId} (${duplicate.name}) into ${primaryId} (${primary.name})`);
 
   return { ...primary, mentionCount: newMentionCount };
+}
+
+function safeParseEntityTypes(entity) {
+  if (!entity.entityTypes) return [entity.entityType];
+  try {
+    return JSON.parse(entity.entityTypes);
+  } catch {
+    return [entity.entityType];
+  }
 }
 
 async function deduplicateRelations(entityId) {

@@ -1,5 +1,6 @@
 import cortexDb from '../../db/cortex.js';
 import { prompt as llmPrompt } from '../../lib/llm.js';
+import { pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
 
 const EMBEDDING_THRESHOLD = 0.85;
@@ -7,7 +8,7 @@ const EMBEDDING_THRESHOLD = 0.85;
 async function findEmbeddingMatch(name, embedding, { namespace, threshold = EMBEDDING_THRESHOLD, limit = 5 }) {
   if (!embedding) return [];
 
-  const vec = `[${embedding.join(',')}]`;
+  const vec = pgVector(embedding);
 
   const { rows } = await cortexDb.raw(`
     SELECT id, name, entity_type AS "entityType", entity_types AS "entityTypes",
@@ -22,10 +23,15 @@ async function findEmbeddingMatch(name, embedding, { namespace, threshold = EMBE
     LIMIT ?
   `, [vec, namespace, name, vec, threshold, vec, limit]);
 
-  return rows.map((r) => ({
-    ...r,
-    types: r.entityTypes ? JSON.parse(r.entityTypes) : [r.entityType],
-  }));
+  return rows.map((r) => {
+    let types;
+    try {
+      types = r.entityTypes ? JSON.parse(r.entityTypes) : [r.entityType];
+    } catch {
+      types = [r.entityType];
+    }
+    return { ...r, types };
+  });
 }
 
 async function verifyEmbeddingMatch(newName, newType, candidate) {

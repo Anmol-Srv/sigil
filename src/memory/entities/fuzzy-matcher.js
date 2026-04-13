@@ -40,11 +40,15 @@ async function findFuzzyMatch(name, { namespace, limit = 5 }) {
     .limit(200);
 
   return candidates
-    .map((c) => ({
-      ...c,
-      similarity: stringSimilarity(name, c.name),
-      types: c.entityTypes ? JSON.parse(c.entityTypes) : [c.entityType],
-    }))
+    .map((c) => {
+      let types;
+      try {
+        types = c.entityTypes ? JSON.parse(c.entityTypes) : [c.entityType];
+      } catch {
+        types = [c.entityType];
+      }
+      return { ...c, similarity: stringSimilarity(name, c.name), types };
+    })
     .filter((c) => c.similarity >= FUZZY_THRESHOLD && c.name.toLowerCase() !== name.toLowerCase())
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, limit);

@@ -1,31 +1,10 @@
 import { promptJson } from '../../lib/llm.js';
+import { TtlCache } from '../../lib/cache.js';
 import config from '../../config.js';
 
 const MAX_VARIANTS = 5;
-const CACHE_MAX_SIZE = 100;
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-const cache = new Map();
-
-function getCached(key) {
-  const entry = cache.get(key);
-  if (!entry) return undefined;
-
-  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
-    cache.delete(key);
-    return undefined;
-  }
-
-  return entry.value;
-}
-
-function setCached(key, value) {
-  if (cache.size >= CACHE_MAX_SIZE) {
-    const oldestKey = cache.keys().next().value;
-    cache.delete(oldestKey);
-  }
-  cache.set(key, { value, timestamp: Date.now() });
-}
+const cache = new TtlCache({ maxSize: 100, ttlMs: 5 * 60 * 1000 });
 
 /**
  * Expand a user query into semantic variants for multi-query search.
@@ -39,7 +18,7 @@ function setCached(key, value) {
  * This surfaces non-literally connected facts (e.g. "I don't prefer React").
  */
 async function expandQuery(query) {
-  const cached = getCached(query);
+  const cached = cache.get(query);
   if (cached) return cached;
 
   const prompt = `You are a search query expander for a personal knowledge base.
@@ -66,7 +45,7 @@ Respond with ONLY a JSON array of strings. Do not include the original query.`;
       .slice(0, MAX_VARIANTS);
 
     const result = valid.length ? [query, ...valid] : [query];
-    setCached(query, result);
+    cache.set(query, result);
     return result;
   } catch (err) {
     console.error('[query-expander] Failed:', err.message);

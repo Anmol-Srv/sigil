@@ -3,8 +3,7 @@ import { z } from 'zod';
 import { findById, searchByName } from '../../memory/entities/store.js';
 import { listRelationsForEntity } from '../../memory/entities/relations.js';
 import { getFactsForEntity } from '../../memory/facts/entity-linker.js';
-
-const FACT_TRUNCATE = 150;
+import { textResponse, truncate, FACT_TRUNCATE } from '../utils.js';
 
 function registerGetEntityContextTool(server) {
   server.tool(
@@ -69,9 +68,7 @@ Returns entity details + relations + key facts (truncated — use get_fact_conte
       if (facts.length) {
         parts.push(`\nKey facts (${facts.length}):`);
         for (const f of facts) {
-          const content = f.content.length > FACT_TRUNCATE
-            ? f.content.slice(0, FACT_TRUNCATE) + '...'
-            : f.content;
+          const content = truncate(f.content, FACT_TRUNCATE);
           parts.push(`- [${f.category}] ${content} _(${f.confidence}, id:${f.id})_`);
         }
       }
@@ -85,10 +82,6 @@ Returns entity details + relations + key facts (truncated — use get_fact_conte
       return textResponse(parts.join('\n'));
     },
   );
-}
-
-function textResponse(text) {
-  return { content: [{ type: 'text', text }] };
 }
 
 export { registerGetEntityContextTool };

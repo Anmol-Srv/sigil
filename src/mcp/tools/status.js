@@ -4,6 +4,7 @@ import { getStats } from '../../memory/documents/store.js';
 import { getEntityCount } from '../../memory/entities/store.js';
 import { getRelationCount } from '../../memory/entities/relations.js';
 import { getFactCount, getHotFacts } from '../../memory/facts/store.js';
+import { textResponse, truncate } from '../utils.js';
 
 function registerStatusTool(server) {
   server.tool(
@@ -29,10 +30,10 @@ Use when: checking system health, verifying ingestion, reviewing knowledge graph
         `Cortex KB${scope}: ${docStats.documentCount} docs, ${docStats.totalChunks} chunks, ${factCount} facts`,
         `Entities: ${documents} documents, ${people} people, ${topics} topics`,
         `Relations: ${relations}`,
-        `Hot facts (top ${hotFacts.length}): ${hotFacts.map((f) => `${f.content.slice(0, 60)}... (${f.accessCount}x)`).join(', ') || 'none yet'}`,
+        `Hot facts (top ${hotFacts.length}): ${hotFacts.map((f) => `${truncate(f.content, 60)} (${f.accessCount}x)`).join(', ') || 'none yet'}`,
       ].join('\n');
 
-      return { content: [{ type: 'text', text }] };
+      return textResponse(text);
     },
   );
 }

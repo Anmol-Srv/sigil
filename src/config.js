@@ -1,5 +1,7 @@
 const config = {
   db: {
+    // 'pglite' (default) — embedded, zero-install. 'postgres' — external Postgres via env vars.
+    type: process.env.CORTEX_DB_TYPE || 'pglite',
     host: process.env.CORTEX_DB_HOST || 'localhost',
     port: Number(process.env.CORTEX_DB_PORT) || 5432,
     database: process.env.CORTEX_DB_NAME || 'cortex',
@@ -8,7 +10,7 @@ const config = {
   },
 
   embedding: {
-    provider: process.env.EMBEDDING_PROVIDER || 'ollama',
+    provider: process.env.EMBEDDING_PROVIDER || '',
     model: process.env.EMBEDDING_MODEL || 'nomic-embed-text',
     dimensions: Number(process.env.EMBEDDING_DIMENSIONS) || 768,
     ollamaHost: process.env.OLLAMA_HOST || 'http://localhost:11434',
@@ -16,7 +18,7 @@ const config = {
   },
 
   llm: {
-    provider: process.env.LLM_PROVIDER || 'openai',
+    provider: process.env.LLM_PROVIDER || '',
 
     // OpenAI
     openaiApiKey: process.env.OPENAI_API_KEY || '',
@@ -38,6 +40,7 @@ const config = {
     entityModel: process.env.LLM_ENTITY_MODEL || '',
 
     maxRetries: Number(process.env.LLM_MAX_RETRIES) || 3,
+    cliTimeout: Number(process.env.LLM_CLI_TIMEOUT) || 120000,
   },
 
   output: {

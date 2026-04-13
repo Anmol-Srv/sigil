@@ -193,13 +193,9 @@ async function ingestDocument({
 
 const AUDM_CONCURRENCY = 10;
 
-async function storeDirectFacts(facts, { documentId, namespace }) {
+async function storeFactsInBatches(facts, { documentId, namespace, embeddings, defaultConfidence = 'medium', defaultImportance = 'supplementary' }) {
   const counts = { total: facts.length, added: 0, skipped: 0, updated: 0, contradicted: 0 };
 
-  // Embed all facts in one batch call
-  const embeddings = await embedBatch(facts.map((f) => f.content));
-
-  // Run AUDM in parallel batches
   const allResults = [];
   for (const batch of batchChunk(facts, AUDM_CONCURRENCY)) {
     const batchResults = await Promise.all(
@@ -208,52 +204,8 @@ async function storeDirectFacts(facts, { documentId, namespace }) {
         return saveFact({
           content: raw.content,
           category: raw.category,
-          confidence: raw.confidence || 'high',
-          importance: raw.importance || 'vital',
-          namespace,
-          sourceDocumentIds: documentId ? [documentId] : [],
-          sourceSection: raw.category,
-          embedding: embeddings[idx],
-        });
-      }),
-    );
-    allResults.push(...batchResults);
-  }
-
-  for (const result of allResults) {
-    const action = result.action.toLowerCase();
-    if (action === 'add') counts.added++;
-    else if (action === 'skip') counts.skipped++;
-    else if (action === 'update') counts.updated++;
-    else if (action === 'contradict') counts.contradicted++;
-  }
-
-  return { counts, results: allResults };
-}
-
-async function extractAndStoreFacts(chunks, { documentId, namespace, promptPath, categories }) {
-  const counts = { total: 0, added: 0, skipped: 0, updated: 0, contradicted: 0 };
-
-  const rawFacts = await extractFactsFromChunks(chunks, { promptPath, categories });
-  counts.total = rawFacts.length;
-  console.log(`  ${rawFacts.length} facts extracted from ${chunks.length} chunks`);
-
-  if (!rawFacts.length) return { counts, results: [] };
-
-  // Embed all facts in one batch call instead of one-by-one
-  const embeddings = await embedBatch(rawFacts.map((f) => f.content));
-
-  // Run AUDM in parallel batches
-  const allResults = [];
-  for (const batch of batchChunk(rawFacts, AUDM_CONCURRENCY)) {
-    const batchResults = await Promise.all(
-      batch.map((raw, i) => {
-        const idx = allResults.length + i;
-        return saveFact({
-          content: raw.content,
-          category: raw.category,
-          confidence: raw.confidence,
-          importance: raw.importance || 'supplementary',
+          confidence: raw.confidence || defaultConfidence,
+          importance: raw.importance || defaultImportance,
           namespace,
           sourceDocumentIds: documentId ? [documentId] : [],
           sourceSection: raw.sourceSection || raw.category,
@@ -273,6 +225,23 @@ async function extractAndStoreFacts(chunks, { documentId, namespace, promptPath,
   }
 
   return { counts, results: allResults };
+}
+
+async function storeDirectFacts(facts, { documentId, namespace }) {
+  const embeddings = await embedBatch(facts.map((f) => f.content));
+  return storeFactsInBatches(facts, { documentId, namespace, embeddings, defaultConfidence: 'high', defaultImportance: 'vital' });
+}
+
+async function extractAndStoreFacts(chunks, { documentId, namespace, promptPath, categories }) {
+  const rawFacts = await extractFactsFromChunks(chunks, { promptPath, categories });
+  console.log(`  ${rawFacts.length} facts extracted from ${chunks.length} chunks`);
+
+  if (!rawFacts.length) {
+    return { counts: { total: 0, added: 0, skipped: 0, updated: 0, contradicted: 0 }, results: [] };
+  }
+
+  const embeddings = await embedBatch(rawFacts.map((f) => f.content));
+  return storeFactsInBatches(rawFacts, { documentId, namespace, embeddings });
 }
 
 

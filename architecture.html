@@ -5,2347 +5,2181 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cortex — Architecture</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
     :root {
-      --bg: #0d1117;
-      --surface: #161b22;
-      --surface2: #1c2128;
-      --border: #30363d;
-      --border-light: #21262d;
-      --text: #e6edf3;
-      --text-muted: #8b949e;
-      --text-dim: #6e7681;
+      --bg: #080c12;
+      --surface: #0f1520;
+      --surface2: #131c2b;
+      --border: #1e2d40;
+      --border-light: #162235;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
       --indigo: #6366f1;
-      --indigo-light: #a5b4fc;
-      --green: #10b981;
-      --green-light: #6ee7b7;
-      --violet: #8b5cf6;
-      --violet-light: #c4b5fd;
+      --indigo-dim: rgba(99,102,241,0.15);
       --cyan: #06b6d4;
-      --cyan-light: #67e8f9;
-      --pink: #ec4899;
-      --pink-light: #f9a8d4;
-      --amber: #f59e0b;
-      --amber-light: #fcd34d;
+      --cyan-dim: rgba(6,182,212,0.15);
       --orange: #f97316;
+      --orange-dim: rgba(249,115,22,0.15);
+      --emerald: #10b981;
+      --emerald-dim: rgba(16,185,129,0.15);
+      --pink: #ec4899;
+      --pink-dim: rgba(236,72,153,0.15);
+      --violet: #8b5cf6;
+      --violet-dim: rgba(139,92,246,0.15);
+      --slate: #64748b;
+      --slate-dim: rgba(100,116,139,0.15);
+      --amber: #f59e0b;
+      --amber-dim: rgba(245,158,11,0.15);
       --red: #ef4444;
-      --mono: 'SF Mono', 'Fira Code', 'Consolas', 'Monaco', monospace;
-      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      --mono: 'SF Mono','Fira Code','Consolas','Monaco',monospace;
+      --sans: -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
     }
 
-    html, body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--sans);
-      min-height: 100vh;
-    }
+    html, body { background: var(--bg); color: var(--text); font-family: var(--sans); height: 100vh; overflow: hidden; }
 
-    /* ── Layout ────────────────────────────────── */
+    /* ── Header ── */
     .header {
-      padding: 24px 32px 0;
+      height: 56px;
+      padding: 0 24px;
       border-bottom: 1px solid var(--border);
-    }
-    .header h1 {
-      font-family: var(--mono);
-      font-size: 20px;
-      font-weight: 700;
-      color: var(--text);
-      margin-bottom: 4px;
-    }
-    .header p {
-      font-size: 13px;
-      color: var(--text-dim);
-      margin-bottom: 16px;
-    }
-
-    .tabs {
-      display: flex;
-      gap: 0;
-      overflow-x: auto;
-    }
-    .tab {
-      padding: 10px 20px;
-      font-family: var(--mono);
-      font-size: 12px;
-      color: var(--text-muted);
-      background: none;
-      border: none;
-      border-bottom: 2px solid transparent;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: all 0.15s;
-    }
-    .tab:hover { color: var(--text); }
-    .tab.active {
-      color: var(--indigo-light);
-      border-bottom-color: var(--indigo);
-    }
-
-    .content {
-      padding: 32px;
-      max-width: 1200px;
-      margin: 0 auto;
-    }
-
-    .view { display: none; }
-    .view.active { display: block; }
-
-    /* ── Flow diagram primitives ───────────────── */
-    .flow {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 0;
-    }
-    .flow-row {
       display: flex;
       align-items: center;
-      gap: 16px;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-
-    .node {
-      border-radius: 10px;
-      padding: 14px 20px;
-      font-family: var(--mono);
-      text-align: center;
-      position: relative;
-      min-width: 180px;
-    }
-    .node-title {
-      font-size: 13px;
-      font-weight: 700;
-      margin-bottom: 3px;
-    }
-    .node-sub {
-      font-size: 10px;
-      opacity: 0.7;
-    }
-    .node-detail {
-      font-size: 10px;
-      opacity: 0.5;
-      margin-top: 4px;
-    }
-
-    .node-indigo  { background: #1e1b4b; border: 1.5px solid var(--indigo); }
-    .node-indigo .node-title { color: var(--indigo-light); }
-    .node-indigo .node-sub { color: var(--indigo); }
-
-    .node-green   { background: #052e16; border: 1.5px solid var(--green); }
-    .node-green .node-title { color: var(--green-light); }
-    .node-green .node-sub { color: var(--green); }
-
-    .node-violet  { background: #1e0a35; border: 1.5px solid var(--violet); }
-    .node-violet .node-title { color: var(--violet-light); }
-    .node-violet .node-sub { color: var(--violet); }
-
-    .node-cyan    { background: #061820; border: 1.5px solid var(--cyan); }
-    .node-cyan .node-title { color: var(--cyan-light); }
-    .node-cyan .node-sub { color: var(--cyan); }
-
-    .node-pink    { background: #1f0520; border: 1.5px solid var(--pink); }
-    .node-pink .node-title { color: var(--pink-light); }
-    .node-pink .node-sub { color: var(--pink); }
-
-    .node-amber   { background: #1a1005; border: 1.5px solid var(--amber); }
-    .node-amber .node-title { color: var(--amber-light); }
-    .node-amber .node-sub { color: var(--amber); }
-
-    .node-orange  { background: #1a0805; border: 1.5px solid var(--orange); }
-    .node-orange .node-title { color: #fb923c; }
-    .node-orange .node-sub { color: var(--orange); }
-
-    .node-dim     { background: var(--surface); border: 1.5px solid var(--border); }
-    .node-dim .node-title { color: var(--text-muted); }
-    .node-dim .node-sub { color: var(--text-dim); }
-
-    .node-wide { min-width: 300px; }
-    .node-full { min-width: 100%; max-width: 600px; }
-
-    /* Arrow between nodes */
-    .arrow {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 6px 0;
-      color: var(--text-dim);
-      font-family: var(--mono);
-      font-size: 10px;
-      gap: 2px;
-    }
-    .arrow svg { width: 20px; height: 24px; }
-    .arrow-line { stroke: var(--border); stroke-width: 1.5; }
-    .arrow-head { fill: var(--text-dim); }
-    .arrow-label {
-      font-size: 10px;
-      color: var(--text-dim);
-      background: var(--bg);
-      padding: 1px 6px;
-      border-radius: 4px;
-    }
-
-    .arrow-h {
-      display: flex;
-      align-items: center;
-      padding: 0 8px;
-      color: var(--text-dim);
-      font-family: var(--mono);
-      font-size: 18px;
-    }
-
-    .arrow-green .arrow-line { stroke: var(--green); }
-    .arrow-green .arrow-head { fill: var(--green); }
-    .arrow-green .arrow-label { color: var(--green); }
-
-    .arrow-violet .arrow-line { stroke: var(--violet); }
-    .arrow-violet .arrow-head { fill: var(--violet); }
-    .arrow-violet .arrow-label { color: var(--violet); }
-
-    .arrow-cyan .arrow-line { stroke: var(--cyan); }
-    .arrow-cyan .arrow-head { fill: var(--cyan); }
-    .arrow-cyan .arrow-label { color: var(--cyan); }
-
-    .arrow-pink .arrow-line { stroke: var(--pink); }
-    .arrow-pink .arrow-head { fill: var(--pink); }
-    .arrow-pink .arrow-label { color: var(--pink); }
-
-    .arrow-amber .arrow-line { stroke: var(--amber); }
-    .arrow-amber .arrow-head { fill: var(--amber); }
-    .arrow-amber .arrow-label { color: var(--amber); }
-
-    .arrow-indigo .arrow-line { stroke: var(--indigo); }
-    .arrow-indigo .arrow-head { fill: var(--indigo); }
-    .arrow-indigo .arrow-label { color: var(--indigo); }
-
-    /* ── Step list ──────────────────────────────── */
-    .steps {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      width: 100%;
-      max-width: 600px;
-    }
-    .step {
-      display: flex;
-      align-items: center;
-      gap: 14px;
-      padding: 12px 16px;
-      border-radius: 8px;
-      border: 1px solid var(--border-light);
+      gap: 20px;
       background: var(--surface);
-    }
-    .step-num {
-      font-family: var(--mono);
-      font-size: 12px;
-      font-weight: 700;
-      color: var(--text-dim);
-      width: 24px;
-      text-align: center;
       flex-shrink: 0;
     }
-    .step-body { flex: 1; }
-    .step-title {
-      font-family: var(--mono);
-      font-size: 12px;
-      font-weight: 600;
-      margin-bottom: 2px;
-    }
-    .step-desc {
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-    .step-tag {
-      font-family: var(--mono);
-      font-size: 9px;
-      padding: 2px 8px;
-      border-radius: 10px;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-
-    .step-green .step-num { color: var(--green); }
-    .step-green .step-title { color: var(--green-light); }
-    .step-amber .step-num { color: var(--amber); }
-    .step-amber .step-title { color: var(--amber-light); }
-    .step-orange .step-num { color: var(--orange); }
-    .step-orange .step-title { color: #fb923c; }
-    .step-pink .step-num { color: var(--pink); }
-    .step-pink .step-title { color: var(--pink-light); }
-    .step-violet .step-num { color: var(--violet); }
-    .step-violet .step-title { color: var(--violet-light); }
-    .step-cyan .step-num { color: var(--cyan); }
-    .step-cyan .step-title { color: var(--cyan-light); }
-
-    .tag-db      { background: #1e0a35; color: var(--violet); border: 1px solid #3b1a6e; }
-    .tag-llm     { background: #1a0805; color: var(--orange); border: 1px solid #7c2d12; }
-    .tag-embed   { background: #1a1005; color: var(--amber); border: 1px solid #78350f; }
-    .tag-ext     { background: #052e16; color: var(--green); border: 1px solid #065f46; }
-    .tag-graph   { background: #1f0520; color: var(--pink); border: 1px solid #831843; }
-
-    /* ── Section headers ───────────────────────── */
-    .section-title {
+    .header-logo {
       font-family: var(--mono);
       font-size: 15px;
-      font-weight: 700;
-      color: var(--text);
-      margin-bottom: 6px;
-    }
-    .section-desc {
-      font-size: 13px;
-      color: var(--text-muted);
-      margin-bottom: 24px;
-      line-height: 1.5;
-    }
-
-    /* ── Columns ────────────────────────────────── */
-    .cols {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 24px;
-      margin-bottom: 32px;
-    }
-    @media (max-width: 768px) {
-      .cols { grid-template-columns: 1fr; }
-    }
-
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 20px;
-    }
-    .card h3 {
-      font-family: var(--mono);
-      font-size: 13px;
-      font-weight: 700;
-      margin-bottom: 10px;
-    }
-    .card p, .card li {
-      font-size: 12px;
-      color: var(--text-muted);
-      line-height: 1.6;
-    }
-    .card ul {
-      list-style: none;
-      padding: 0;
-    }
-    .card li::before {
-      content: '\2192 ';
-      color: var(--text-dim);
-    }
-
-    /* ── Tables ─────────────────────────────────── */
-    .tbl {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 12px;
-      margin-top: 12px;
-    }
-    .tbl th {
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--text-dim);
-      text-align: left;
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--border);
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
-    .tbl td {
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--border-light);
-      color: var(--text-muted);
-    }
-    .tbl td:first-child {
-      font-family: var(--mono);
-      color: var(--text);
-    }
-
-    /* ── Misc ───────────────────────────────────── */
-    .badge {
-      display: inline-block;
-      font-family: var(--mono);
-      font-size: 10px;
-      padding: 2px 8px;
-      border-radius: 10px;
-      margin-right: 4px;
-    }
-
-    .spacer { height: 40px; }
-    .spacer-sm { height: 20px; }
-
-    .divider {
-      border: none;
-      border-top: 1px solid var(--border-light);
-      margin: 32px 0;
-    }
-
-    .parallel-label {
-      font-family: var(--mono);
-      font-size: 10px;
-      color: var(--text-dim);
-      text-align: center;
-      padding: 4px 12px;
-      background: var(--surface);
-      border: 1px dashed var(--border);
-      border-radius: 6px;
-    }
-
-    /* ── Code blocks ───────────────────────────── */
-    .code {
-      font-family: var(--mono);
-      font-size: 11px;
-      background: #0d1117;
-      border: 1px solid var(--border-light);
-      border-radius: 6px;
-      padding: 14px 16px;
-      overflow-x: auto;
-      line-height: 1.6;
-      color: var(--text-muted);
-      margin: 12px 0;
-    }
-    .code .kw { color: #ff7b72; }
-    .code .fn { color: #d2a8ff; }
-    .code .str { color: #a5d6ff; }
-    .code .num { color: #79c0ff; }
-    .code .cmt { color: #484f58; }
-    .code .op { color: #ff7b72; }
-
-    /* ── Formula blocks ────────────────────────── */
-    .formula {
-      font-family: var(--mono);
-      font-size: 14px;
-      text-align: center;
-      padding: 20px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      color: var(--text);
-      margin: 16px 0;
-    }
-    .formula .var { color: var(--cyan-light); }
-    .formula .const { color: var(--amber-light); }
-    .formula .result { color: var(--green-light); }
-
-    /* ── Threshold bar ─────────────────────────── */
-    .threshold-bar {
-      position: relative;
-      height: 40px;
-      background: linear-gradient(to right, #1a0805, #1a1005, #052e16);
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      margin: 16px 0;
-      overflow: hidden;
-    }
-    .threshold-mark {
-      position: absolute;
-      top: 0;
-      height: 100%;
-      border-left: 2px dashed;
-      display: flex;
-      align-items: center;
-      padding-left: 8px;
-      font-family: var(--mono);
-      font-size: 10px;
-    }
-    .threshold-zone {
-      position: absolute;
-      top: 0;
-      height: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: var(--mono);
-      font-size: 10px;
       font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.3px;
     }
+    .header-logo span { color: var(--cyan); }
+    .header-sep { width: 1px; height: 20px; background: var(--border); }
+    .header-sub { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
 
-    /* ── Example trace ─────────────────────────── */
-    .trace {
+    /* ── Tabs ── */
+    .tabs {
       display: flex;
-      flex-direction: column;
-      gap: 0;
-      max-width: 700px;
-    }
-    .trace-step {
-      display: flex;
-      gap: 12px;
-      padding: 10px 16px;
-      border-left: 2px solid var(--border);
-      position: relative;
-    }
-    .trace-step::before {
-      content: '';
-      position: absolute;
-      left: -5px;
-      top: 16px;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--border);
-    }
-    .trace-step.active::before { background: var(--green); }
-    .trace-step.skip::before { background: var(--text-dim); }
-    .trace-step.match::before { background: var(--pink); }
-    .trace-label {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--text-dim);
-      width: 120px;
+      gap: 2px;
+      padding: 0 24px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
-    .trace-content {
-      font-size: 12px;
+    .tab {
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 500;
       color: var(--text-muted);
-      line-height: 1.5;
-    }
-    .trace-result {
-      font-family: var(--mono);
-      font-size: 11px;
-      font-weight: 600;
-    }
-
-    /* ── SVG overview tab ──────────────────────── */
-    .svg-viewport {
-      position: relative;
-      width: 100%;
-      height: 700px;
-      overflow: hidden;
-      cursor: grab;
-      user-select: none;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      background: var(--bg);
-    }
-    .svg-viewport.grabbing { cursor: grabbing; }
-    .svg-canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      transform-origin: 0 0;
-      will-change: transform;
-    }
-    .svg-viewport svg.main { display: block; width: 1800px; height: 1100px; }
-
-    .svg-hud {
-      position: absolute;
-      bottom: 12px;
-      right: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      z-index: 10;
-    }
-    .svg-hud-group {
-      display: flex;
-      flex-direction: column;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      overflow: hidden;
-    }
-    .svg-hud-btn {
-      width: 30px;
-      height: 30px;
-      background: none;
-      border: none;
-      border-bottom: 1px solid var(--border-light);
-      color: var(--text-muted);
-      font-size: 14px;
       cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+      user-select: none;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--text); border-bottom-color: var(--cyan); }
+    .tab-dot {
+      display: inline-block;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: middle;
+      opacity: 0.8;
+    }
+
+    /* ── Main layout ── */
+    .workspace {
+      display: flex;
+      height: calc(100vh - 56px - 41px);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* ── Canvas ── */
+    .canvas-wrapper {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    .canvas-view { display: none; width: 100%; height: 100%; }
+    .canvas-view.active { display: block; }
+    .canvas-svg {
+      width: 100%;
+      height: 100%;
+      cursor: grab;
+      display: block;
+    }
+    .canvas-svg.dragging { cursor: grabbing; }
+
+    /* ── Controls ── */
+    .zoom-controls {
+      position: absolute;
+      top: 14px;
+      right: 14px;
       display: flex;
       align-items: center;
-      justify-content: center;
-      transition: background .15s, color .15s;
-    }
-    .svg-hud-btn:last-child { border-bottom: none; }
-    .svg-hud-btn:hover { background: var(--border-light); color: var(--text); }
-    .svg-zoom-label {
+      gap: 4px;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text-dim);
-      font-family: var(--mono);
-      font-size: 9px;
-      text-align: center;
-      padding: 4px 0;
-      width: 30px;
+      border-radius: 8px;
+      padding: 4px;
+      z-index: 20;
     }
-
-    @keyframes pulse { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
-
-    /* ── Canvas flow controls ────────────────── */
-    .path-btns { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
-    .path-btn {
-      padding: 6px 16px;
-      font-family: var(--mono);
-      font-size: 11px;
-      border-radius: 6px;
-      border: 1.5px solid var(--border);
-      background: var(--surface);
+    .zoom-btn {
+      width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: 5px;
       color: var(--text-muted);
       cursor: pointer;
-      transition: all .15s;
+      font-size: 14px;
+      transition: background 0.15s, color 0.15s;
     }
-    .path-btn:hover { color: var(--text); border-color: var(--text-dim); }
-    .path-btn.active { background: #1e1b4b; border-color: var(--indigo); color: var(--indigo-light); }
-    .path-btn.active-cyan { background: #061820; border-color: var(--cyan); color: var(--cyan-light); }
-    .path-btn.active-orange { background: #1a0805; border-color: var(--orange); color: #fb923c; }
-    .path-btn.active-red { background: #1a0505; border-color: var(--red); color: #f87171; }
-    .path-desc {
+    .zoom-btn:hover { background: var(--border); color: var(--text); }
+    .zoom-pct {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-dim);
+      min-width: 38px;
+      text-align: center;
+    }
+    .zoom-sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
+
+    /* ── Legend ── */
+    .legend {
+      position: absolute;
+      bottom: 14px;
+      left: 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      z-index: 20;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      max-width: 480px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .legend-dot {
+      width: 8px; height: 8px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    /* ── Side Panel ── */
+    .side-panel {
+      width: 0;
+      overflow: hidden;
+      background: var(--surface);
+      border-left: 1px solid var(--border);
+      transition: width 0.25s cubic-bezier(0.4,0,0.2,1);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .side-panel.open { width: 340px; }
+    .panel-inner {
+      width: 340px;
+      height: 100%;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .panel-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .panel-title-wrap { flex: 1; min-width: 0; }
+    .panel-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-family: var(--mono);
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .panel-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .panel-close {
+      width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 16px;
+      flex-shrink: 0;
+      transition: background 0.15s, color 0.15s;
+    }
+    .panel-close:hover { background: var(--border); color: var(--text); }
+    .panel-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+    .panel-file {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--cyan);
+      background: rgba(6,182,212,0.08);
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(6,182,212,0.2);
+      word-break: break-all;
+    }
+    .panel-section-title {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+    }
+    .panel-props {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .prop-row {
+      display: flex;
+      gap: 8px;
+      font-size: 12px;
+    }
+    .prop-key {
+      color: var(--text-dim);
+      min-width: 100px;
+      flex-shrink: 0;
+      font-family: var(--mono);
+    }
+    .prop-val { color: var(--text); }
+    .panel-connections { display: flex; flex-direction: column; gap: 6px; }
+    .conn-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       font-size: 12px;
       color: var(--text-muted);
-      margin-bottom: 12px;
-      padding: 8px 14px;
-      background: var(--surface);
-      border-radius: 6px;
-      border-left: 3px solid var(--indigo);
-      line-height: 1.5;
     }
-    .canvas-wrap {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      overflow: hidden;
-      margin-bottom: 24px;
+    .conn-arrow {
+      font-size: 10px;
+      opacity: 0.5;
     }
-    .canvas-wrap canvas {
-      display: block;
-      width: 100%;
-      background: #0d1117;
+    .conn-label { color: var(--text); }
+
+    /* ── SVG node/edge animations ── */
+    @keyframes dashflow {
+      to { stroke-dashoffset: -24; }
     }
+    @keyframes dashin {
+      to { stroke-dashoffset: 24; }
+    }
+    .flow-edge {
+      stroke-dasharray: 6 6;
+      animation: dashflow 0.7s linear infinite;
+    }
+    .flow-edge-rev {
+      stroke-dasharray: 6 6;
+      animation: dashin 0.7s linear infinite;
+    }
+
+    /* Scrollbar */
+    .panel-inner::-webkit-scrollbar { width: 4px; }
+    .panel-inner::-webkit-scrollbar-track { background: transparent; }
+    .panel-inner::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
   </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>Cortex Architecture</h1>
-  <p>Generic organizational memory layer for LLMs — ingest any knowledge, build structured memory, serve via MCP, REST & CLI</p>
-  <div class="tabs">
-    <button class="tab active" data-view="overview">Overview</button>
-    <button class="tab" data-view="ingestion">Ingestion Pipeline</button>
-    <button class="tab" data-view="connectors">Connectors</button>
-    <button class="tab" data-view="search">Search Flow</button>
-    <button class="tab" data-view="entities">Entity Dedup</button>
-    <button class="tab" data-view="rrf">RRF Deep Dive</button>
-    <button class="tab" data-view="audm">AUDM Deep Dive</button>
-    <button class="tab" data-view="cascade">Cascade Deep Dive</button>
-    <button class="tab" data-view="graph">Graph Traversal</button>
-    <button class="tab" data-view="db">Database</button>
-    <button class="tab" data-view="api">API & MCP</button>
+  <div class="header-logo">cortex<span>.</span>arch</div>
+  <div class="header-sep"></div>
+  <div class="header-sub">v2.0 — knowledge graph + cognitive layer</div>
+</div>
+
+<div class="tabs" id="tabs">
+  <div class="tab active" data-view="overview">
+    <span class="tab-dot" style="background:#06b6d4"></span>Overview
+  </div>
+  <div class="tab" data-view="ingestion">
+    <span class="tab-dot" style="background:#f97316"></span>Ingestion
+  </div>
+  <div class="tab" data-view="search">
+    <span class="tab-dot" style="background:#10b981"></span>Search
+  </div>
+  <div class="tab" data-view="storage">
+    <span class="tab-dot" style="background:#ec4899"></span>Storage
   </div>
 </div>
 
-<div class="content">
+<div class="workspace">
+  <!-- Canvas Views -->
+  <div id="canvas-container" style="flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column;">
 
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- OVERVIEW -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view active" id="view-overview">
-  <div class="section-title">High-Level Architecture</div>
-  <div class="section-desc">Data flows from any source through the ingestion pipeline into a three-layer knowledge store, then out to consumers via MCP tools, REST API, and CLI.</div>
-
-  <div class="flow">
-    <!-- Sources -->
-    <div class="flow-row">
-      <div class="node node-green">
-        <div class="node-title">Direct Ingestion</div>
-        <div class="node-sub">POST /api/ingest · file · URL · raw content</div>
+    <!-- OVERVIEW -->
+    <div class="canvas-view active" id="view-overview">
+      <svg class="canvas-svg" id="svg-overview" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrow-ov" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#1e2d40"/>
+          </marker>
+          <marker id="arrow-ov-indigo" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#6366f1" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-ov-cyan" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#06b6d4" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-ov-orange" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#f97316" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-ov-emerald" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#10b981" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-ov-slate" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#64748b" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-ov-pink" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#ec4899" fill-opacity="0.7"/>
+          </marker>
+          <filter id="glow-indigo" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="4" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+          <filter id="glow-cyan" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="4" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+          </filter>
+        </defs>
+        <g class="diagram-group" id="dg-overview"></g>
+      </svg>
+      <div class="zoom-controls" id="zc-overview">
+        <button class="zoom-btn" onclick="zoomOut('overview')" title="Zoom out">−</button>
+        <div class="zoom-sep"></div>
+        <button class="zoom-btn" onclick="zoomFit('overview')" title="Fit to screen" style="font-size:11px;">⊡</button>
+        <div class="zoom-sep"></div>
+        <button class="zoom-btn" onclick="zoomIn('overview')" title="Zoom in">+</button>
+        <div class="zoom-sep"></div>
+        <div class="zoom-pct" id="zp-overview">100%</div>
       </div>
-      <div class="node node-green">
-        <div class="node-title">Connector Framework</div>
-        <div class="node-sub">PostgreSQL · Slack · S3 · HTTP (planned)</div>
+      <div class="legend" id="legend-overview">
+        <div class="legend-item"><div class="legend-dot" style="background:#64748b"></div>File System</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#6366f1"></div>Interface</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#06b6d4"></div>Cognitive</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f97316"></div>Ingestion</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div>Search</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>LLM</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Embedder</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div>Storage</div>
       </div>
-      <div class="node node-green">
-        <div class="node-title">CLI</div>
-        <div class="node-sub">cortex ingest ./docs/**/*.md</div>
+    </div>
+
+    <!-- INGESTION -->
+    <div class="canvas-view" id="view-ingestion">
+      <svg class="canvas-svg" id="svg-ingestion" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrow-ing" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#1e2d40"/>
+          </marker>
+          <marker id="arrow-ing-orange" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#f97316" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-ing-violet" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#8b5cf6" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-ing-pink" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#ec4899" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-ing-red" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#ef4444" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-ing-cyan" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#06b6d4" fill-opacity="0.7"/>
+          </marker>
+        </defs>
+        <g class="diagram-group" id="dg-ingestion"></g>
+      </svg>
+      <div class="zoom-controls" id="zc-ingestion">
+        <button class="zoom-btn" onclick="zoomOut('ingestion')" title="Zoom out">−</button>
+        <div class="zoom-sep"></div>
+        <button class="zoom-btn" onclick="zoomFit('ingestion')" title="Fit to screen" style="font-size:11px;">⊡</button>
+        <div class="zoom-sep"></div>
+        <button class="zoom-btn" onclick="zoomIn('ingestion')" title="Zoom in">+</button>
+        <div class="zoom-sep"></div>
+        <div class="zoom-pct" id="zp-ingestion">100%</div>
+      </div>
+      <div class="legend" id="legend-ingestion">
+        <div class="legend-item"><div class="legend-dot" style="background:#06b6d4"></div>Cognitive</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f97316"></div>Ingestion</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>LLM call</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Embedder</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div>Storage</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div>Discard</div>
       </div>
     </div>
 
-    <div class="arrow arrow-green">
-      <svg><line x1="10" y1="0" x2="10" y2="18" class="arrow-line"/><polygon points="5,18 15,18 10,24" class="arrow-head"/></svg>
-      <span class="arrow-label">content + metadata + entities</span>
+    <!-- SEARCH -->
+    <div class="canvas-view" id="view-search">
+      <svg class="canvas-svg" id="svg-search" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrow-srch" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#1e2d40"/>
+          </marker>
+          <marker id="arrow-srch-emerald" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#10b981" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-srch-cyan" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#06b6d4" fill-opacity="0.7"/>
+          </marker>
+          <marker id="arrow-srch-violet" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#8b5cf6" fill-opacity="0.7"/>
+          </marker>
+        </defs>
+        <g class="diagram-group" id="dg-search"></g>
+      </svg>
+      <div class="zoom-controls" id="zc-search">
+        <button class="zoom-btn" onclick="zoomOut('search')" title="Zoom out">−</button>
+        <div class="zoom-sep"></div>
+        <button class="zoom-btn" onclick="zoomFit('search')" title="Fit to screen" style="font-size:11px;">⊡</button>
+        <div class="zoom-sep"></div>
+        <button class="zoom-btn" onclick="zoomIn('search')" title="Zoom in">+</button>
+        <div class="zoom-sep"></div>
+        <div class="zoom-pct" id="zp-search">100%</div>
+      </div>
+      <div class="legend" id="legend-search">
+        <div class="legend-item"><div class="legend-dot" style="background:#06b6d4"></div>Cognitive</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div>Search</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>LLM</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div>Storage</div>
+      </div>
     </div>
 
-    <!-- Ingestion -->
-    <div class="node node-cyan node-wide">
-      <div class="node-title">Ingestion Pipeline</div>
-      <div class="node-sub">parse &rarr; hash &rarr; chunk + embed &rarr; extract facts &rarr; link entities &rarr; generate MD</div>
-      <div class="node-detail">Generic 6-step orchestrator &middot; pipeline.js</div>
+    <!-- STORAGE -->
+    <div class="canvas-view" id="view-storage">
+      <svg class="canvas-svg" id="svg-storage" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrow-stor" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#ec4899" fill-opacity="0.6"/>
+          </marker>
+        </defs>
+        <g class="diagram-group" id="dg-storage"></g>
+      </svg>
+      <div class="zoom-controls" id="zc-storage">
+        <button class="zoom-btn" onclick="zoomOut('storage')" title="Zoom out">−</button>
+        <div class="zoom-sep"></div>
+        <button class="zoom-btn" onclick="zoomFit('storage')" title="Fit to screen" style="font-size:11px;">⊡</button>
+        <div class="zoom-sep"></div>
+        <button class="zoom-btn" onclick="zoomIn('storage')" title="Zoom in">+</button>
+        <div class="zoom-sep"></div>
+        <div class="zoom-pct" id="zp-storage">100%</div>
+      </div>
+      <div class="legend" id="legend-storage">
+        <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div>Tables</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>Indexes</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Foreign Keys</div>
+      </div>
     </div>
 
-    <div class="arrow arrow-violet">
-      <svg><line x1="10" y1="0" x2="10" y2="18" class="arrow-line"/><polygon points="5,18 15,18 10,24" class="arrow-head"/></svg>
-      <span class="arrow-label">store</span>
-    </div>
+  </div>
 
-    <!-- Knowledge Store -->
-    <div class="node node-violet node-wide" style="padding: 20px;">
-      <div class="node-title">Three-Layer Knowledge Store</div>
-      <div class="node-sub" style="margin-top: 8px;">PostgreSQL + pgvector (cortex-gen)</div>
-      <div style="display: flex; gap: 12px; justify-content: center; margin-top: 12px;">
-        <div style="text-align: center;">
-          <div style="font-size: 12px; font-weight: 700; color: var(--violet-light);">Chunks</div>
-          <div style="font-size: 10px; color: var(--text-dim);">text + embeddings</div>
+  <!-- Side Panel -->
+  <div class="side-panel" id="side-panel">
+    <div class="panel-inner" id="panel-inner">
+      <div class="panel-header">
+        <div class="panel-title-wrap">
+          <div class="panel-badge" id="panel-badge"></div>
+          <div class="panel-title" id="panel-title"></div>
         </div>
-        <div style="color: var(--border); font-size: 18px;">|</div>
-        <div style="text-align: center;">
-          <div style="font-size: 12px; font-weight: 700; color: var(--violet-light);">Facts</div>
-          <div style="font-size: 10px; color: var(--text-dim);">atomic + AUDM dedup</div>
-        </div>
-        <div style="color: var(--border); font-size: 18px;">|</div>
-        <div style="text-align: center;">
-          <div style="font-size: 12px; font-weight: 700; color: var(--violet-light);">Entities</div>
-          <div style="font-size: 10px; color: var(--text-dim);">graph + relations</div>
-        </div>
+        <button class="panel-close" id="panel-close">×</button>
       </div>
-    </div>
-
-    <div class="arrow arrow-cyan">
-      <svg><line x1="10" y1="0" x2="10" y2="18" class="arrow-line"/><polygon points="5,18 15,18 10,24" class="arrow-head"/></svg>
-      <span class="arrow-label">query</span>
-    </div>
-
-    <!-- Consumers -->
-    <div class="flow-row">
-      <div class="node node-indigo">
-        <div class="node-title">Claude Code</div>
-        <div class="node-sub">via MCP (stdio)</div>
+      <div class="panel-desc" id="panel-desc"></div>
+      <div id="panel-file-wrap" style="display:none">
+        <div class="panel-file" id="panel-file"></div>
       </div>
-      <div class="node node-indigo">
-        <div class="node-title">Apps / Bots</div>
-        <div class="node-sub">via REST API</div>
+      <div id="panel-props-wrap" style="display:none">
+        <div class="panel-section-title">Properties</div>
+        <div class="panel-props" id="panel-props"></div>
       </div>
-      <div class="node node-indigo">
-        <div class="node-title">CLI</div>
-        <div class="node-sub">cortex search "..."</div>
-      </div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">External Dependencies</div>
-  <div class="spacer-sm"></div>
-  <div class="cols">
-    <div class="card">
-      <h3 style="color: var(--amber-light);">Ollama</h3>
-      <ul>
-        <li>nomic-embed-text model (768 dimensions)</li>
-        <li>Embeds chunks, facts, entities, and queries</li>
-        <li>Swappable to OpenAI embeddings</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: #fb923c;">Claude (via CLI)</h3>
-      <ul>
-        <li>Haiku: fact extraction (structured output)</li>
-        <li>Haiku: AUDM dedup decisions</li>
-        <li>Haiku/Sonnet: entity dedup verification</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--violet-light);">PostgreSQL + pgvector</h3>
-      <ul>
-        <li>cortex-gen DB: Docker, port 5434, read/write</li>
-        <li>9 tables, 11 migrations (.cjs)</li>
-        <li>HNSW indexes for cosine similarity</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--green-light);">Output Storage</h3>
-      <ul>
-        <li>Generated markdown knowledge files</li>
-        <li>Local filesystem or S3-compatible</li>
-        <li>Organized by source type: cortex/{type}/{slug}.md</li>
-      </ul>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Three Ingestion Modes</div>
-  <div class="cols" style="grid-template-columns: 1fr 1fr 1fr;">
-    <div class="card">
-      <h3 style="color: var(--green-light);">A. Direct Ingestion</h3>
-      <ul>
-        <li>POST /api/ingest with content body</li>
-        <li>Pass custom entities + relations</li>
-        <li>Org writes their own data compilation</li>
-        <li>Full control over what gets ingested</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--cyan-light);">B. Connector Framework</h3>
-      <ul>
-        <li>Create connection with credentials</li>
-        <li>Discover schema/streams</li>
-        <li>Configure queries + sync type</li>
-        <li>Incremental sync with cursor state</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--indigo-light);">C. CLI / Bulk Ingest</h3>
-      <ul>
-        <li>cortex ingest ./docs/**/*.md</li>
-        <li>cortex ingest https://wiki.internal/runbook</li>
-        <li>POST /api/ingest/batch for arrays</li>
-        <li>Namespace scoping per batch</li>
-      </ul>
-    </div>
-  </div>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- INGESTION PIPELINE -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view" id="view-ingestion">
-  <div class="section-title">Generic Ingestion Pipeline</div>
-  <div class="section-desc">6-step orchestrator in <code style="color:var(--cyan-light)">ingestion/pipeline.js</code>. Single public API: <code style="color:var(--cyan-light)">ingestDocument({ content, title, namespace, entities, ... })</code>.</div>
-
-  <div class="path-btns">
-    <button class="path-btn active-cyan" onclick="ingestAnim.select('document',this)">Document Path</button>
-    <button class="path-btn" onclick="ingestAnim.select('thought',this)">Thought Path</button>
-    <button class="path-btn" onclick="ingestAnim.select('noise',this)">Noise Path</button>
-  </div>
-  <div id="ingest-desc" class="path-desc">Document / Knowledge → full 6-step pipeline: parse → hash → chunk+contextualize+embed → extract facts/chunk (parallel ×5) → AUDM dedup → entity linking → markdown output</div>
-  <div class="canvas-wrap"><canvas id="ingest-canvas" width="860" height="820"></canvas></div>
-
-  <hr class="divider">
-
-  <div class="section-title">Custom Entities at Ingestion Time</div>
-  <div class="section-desc">Callers can pass domain-specific entities and relations alongside content. Cortex resolves them via the 4-stage cascade and links them to extracted facts.</div>
-
-  <div class="code">
-    <span class="fn">POST</span> <span class="str">/api/ingest</span><br>
-    {<br>
-    &nbsp;&nbsp;<span class="str">"content"</span>: <span class="str">"Session transcript..."</span>,<br>
-    &nbsp;&nbsp;<span class="str">"title"</span>: <span class="str">"DSA Foundations - Week 3"</span>,<br>
-    &nbsp;&nbsp;<span class="str">"namespace"</span>: <span class="str">"airtribe/lms"</span>,<br>
-    &nbsp;&nbsp;<span class="str">"entities"</span>: {<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"items"</span>: [<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="str">"name"</span>: <span class="str">"DSA Foundations"</span>, <span class="str">"type"</span>: <span class="str">"course"</span> },<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="str">"name"</span>: <span class="str">"Rajneesh Kumar"</span>, <span class="str">"type"</span>: <span class="str">"speaker"</span> },<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="str">"name"</span>: <span class="str">"DSA Foundations - Week 3"</span>, <span class="str">"type"</span>: <span class="str">"session"</span> }<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;],<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"relations"</span>: [<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="str">"source"</span>: <span class="str">"DSA Foundations - Week 3"</span>, <span class="str">"target"</span>: <span class="str">"DSA Foundations"</span>, <span class="str">"type"</span>: <span class="str">"PART_OF"</span> },<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{ <span class="str">"source"</span>: <span class="str">"DSA Foundations - Week 3"</span>, <span class="str">"target"</span>: <span class="str">"Rajneesh Kumar"</span>, <span class="str">"type"</span>: <span class="str">"LED_BY"</span> }<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;]<br>
-    &nbsp;&nbsp;}<br>
-    }
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Pipeline Parameters</div>
-  <table class="tbl">
-    <thead><tr><th>Parameter</th><th>Type</th><th>Description</th></tr></thead>
-    <tbody>
-      <tr><td>content</td><td>string</td><td>Raw content to ingest (required)</td></tr>
-      <tr><td>title</td><td>string</td><td>Document title (auto-detected from content if omitted)</td></tr>
-      <tr><td>namespace</td><td>string</td><td>Scope for namespace isolation (default: config default)</td></tr>
-      <tr><td>sourceType</td><td>string</td><td>Source type label: raw, file, url, database</td></tr>
-      <tr><td>entities</td><td>object</td><td>Custom entity items + relations (see above)</td></tr>
-      <tr><td>categories</td><td>string[]</td><td>Fact categories to extract (defaults to all 10)</td></tr>
-      <tr><td>skipFacts</td><td>boolean</td><td>Skip fact extraction step</td></tr>
-      <tr><td>skipEntities</td><td>boolean</td><td>Skip entity linking step</td></tr>
-      <tr><td>skipMarkdown</td><td>boolean</td><td>Skip markdown generation step</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- CONNECTOR FRAMEWORK -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view" id="view-connectors">
-  <div class="section-title">Connector Framework</div>
-  <div class="section-desc">Airbyte-inspired 4-method interface for connecting external data sources. Connectors yield records via async generators with cursor-based state tracking for incremental sync.</div>
-
-  <div class="flow">
-    <div class="node node-green node-wide">
-      <div class="node-title">SourceConnector Base Class</div>
-      <div class="node-sub">connectors/base.js &middot; all connectors extend this</div>
-    </div>
-
-    <div class="spacer-sm"></div>
-
-    <div class="steps">
-      <div class="step step-green">
-        <div class="step-num">1</div>
-        <div class="step-body">
-          <div class="step-title">static configSchema()</div>
-          <div class="step-desc">Returns JSON Schema for config + credentials. Used by UI and API validation.</div>
-        </div>
-      </div>
-      <div class="step step-green">
-        <div class="step-num">2</div>
-        <div class="step-body">
-          <div class="step-title">check()</div>
-          <div class="step-desc">Validate connectivity. Returns { ok: true } or { ok: false, error: "..." }.</div>
-        </div>
-      </div>
-      <div class="step step-green">
-        <div class="step-num">3</div>
-        <div class="step-body">
-          <div class="step-title">discover()</div>
-          <div class="step-desc">List available streams: tables, channels, folders. Returns name + schema + supported sync modes.</div>
-        </div>
-      </div>
-      <div class="step step-green">
-        <div class="step-num">4</div>
-        <div class="step-body">
-          <div class="step-title">async *read(state, options)</div>
-          <div class="step-desc">Yield records + state checkpoints. Async generator for backpressure. Supports full_refresh and incremental sync types.</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Sync Flow</div>
-  <div class="section-desc">The sync runner orchestrates the full flow from connector to knowledge base.</div>
-
-  <div class="flow">
-    <div class="node node-dim">
-      <div class="node-title">POST /:uid/sync</div>
-      <div class="node-sub">or scheduled cron</div>
-    </div>
-
-    <div class="arrow arrow-green">
-      <svg><line x1="10" y1="0" x2="10" y2="18" class="arrow-line"/><polygon points="5,18 15,18 10,24" class="arrow-head"/></svg>
-    </div>
-
-    <div class="steps">
-      <div class="step step-cyan">
-        <div class="step-num">1</div>
-        <div class="step-body">
-          <div class="step-title">Load connection + decrypt credentials</div>
-          <div class="step-desc">AES-256-GCM decryption via CORTEX_ENCRYPTION_KEY</div>
-        </div>
-        <span class="step-tag tag-db">store</span>
-      </div>
-      <div class="step step-cyan">
-        <div class="step-num">2</div>
-        <div class="step-body">
-          <div class="step-title">Instantiate connector + load last state</div>
-          <div class="step-desc">Get cursor position from last completed sync_run</div>
-        </div>
-      </div>
-      <div class="step step-green">
-        <div class="step-num">3</div>
-        <div class="step-body">
-          <div class="step-title">connector.read(state, options)</div>
-          <div class="step-desc">Iterate async generator. Each yield is either a record or a state checkpoint.</div>
-        </div>
-      </div>
-      <div class="step step-amber">
-        <div class="step-num">4</div>
-        <div class="step-body">
-          <div class="step-title">connector.toDocument(stream, record)</div>
-          <div class="step-desc">Transform each record into a document (content + title + sourcePath + metadata)</div>
-        </div>
-      </div>
-      <div class="step step-cyan">
-        <div class="step-num">5</div>
-        <div class="step-body">
-          <div class="step-title">ingestDocument(doc)</div>
-          <div class="step-desc">Feed each document through the full 6-step pipeline</div>
-        </div>
-      </div>
-      <div class="step step-violet">
-        <div class="step-num">6</div>
-        <div class="step-body">
-          <div class="step-title">Save sync_run state</div>
-          <div class="step-desc">Persist cursor position, records_read, records_written, status</div>
-        </div>
-        <span class="step-tag tag-db">sync_run</span>
-      </div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Available Connectors</div>
-  <div class="cols">
-    <div class="card">
-      <h3 style="color: var(--green-light);">PostgreSQL (active)</h3>
-      <ul>
-        <li>Named SQL queries with cursor fields</li>
-        <li>Schema discovery via information_schema</li>
-        <li>Row limits, read-only transactions, 30s timeout</li>
-        <li>Title templates: {{column}} interpolation</li>
-        <li>Records rendered as key-value text</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--text-dim);">Planned Connectors</h3>
-      <ul>
-        <li><strong>Slack</strong> &mdash; messaging/slack.js &mdash; channel messages</li>
-        <li><strong>S3 / GCS</strong> &mdash; storage/s3.js &mdash; file sync</li>
-        <li><strong>HTTP API</strong> &mdash; api/http.js &mdash; REST endpoint polling</li>
-      </ul>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">PostgreSQL Connector Config</div>
-  <div class="code">
-    {<br>
-    &nbsp;&nbsp;<span class="str">"host"</span>: <span class="str">"db.example.com"</span>,<br>
-    &nbsp;&nbsp;<span class="str">"port"</span>: <span class="num">5432</span>,<br>
-    &nbsp;&nbsp;<span class="str">"database"</span>: <span class="str">"myapp"</span>,<br>
-    &nbsp;&nbsp;<span class="str">"schemas"</span>: [<span class="str">"public"</span>],<br>
-    &nbsp;&nbsp;<span class="str">"queries"</span>: [{<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"name"</span>: <span class="str">"recent_articles"</span>,<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"sql"</span>: <span class="str">"SELECT id, title, body, updated_at FROM articles WHERE status = 'published'"</span>,<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"cursorField"</span>: <span class="str">"updated_at"</span>,<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"title"</span>: <span class="str">"{{title}}"</span>,<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">"rowLimit"</span>: <span class="num">5000</span><br>
-    &nbsp;&nbsp;}]<br>
-    }
-  </div>
-
-  <div class="section-title">Safety Guardrails</div>
-  <table class="tbl">
-    <thead><tr><th>Guardrail</th><th>Implementation</th></tr></thead>
-    <tbody>
-      <tr><td>Read-only</td><td>SET LOCAL default_transaction_read_only = true</td></tr>
-      <tr><td>Timeout</td><td>SET LOCAL statement_timeout = '30s'</td></tr>
-      <tr><td>Row limit</td><td>LIMIT ${rowLimit} wraps user SQL</td></tr>
-      <tr><td>Parameterized</td><td>Cursor values passed as ? bindings</td></tr>
-      <tr><td>Encrypted creds</td><td>AES-256-GCM at rest, decrypted only during sync</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- SEARCH FLOW -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view" id="view-search">
-  <div class="section-title">Hybrid Search Flow</div>
-  <div class="section-desc">Query classification → entity detection → parallel vector+keyword search → RRF merge → optional graph enhancement → ranked results</div>
-
-  <div class="path-btns">
-    <button class="path-btn active-cyan" onclick="searchAnim.select('standard',this)">Standard Search</button>
-    <button class="path-btn" onclick="searchAnim.select('entity',this)">Entity Lookup</button>
-  </div>
-  <div id="search-desc" class="path-desc">Query → router classifies intent → embed query → parallel vector (cosine ≥0.45) + keyword (tsvector) → RRF merge (K=20, vector 1.0 · keyword 0.7) → optional graph enhancement → results</div>
-  <div class="canvas-wrap"><canvas id="search-canvas" width="860" height="700"></canvas></div>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- ENTITY DEDUP -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view" id="view-entities">
-  <div class="section-title">4-Stage Entity Dedup Cascade</div>
-  <div class="section-desc">
-    When the pipeline encounters an entity name, it runs through 4 stages to either find an existing match or create a new entity.
-    <code style="color:var(--pink-light)">resolver.js</code> orchestrates the cascade.
-  </div>
-
-  <div class="flow">
-    <div class="node node-green">
-      <div class="node-title">New entity name</div>
-      <div class="node-sub">e.g. "Kubernetes", "Alice Chen", "API Design Guide"</div>
-    </div>
-
-    <div class="arrow arrow-pink">
-      <svg><line x1="10" y1="0" x2="10" y2="18" class="arrow-line"/><polygon points="5,18 15,18 10,24" class="arrow-head"/></svg>
-    </div>
-
-    <div class="steps">
-      <div class="step step-pink">
-        <div class="step-num">1</div>
-        <div class="step-body">
-          <div class="step-title">Exact name match</div>
-          <div class="step-desc">Case-insensitive, any entity type. O(1) indexed DB lookup. Follows merged_with chain to canonical entity.</div>
-        </div>
-        <span class="step-tag tag-db">store.js</span>
-      </div>
-
-      <div class="step" style="background: none; border: none; padding: 2px 16px;">
-        <div class="step-num" style="color: var(--text-dim);">&darr;</div>
-        <div class="step-body"><div class="step-desc" style="color: var(--text-dim);">no match found</div></div>
-      </div>
-
-      <div class="step step-pink">
-        <div class="step-num">2</div>
-        <div class="step-body">
-          <div class="step-title">Fuzzy string match</div>
-          <div class="step-desc">Levenshtein similarity &ge; 0.85 on up to 200 candidates. Best match verified by LLM ("are these the same entity?").</div>
-        </div>
-        <span class="step-tag tag-llm">LLM verify</span>
-      </div>
-
-      <div class="step" style="background: none; border: none; padding: 2px 16px;">
-        <div class="step-num" style="color: var(--text-dim);">&darr;</div>
-        <div class="step-body"><div class="step-desc" style="color: var(--text-dim);">no match found</div></div>
-      </div>
-
-      <div class="step step-pink">
-        <div class="step-num">3</div>
-        <div class="step-body">
-          <div class="step-title">Embedding similarity</div>
-          <div class="step-desc">pgvector cosine &ge; 0.85 against entity embeddings. Best match verified by LLM.</div>
-        </div>
-        <span class="step-tag tag-llm">LLM verify</span>
-      </div>
-
-      <div class="step" style="background: none; border: none; padding: 2px 16px;">
-        <div class="step-num" style="color: var(--text-dim);">&darr;</div>
-        <div class="step-body"><div class="step-desc" style="color: var(--text-dim);">no match found</div></div>
-      </div>
-
-      <div class="step step-cyan">
-        <div class="step-num">4</div>
-        <div class="step-body">
-          <div class="step-title">Create new entity</div>
-          <div class="step-desc">Insert with computed embedding. Supports multi-type (entity_types JSON array).</div>
-        </div>
-        <span class="step-tag tag-db">store.js</span>
-      </div>
-    </div>
-
-    <div class="spacer-sm"></div>
-
-    <div class="node node-violet node-wide">
-      <div class="node-title">Resolved Entity</div>
-      <div class="node-sub">canonical entity with merged_with chain resolved</div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Entity Merge (Non-Lossy)</div>
-  <div class="section-desc">When stages 2/3 find a match, <code style="color:var(--pink-light)">merger.js</code> performs a non-lossy merge:</div>
-
-  <div class="cols">
-    <div class="card">
-      <h3 style="color: var(--pink-light);">Merge Steps</h3>
-      <ul>
-        <li>Redirect all relations from duplicate &rarr; primary</li>
-        <li>Remove self-referencing relations</li>
-        <li>Deduplicate relation pairs (sum mention counts)</li>
-        <li>Migrate fact_entity links (INSERT ON CONFLICT)</li>
-        <li>Merge entity_types arrays</li>
-        <li>Mark duplicate with merged_with FK</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--violet-light);">Custom Entity Types</h3>
-      <ul>
-        <li>Types are arbitrary strings, not a fixed enum</li>
-        <li>Common: person, document, topic, service, team</li>
-        <li>Domain-specific: session, course, speaker, sprint</li>
-        <li>Entities can have multiple types (JSON array)</li>
-        <li>Relations: PART_OF, LED_BY, COVERS, AUTHORED_BY, ...</li>
-      </ul>
-    </div>
-  </div>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- RRF DEEP DIVE -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view" id="view-rrf">
-  <div class="section-title">Reciprocal Rank Fusion (RRF) &mdash; Deep Dive</div>
-  <div class="section-desc">Merges vector (semantic) and keyword (lexical) search results into a single ranked list. Two parallel searches, one unified score.</div>
-
-  <div class="formula">
-    <span class="var">score</span> = <span class="const">weight</span> / (<span class="const">K</span> + <span class="var">rank</span> + 1)
-  </div>
-
-  <div class="cols">
-    <div class="card">
-      <h3 style="color: var(--cyan-light);">Constants</h3>
-      <ul>
-        <li><strong>K = 20</strong> &mdash; balances score spread for result sets of 5&ndash;50</li>
-        <li><strong>VECTOR_WEIGHT = 1.0</strong> &mdash; semantic search gets full weight</li>
-        <li><strong>KEYWORD_WEIGHT = 0.7</strong> &mdash; keyword search gets 70% weight</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--cyan-light);">Why RRF?</h3>
-      <ul>
-        <li>Scores from different systems are incomparable (cosine vs ts_rank)</li>
-        <li>RRF only uses <em>rank position</em>, not raw scores</li>
-        <li>Items appearing in both lists get boosted naturally</li>
-        <li>Weights let us bias toward semantic (better for NL questions)</li>
-      </ul>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">4-Query Parallel Search</div>
-  <div class="section-desc">Each search fires 4 queries in parallel, then RRF merges results per type (chunks and facts separately).</div>
-
-  <div class="flow">
-    <div class="node node-indigo">
-      <div class="node-title">Query Input</div>
-      <div class="node-sub">search("how does the auth middleware work?")</div>
-    </div>
-
-    <div class="arrow arrow-indigo">
-      <svg><line x1="10" y1="0" x2="10" y2="18" class="arrow-line"/><polygon points="5,18 15,18 10,24" class="arrow-head"/></svg>
-      <span class="arrow-label">embed query &rarr; 768d vector</span>
-    </div>
-
-    <div class="flow-row" style="gap: 12px;">
-      <div class="node node-cyan" style="min-width: 140px;">
-        <div class="node-title">Vector Chunks</div>
-        <div class="node-sub">pgvector cosine<br>embedding &lt;=&gt; query</div>
-      </div>
-      <div class="node node-cyan" style="min-width: 140px;">
-        <div class="node-title">Vector Facts</div>
-        <div class="node-sub">pgvector cosine<br>embedding &lt;=&gt; query</div>
-      </div>
-      <div class="node node-amber" style="min-width: 140px;">
-        <div class="node-title">Keyword Chunks</div>
-        <div class="node-sub">tsvector + ts_rank<br>plainto_tsquery</div>
-      </div>
-      <div class="node node-amber" style="min-width: 140px;">
-        <div class="node-title">Keyword Facts</div>
-        <div class="node-sub">tsvector + ts_rank<br>plainto_tsquery</div>
-      </div>
-    </div>
-
-    <div class="arrow arrow-green">
-      <svg><line x1="10" y1="0" x2="10" y2="18" class="arrow-line"/><polygon points="5,18 15,18 10,24" class="arrow-head"/></svg>
-      <span class="arrow-label">RRF merge per type</span>
-    </div>
-
-    <div class="flow-row" style="gap: 12px;">
-      <div class="node node-green" style="min-width: 200px;">
-        <div class="node-title">Merged Chunks</div>
-        <div class="node-sub">RRF-ranked, normalized 0&ndash;1000</div>
-      </div>
-      <div class="node node-green" style="min-width: 200px;">
-        <div class="node-title">Merged Facts</div>
-        <div class="node-sub">RRF-ranked, normalized 0&ndash;1000</div>
-      </div>
-    </div>
-
-    <div class="arrow arrow-pink">
-      <svg><line x1="10" y1="0" x2="10" y2="18" class="arrow-line"/><polygon points="5,18 15,18 10,24" class="arrow-head"/></svg>
-      <span class="arrow-label">graph enhancement (if enabled)</span>
-    </div>
-
-    <div class="node node-pink">
-      <div class="node-title">Graph-Enhanced Facts</div>
-      <div class="node-sub">Direct results + related facts from entity graph (0.5x discount)</div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Worked Example</div>
-  <div class="section-desc">How RRF scores are calculated when a result appears in both vector and keyword results.</div>
-
-  <table class="tbl">
-    <thead>
-      <tr><th>Result</th><th>Vector Rank</th><th>Keyword Rank</th><th>Vector Score</th><th>Keyword Score</th><th>RRF Total</th></tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>"Auth middleware validates JWT tokens"</td>
-        <td>#0</td><td>#1</td>
-        <td style="color:var(--cyan-light);">1.0 / (20+0+1) = 0.0476</td>
-        <td style="color:var(--amber-light);">0.7 / (20+1+1) = 0.0318</td>
-        <td style="color:var(--green-light); font-weight:700;">0.0794</td>
-      </tr>
-      <tr>
-        <td>"API routes use Bearer auth"</td>
-        <td>#1</td><td>#0</td>
-        <td style="color:var(--cyan-light);">1.0 / (20+1+1) = 0.0455</td>
-        <td style="color:var(--amber-light);">0.7 / (20+0+1) = 0.0333</td>
-        <td style="color:var(--green-light); font-weight:700;">0.0788</td>
-      </tr>
-      <tr>
-        <td>"Auth tokens stored in httpOnly cookies"</td>
-        <td>#2</td><td>&mdash;</td>
-        <td style="color:var(--cyan-light);">1.0 / (20+2+1) = 0.0435</td>
-        <td style="color:var(--text-dim);">0</td>
-        <td style="color:var(--green-light);">0.0435</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <div style="font-size: 12px; color: var(--text-muted); margin-top: 12px;">
-    Results appearing in both lists rank higher. Final scores are normalized: <span style="font-family: var(--mono); color: var(--green-light);">max score &rarr; 1000</span>, all others scaled proportionally.
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Source Files</div>
-  <table class="tbl">
-    <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
-    <tbody>
-      <tr><td>memory/search/hybrid.js</td><td>RRF merge orchestrator, rrfMerge(), search()</td></tr>
-      <tr><td>memory/search/vector.js</td><td>pgvector cosine similarity queries (chunks + facts)</td></tr>
-      <tr><td>memory/search/keyword.js</td><td>tsvector + ts_rank queries (chunks + facts)</td></tr>
-      <tr><td>memory/search/graph-enhancement.js</td><td>Entity extraction, relation traversal, reranking</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- AUDM DEEP DIVE -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view" id="view-audm">
-  <div class="section-title">AUDM Deduplication &mdash; Deep Dive</div>
-  <div class="section-desc">Add / Update / Discard (skip) / Merge (contradict) &mdash; every new fact goes through this before storage. Prevents the knowledge base from growing stale or redundant.</div>
-
-  <div class="cols">
-    <div class="card">
-      <h3 style="color: var(--violet-light);">Thresholds</h3>
-      <ul>
-        <li><strong>SKIP &ge; 0.88</strong> &mdash; essentially the same fact, discard the new one</li>
-        <li><strong>AMBIGUOUS 0.65&ndash;0.88</strong> &mdash; similar but not identical, ask LLM to decide</li>
-        <li><strong>ADD &lt; 0.65</strong> &mdash; different enough to be a new fact</li>
-      </ul>
-      <p style="margin-top: 8px; font-size: 11px; color: var(--text-dim);">Tuned for nomic-embed-text: paraphrased content typically lands 0.75&ndash;0.88.</p>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--violet-light);">Embedding Model</h3>
-      <ul>
-        <li>Ollama nomic-embed-text (768 dimensions)</li>
-        <li>Cosine similarity via pgvector: <code style="font-family:var(--mono); font-size: 11px;">1 - (embedding &lt;=&gt; ?)</code></li>
-        <li>Top 5 similar facts retrieved per comparison</li>
-        <li>Only active facts considered (status != contradicted/superseded)</li>
-      </ul>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Similarity Threshold Bar</div>
-
-  <div class="threshold-bar" style="max-width: 700px;">
-    <div class="threshold-zone" style="left: 0; width: 65%; color: var(--green);">ADD &mdash; new knowledge</div>
-    <div class="threshold-mark" style="left: 65%; border-color: var(--amber);">
-      <span style="color: var(--amber);">0.65</span>
-    </div>
-    <div class="threshold-zone" style="left: 65%; width: 23%; color: var(--amber);">LLM DECIDES</div>
-    <div class="threshold-mark" style="left: 88%; border-color: var(--red);">
-      <span style="color: var(--red);">0.88</span>
-    </div>
-    <div class="threshold-zone" style="left: 88%; width: 12%; color: var(--text-dim);">SKIP</div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">saveFact() Decision Flow</div>
-
-  <div class="flow">
-    <div class="node node-indigo">
-      <div class="node-title">New Fact Arrives</div>
-      <div class="node-sub">content, category, confidence, namespace</div>
-    </div>
-
-    <div class="arrow arrow-indigo">
-      <svg><line x1="10" y1="0" x2="10" y2="18" class="arrow-line"/><polygon points="5,18 15,18 10,24" class="arrow-head"/></svg>
-      <span class="arrow-label">embed content &rarr; 768d</span>
-    </div>
-
-    <div class="node node-cyan">
-      <div class="node-title">Find Similar Facts</div>
-      <div class="node-sub">pgvector cosine &ge; 0.65 in same namespace, limit 5, active only</div>
-    </div>
-
-    <div class="arrow">
-      <svg><line x1="10" y1="0" x2="10" y2="18" class="arrow-line"/><polygon points="5,18 15,18 10,24" class="arrow-head"/></svg>
-    </div>
-
-    <div class="flow-row" style="gap: 16px; align-items: flex-start;">
-      <div class="node node-green" style="min-width: 150px;">
-        <div class="node-title">No matches</div>
-        <div class="node-sub">similarity &lt; 0.65</div>
-        <div class="node-detail" style="color: var(--green-light); font-weight: 600;">&rarr; ADD</div>
-      </div>
-      <div class="node node-dim" style="min-width: 150px;">
-        <div class="node-title">sim &ge; 0.88</div>
-        <div class="node-sub">essentially identical</div>
-        <div class="node-detail" style="color: var(--text-muted); font-weight: 600;">&rarr; SKIP</div>
-      </div>
-      <div class="node node-amber" style="min-width: 150px;">
-        <div class="node-title">0.65 &le; sim &lt; 0.88</div>
-        <div class="node-sub">ask Claude Haiku</div>
-        <div class="node-detail" style="color: var(--amber-light); font-weight: 600;">&rarr; LLM decides</div>
-      </div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">LLM Decision Outcomes (Ambiguous Zone)</div>
-  <div class="section-desc">When similarity is 0.65&ndash;0.88, Claude Haiku compares old vs new content and chooses one of three actions:</div>
-
-  <div class="steps" style="max-width: 700px;">
-    <div class="step step-amber">
-      <div class="step-num">U</div>
-      <div class="step-body">
-        <div class="step-title">UPDATE</div>
-        <div class="step-desc">New fact is a better/newer version of existing one. Old content overwritten, embedding re-generated. History record created.</div>
-      </div>
-      <span class="step-tag tag-db">history</span>
-    </div>
-    <div class="step step-orange">
-      <div class="step-num">C</div>
-      <div class="step-body">
-        <div class="step-title">CONTRADICT</div>
-        <div class="step-desc">New fact directly contradicts the existing one. New fact inserted, old fact status set to "contradicted" with contradictedById FK.</div>
-      </div>
-      <span class="step-tag tag-db">history</span>
-    </div>
-    <div class="step step-green">
-      <div class="step-num">A</div>
-      <div class="step-body">
-        <div class="step-title">ADD</div>
-        <div class="step-desc">Similar but genuinely different information. New fact inserted as its own record &mdash; both facts coexist.</div>
-      </div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Fact Lifecycle</div>
-
-  <div class="flow">
-    <div class="flow-row" style="gap: 24px;">
-      <div class="node node-green" style="min-width: 120px;">
-        <div class="node-title">active</div>
-        <div class="node-sub">live in knowledge base</div>
-      </div>
-      <div class="node node-orange" style="min-width: 120px;">
-        <div class="node-title">contradicted</div>
-        <div class="node-sub">replaced by newer fact</div>
-      </div>
-      <div class="node node-dim" style="min-width: 120px;">
-        <div class="node-title">superseded</div>
-        <div class="node-sub">merged/updated version</div>
-      </div>
-    </div>
-  </div>
-
-  <div style="font-size: 12px; color: var(--text-muted); margin-top: 16px; max-width: 700px;">
-    Only <strong>active</strong> facts appear in search results and similarity comparisons. Contradicted and superseded facts are preserved for audit trail via the <strong>history</strong> table &mdash; nothing is ever deleted.
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Worked Example</div>
-
-  <div class="trace">
-    <div class="trace-step active">
-      <div class="trace-label" style="color: var(--green);">NEW FACT</div>
-      <div class="trace-content">"The auth service uses RS256 JWT tokens with 24h expiry"</div>
-    </div>
-    <div class="trace-step">
-      <div class="trace-label">EMBED</div>
-      <div class="trace-content">nomic-embed-text &rarr; 768d vector</div>
-    </div>
-    <div class="trace-step">
-      <div class="trace-label">FIND SIMILAR</div>
-      <div class="trace-content">
-        Top match: <em>"The auth service uses JWT tokens for authentication"</em>
-        <div class="trace-result" style="color: var(--amber);">similarity = 0.82 &rarr; AMBIGUOUS zone (0.65&ndash;0.88)</div>
-      </div>
-    </div>
-    <div class="trace-step">
-      <div class="trace-label">LLM DECISION</div>
-      <div class="trace-content">
-        Claude Haiku compares both facts
-        <div class="trace-result" style="color: var(--amber);">Verdict: UPDATE &mdash; new fact adds "RS256" and "24h expiry" detail</div>
-      </div>
-    </div>
-    <div class="trace-step match">
-      <div class="trace-label" style="color: var(--pink);">RESULT</div>
-      <div class="trace-content">
-        Existing fact updated with new content. History record saved:
-        <div class="trace-result" style="color: var(--text-muted);">action: "update", triggeredBy: "audm:sim=0.82"</div>
-      </div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Source Files</div>
-  <table class="tbl">
-    <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
-    <tbody>
-      <tr><td>memory/facts/store.js</td><td>saveFact(), audmDecide(), insertFact(), updateFact(), findSimilar()</td></tr>
-      <tr><td>memory/facts/extractor.js</td><td>LLM-based atomic fact extraction from document text</td></tr>
-      <tr><td>prompts/audm-decision.md</td><td>Prompt template for Claude Haiku AUDM comparison</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- CASCADE DEEP DIVE -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view" id="view-cascade">
-  <div class="section-title">Entity Dedup Cascade &mdash; Deep Dive</div>
-  <div class="section-desc">4-stage deduplication: each stage is progressively more expensive. If an earlier stage finds a match, later stages are skipped entirely.</div>
-
-  <div class="flow">
-    <div class="steps" style="max-width: 700px;">
-      <div class="step step-green">
-        <div class="step-num">1</div>
-        <div class="step-body">
-          <div class="step-title">Exact Name Match</div>
-          <div class="step-desc">Case-insensitive name lookup, indexed O(1). Cheapest check.</div>
-        </div>
-        <span class="step-tag tag-db">DB index</span>
-      </div>
-      <div class="step step-amber">
-        <div class="step-num">2</div>
-        <div class="step-body">
-          <div class="step-title">Fuzzy String Match</div>
-          <div class="step-desc">Levenshtein similarity &ge; 0.85, then LLM verification. Catches typos and abbreviations.</div>
-        </div>
-        <span class="step-tag tag-llm">LLM verify</span>
-      </div>
-      <div class="step step-cyan">
-        <div class="step-num">3</div>
-        <div class="step-body">
-          <div class="step-title">Embedding Similarity</div>
-          <div class="step-desc">pgvector cosine &ge; 0.85, then LLM verification. Catches semantic equivalents.</div>
-        </div>
-        <span class="step-tag tag-embed">embed</span>
-      </div>
-      <div class="step step-violet">
-        <div class="step-num">4</div>
-        <div class="step-body">
-          <div class="step-title">Create New Entity</div>
-          <div class="step-desc">No match found &mdash; insert new entity with name, type, embedding, namespace.</div>
-        </div>
-        <span class="step-tag tag-db">INSERT</span>
-      </div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Stage 1 &mdash; Exact Name Match</div>
-  <div class="section-desc">Database indexed lookup. If found, follows the merge chain to find the canonical entity.</div>
-
-  <div class="code">
-    <span class="cmt">// findByName(name, namespace)</span><br>
-    <span class="kw">SELECT</span> * <span class="kw">FROM</span> entity<br>
-    <span class="kw">WHERE</span> <span class="fn">LOWER</span>(name) = <span class="fn">LOWER</span>(<span class="str">?</span>)<br>
-    &nbsp;&nbsp;<span class="kw">AND</span> namespace = <span class="str">?</span><br>
-    &nbsp;&nbsp;<span class="kw">AND</span> merged_with <span class="kw">IS NULL</span>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Stage 2 &mdash; Fuzzy String Match (Levenshtein)</div>
-
-  <div class="cols">
-    <div class="card">
-      <h3 style="color: var(--amber-light);">Algorithm</h3>
-      <ul>
-        <li>Fetch up to 200 candidates from namespace (not merged)</li>
-        <li>Compute Levenshtein distance for each</li>
-        <li>Similarity = 1 - (distance / max(len_a, len_b))</li>
-        <li>Filter: similarity &ge; 0.85 AND names not identical</li>
-        <li>Sort by similarity DESC, take top 3</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--amber-light);">What It Catches</h3>
-      <ul>
-        <li><em>"Kubernetes"</em> &harr; <em>"Kuberntes"</em> (typo)</li>
-        <li><em>"JavaScript"</em> &harr; <em>"Java Script"</em> (spacing)</li>
-        <li><em>"API Gateway"</em> &harr; <em>"Api Gateway"</em> (case)</li>
-        <li>Does NOT catch: <em>"K8s"</em> &harr; <em>"Kubernetes"</em> (too different)</li>
-      </ul>
-    </div>
-  </div>
-
-  <div class="formula">
-    <span class="var">similarity</span> = 1 &minus; (<span class="var">levenshtein_distance</span> / <span class="const">max(|a|, |b|)</span>)
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Stage 3 &mdash; Embedding Similarity</div>
-
-  <div class="code">
-    <span class="cmt">// Embed format: "{entityType}: {name}"</span><br>
-    <span class="cmt">// e.g. "service: API Gateway" &rarr; 768d vector</span><br><br>
-    <span class="kw">SELECT</span> id, name, entity_type, entity_types,<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="num">1</span> - (embedding &lt;=&gt; <span class="str">?</span>) <span class="kw">AS</span> similarity<br>
-    <span class="kw">FROM</span> entity<br>
-    <span class="kw">WHERE</span> namespace = <span class="str">?</span><br>
-    &nbsp;&nbsp;<span class="kw">AND</span> embedding <span class="kw">IS NOT NULL</span><br>
-    &nbsp;&nbsp;<span class="kw">AND</span> <span class="fn">LOWER</span>(name) != <span class="fn">LOWER</span>(<span class="str">?</span>)<br>
-    &nbsp;&nbsp;<span class="kw">AND</span> merged_with <span class="kw">IS NULL</span><br>
-    &nbsp;&nbsp;<span class="kw">AND</span> <span class="num">1</span> - (embedding &lt;=&gt; <span class="str">?</span>) >= <span class="num">0.85</span><br>
-    <span class="kw">ORDER BY</span> embedding &lt;=&gt; <span class="str">?</span><br>
-    <span class="kw">LIMIT</span> <span class="num">3</span>
-  </div>
-
-  <div style="font-size: 12px; color: var(--text-muted);">
-    Catches semantic equivalents that fuzzy string matching misses: <em>"K8s"</em> &harr; <em>"Kubernetes"</em>, <em>"React.js"</em> &harr; <em>"ReactJS"</em>. Each candidate is verified by Claude Haiku before merging.
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Worked Example &mdash; Entity Resolution</div>
-
-  <div class="trace">
-    <div class="trace-step active">
-      <div class="trace-label" style="color: var(--green);">INPUT</div>
-      <div class="trace-content">
-        Resolve entity: <strong>"K8s Cluster"</strong> (type: service)
-      </div>
-    </div>
-    <div class="trace-step skip">
-      <div class="trace-label" style="color: var(--text-dim);">STAGE 1</div>
-      <div class="trace-content">
-        Exact match for "K8s Cluster" &mdash; <span class="trace-result" style="color: var(--text-dim);">not found</span>
-      </div>
-    </div>
-    <div class="trace-step skip">
-      <div class="trace-label" style="color: var(--text-dim);">STAGE 2</div>
-      <div class="trace-content">
-        Fuzzy: best candidate "Kubernetes Cluster" (similarity: 0.62) &mdash; <span class="trace-result" style="color: var(--text-dim);">below 0.85 threshold</span>
-      </div>
-    </div>
-    <div class="trace-step match">
-      <div class="trace-label" style="color: var(--pink);">STAGE 3</div>
-      <div class="trace-content">
-        Embedding: "Kubernetes Cluster" (cosine: 0.91)
-        <div class="trace-result" style="color: var(--amber);">LLM verify &rarr; YES, same service</div>
-      </div>
-    </div>
-    <div class="trace-step active">
-      <div class="trace-label" style="color: var(--green);">RESULT</div>
-      <div class="trace-content">
-        Merged into canonical entity <strong>"Kubernetes Cluster"</strong> (id: 17). Mention count incremented.
-      </div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Source Files</div>
-  <table class="tbl">
-    <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
-    <tbody>
-      <tr><td>memory/entities/resolver.js</td><td>4-stage cascade orchestrator, resolveEntity()</td></tr>
-      <tr><td>memory/entities/fuzzy-matcher.js</td><td>Levenshtein distance, stringSimilarity(), verifyFuzzyMatch()</td></tr>
-      <tr><td>memory/entities/embedding-matcher.js</td><td>pgvector cosine similarity, verifyEmbeddingMatch()</td></tr>
-      <tr><td>memory/entities/merger.js</td><td>mergeEntities(), deduplicateRelations(), followMergeChain()</td></tr>
-      <tr><td>memory/entities/store.js</td><td>Entity CRUD, findByName(), insertEntity(), updateEntityTypes()</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- GRAPH TRAVERSAL DEEP DIVE -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view" id="view-graph">
-  <div class="section-title">Graph Traversal &mdash; Deep Dive</div>
-  <div class="section-desc">Entities and relations form a directed graph. Traversal uses PostgreSQL recursive CTEs with cycle prevention and depth limiting.</div>
-
-  <div class="cols">
-    <div class="card">
-      <h3 style="color: var(--pink-light);">Graph Structure</h3>
-      <ul>
-        <li><strong>Nodes:</strong> entity table (person, document, topic, service, ...)</li>
-        <li><strong>Edges:</strong> relation table (source_id &rarr; target_id)</li>
-        <li>Typed edges: PART_OF, AUTHORED_BY, COVERS, LED_BY, ...</li>
-        <li>Temporal: valid_at / invalid_at for time-bound relations</li>
-        <li>Filtered: merged entities excluded, only active relations</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--pink-light);">Defaults</h3>
-      <ul>
-        <li><strong>findRelated:</strong> maxDepth = 2, limit = 30</li>
-        <li><strong>findPath:</strong> maxDepth = 4, returns shortest</li>
-        <li><strong>getEntityNeighborhood:</strong> depth = 1, limit = 50</li>
-        <li>Cycle prevention via path array check</li>
-        <li>DISTINCT ON (entity_id) keeps shallowest depth</li>
-      </ul>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">findRelated() &mdash; Depth-Limited BFS</div>
-
-  <div class="code">
-    <span class="kw">WITH RECURSIVE</span> graph <span class="kw">AS</span> (<br>
-    &nbsp;&nbsp;<span class="cmt">-- Base case: direct relations from source</span><br>
-    &nbsp;&nbsp;<span class="kw">SELECT</span> r.target_id <span class="kw">AS</span> entity_id,<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;r.relation_type, r.mention_count,<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="num">1</span> <span class="kw">AS</span> depth,<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="fn">ARRAY</span>[source_id] <span class="kw">AS</span> path<br>
-    &nbsp;&nbsp;<span class="kw">FROM</span> relation r<br>
-    &nbsp;&nbsp;<span class="kw">WHERE</span> r.source_id = <span class="str">?</span><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">AND</span> r.invalid_at <span class="kw">IS NULL</span><br><br>
-    &nbsp;&nbsp;<span class="kw">UNION ALL</span><br><br>
-    &nbsp;&nbsp;<span class="cmt">-- Recursive: extend from current frontier</span><br>
-    &nbsp;&nbsp;<span class="kw">SELECT</span> r.target_id, r.relation_type,<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;r.mention_count, g.depth + <span class="num">1</span>,<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;g.path || r.target_id<br>
-    &nbsp;&nbsp;<span class="kw">FROM</span> relation r<br>
-    &nbsp;&nbsp;<span class="kw">JOIN</span> graph g <span class="kw">ON</span> r.source_id = g.entity_id<br>
-    &nbsp;&nbsp;<span class="kw">WHERE</span> g.depth &lt; <span class="num">maxDepth</span><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">AND NOT</span> (r.target_id = <span class="fn">ANY</span>(g.path)) <span class="cmt">-- cycle prevention</span><br>
-    )<br>
-    <span class="kw">SELECT DISTINCT ON</span> (g.entity_id)<br>
-    &nbsp;&nbsp;g.*, e.name, e.entity_type, e.uid<br>
-    <span class="kw">FROM</span> graph g<br>
-    <span class="kw">JOIN</span> entity e <span class="kw">ON</span> e.id = g.entity_id<br>
-    <span class="kw">WHERE</span> e.merged_with <span class="kw">IS NULL</span><br>
-    <span class="kw">ORDER BY</span> g.entity_id, g.depth <span class="kw">ASC</span>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Three Traversal Actions</div>
-  <div class="section-desc">Exposed via the traverse_graph MCP tool and REST API:</div>
-
-  <div class="cols" style="grid-template-columns: 1fr 1fr 1fr;">
-    <div class="card">
-      <h3 style="color: var(--cyan-light);">neighbors</h3>
-      <p>Direct 1-hop connections. Fast. Shows immediate relationships like "authored document X", "covers topic Y".</p>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--pink-light);">path</h3>
-      <p>Shortest path between two entities. Up to 4 hops. Returns ordered entity chain + relation types at each step.</p>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--violet-light);">related</h3>
-      <p>All reachable entities within N hops. BFS expansion. Returns entities with depth, relation type, and mention counts.</p>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Worked Example &mdash; Path Finding</div>
-
-  <div class="trace">
-    <div class="trace-step active">
-      <div class="trace-label" style="color: var(--green);">QUERY</div>
-      <div class="trace-content">
-        findPath(<strong>"Alice Chen"</strong> &rarr; <strong>"Kubernetes"</strong>, maxDepth: 4)
-      </div>
-    </div>
-    <div class="trace-step">
-      <div class="trace-label">DEPTH 1</div>
-      <div class="trace-content">
-        Alice Chen <span style="color:var(--cyan);">&mdash;AUTHORED_BY&rarr;</span> Infrastructure Runbook
-      </div>
-    </div>
-    <div class="trace-step match">
-      <div class="trace-label" style="color: var(--pink);">DEPTH 2</div>
-      <div class="trace-content">
-        Infrastructure Runbook <span style="color:var(--cyan);">&mdash;COVERS&rarr;</span> <strong>Kubernetes</strong>
-        <div class="trace-result" style="color: var(--green);">Path found! 2 hops</div>
-      </div>
-    </div>
-    <div class="trace-step active">
-      <div class="trace-label" style="color: var(--green);">RESULT</div>
-      <div class="trace-content">
-        Path: [Alice Chen, Infrastructure Runbook, Kubernetes]<br>
-        Relations: [AUTHORED_BY, COVERS]
-      </div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Source Files</div>
-  <table class="tbl">
-    <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
-    <tbody>
-      <tr><td>memory/entities/traversal.js</td><td>findRelated(), findPath(), getEntityNeighborhood(), findEntitiesByType()</td></tr>
-      <tr><td>memory/entities/relations.js</td><td>Relation CRUD, listRelationsForEntity(), temporal tracking</td></tr>
-      <tr><td>memory/search/graph-enhancement.js</td><td>Uses traversal to enhance search results</td></tr>
-      <tr><td>mcp/tools/traverse-graph.js</td><td>MCP tool wrapper: neighbors/path/related actions</td></tr>
-    </tbody>
-  </table>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- DATABASE -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view" id="view-db">
-  <div class="section-title">Database Schema</div>
-  <div class="section-desc">cortex-gen: PostgreSQL + pgvector, Docker port 5434, Knex.js with camelCase mappers. All tables unprefixed.</div>
-
-  <table class="tbl">
-    <thead><tr><th>Table</th><th>Purpose</th><th>Key Columns</th></tr></thead>
-    <tbody>
-      <tr><td>document</td><td>Document registry with SHA-256 content hashing</td><td>source_path, source_type, content_hash, namespace</td></tr>
-      <tr><td>chunk</td><td>Text chunks with pgvector embeddings</td><td>content, embedding (768d), search_vector (tsvector), document_id</td></tr>
-      <tr><td>fact</td><td>Atomic facts with AUDM dedup</td><td>content, embedding, category, confidence, status, namespace</td></tr>
-      <tr><td>entity</td><td>Named entities with multi-type support</td><td>name, entity_type, entity_types (JSON), embedding, merged_with FK</td></tr>
-      <tr><td>relation</td><td>Typed relations with temporal tracking</td><td>source_id, target_id, relation_type, valid_at, invalid_at</td></tr>
-      <tr><td>fact_entity</td><td>Junction table linking facts to entities</td><td>fact_id, entity_id, mention_type, mention_count</td></tr>
-      <tr><td>history</td><td>Audit trail for AUDM mutations</td><td>fact_id, action, previous_content, new_content</td></tr>
-      <tr><td>connection</td><td>Connector configurations with encrypted credentials</td><td>connector_type, config (JSONB), credentials_encrypted, namespace</td></tr>
-      <tr><td>sync_run</td><td>Sync execution history with state tracking</td><td>connection_id, sync_type, status, state_before, state_after</td></tr>
-    </tbody>
-  </table>
-
-  <hr class="divider">
-
-  <div class="section-title">Database Configuration</div>
-  <div class="cols">
-    <div class="card">
-      <h3 style="color: var(--violet-light);">cortex-gen (read/write)</h3>
-      <ul>
-        <li>Own PostgreSQL + pgvector via Docker</li>
-        <li>Port 5434, pgvector extension enabled</li>
-        <li>9 tables, 11 migrations (.cjs)</li>
-        <li>HNSW indexes on chunk, fact, entity embeddings</li>
-        <li>Raw SQL for pgvector ops, Knex builder for CRUD</li>
-        <li>Namespace-scoped access across all tables</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--amber-light);">Key Design Decisions</h3>
-      <ul>
-        <li>Single DB for everything (no external dependencies)</li>
-        <li>Content hash dedup prevents re-processing unchanged docs</li>
-        <li>Soft deletes: contradicted/superseded facts preserved</li>
-        <li>merged_with FK chain for entity dedup history</li>
-        <li>JSONB for flexible config and entity_types</li>
-        <li>camelCase mappers in Knex for JS conventions</li>
-      </ul>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">Docker Setup</div>
-  <div class="code">
-    <span class="cmt"># docker-compose.yml</span><br>
-    <span class="kw">services</span>:<br>
-    &nbsp;&nbsp;<span class="kw">db</span>:<br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">image: pgvector/pgvector:pg17</span><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">container_name: cortex-gen-db</span><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">ports: ["5434:5432"]</span><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;<span class="str">environment:</span><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="str">POSTGRES_DB: cortex-gen</span><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="str">POSTGRES_USER: cortex_app</span><br>
-    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="str">POSTGRES_PASSWORD: cortex_pass</span>
-  </div>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<!-- API & MCP -->
-<!-- ═══════════════════════════════════════════════════════════════════════════ -->
-<div class="view" id="view-api">
-  <div class="section-title">MCP Tools (7 tools, 4 tiers)</div>
-  <div class="section-desc">Thin wrappers &mdash; parse input, call domain service, format response. No business logic.</div>
-
-  <div class="spacer-sm"></div>
-
-  <div style="display: flex; flex-direction: column; gap: 16px; max-width: 700px;">
-    <div>
-      <div style="font-family: var(--mono); font-size: 10px; color: var(--cyan); letter-spacing: 0.1em; margin-bottom: 8px;">RETRIEVAL</div>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-        <div class="node node-cyan" style="min-width: 0; flex: 1;">
-          <div class="node-title">search</div>
-          <div class="node-sub">Hybrid semantic + keyword search across facts and chunks. Supports confidence filtering and graph-enhanced results.</div>
-        </div>
-        <div class="node node-cyan" style="min-width: 0; flex: 1;">
-          <div class="node-title">search_entity</div>
-          <div class="node-sub">Find entities by name or list by type (person, service, topic, ...).</div>
-        </div>
-      </div>
-    </div>
-
-    <div>
-      <div style="font-family: var(--mono); font-size: 10px; color: var(--pink); letter-spacing: 0.1em; margin-bottom: 8px;">TRAVERSAL</div>
-      <div class="node node-pink">
-        <div class="node-title">traverse_graph</div>
-        <div class="node-sub">Navigate entity relationships. Actions: neighbors (direct), path (shortest between two), related (all reachable within N hops).</div>
-      </div>
-    </div>
-
-    <div>
-      <div style="font-family: var(--mono); font-size: 10px; color: var(--violet); letter-spacing: 0.1em; margin-bottom: 8px;">DETAIL</div>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-        <div class="node node-violet" style="min-width: 0; flex: 1;">
-          <div class="node-title">get_fact_context</div>
-          <div class="node-sub">Full context for a fact: linked entities, relations, source documents.</div>
-        </div>
-        <div class="node node-violet" style="min-width: 0; flex: 1;">
-          <div class="node-title">get_entity_context</div>
-          <div class="node-sub">Full context for an entity: all relations, connected facts, graph metrics.</div>
-        </div>
-      </div>
-    </div>
-
-    <div>
-      <div style="font-family: var(--mono); font-size: 10px; color: var(--text-dim); letter-spacing: 0.1em; margin-bottom: 8px;">OPERATIONS</div>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-        <div class="node node-dim" style="min-width: 0; flex: 1;">
-          <div class="node-title">status</div>
-          <div class="node-sub">Knowledge base stats &mdash; documents, chunks, facts, entity graph counts.</div>
-        </div>
-        <div class="node node-dim" style="min-width: 0; flex: 1;">
-          <div class="node-title">ingest</div>
-          <div class="node-sub">Trigger ingestion by content or URL. Runs the full 6-step pipeline.</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <hr class="divider">
-
-  <div class="section-title">REST API Endpoints</div>
-  <div class="section-desc">Fastify &middot; Bearer auth &middot; JSON request/response</div>
-
-  <table class="tbl">
-    <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
-    <tbody>
-      <tr><td>POST</td><td>/api/ingest</td><td>Ingest single document (content, URL, or file path)</td></tr>
-      <tr><td>POST</td><td>/api/ingest/batch</td><td>Ingest array of documents</td></tr>
-      <tr><td>GET</td><td>/api/search?query=</td><td>Hybrid search with optional graph enhancement</td></tr>
-      <tr><td>GET</td><td>/api/entities</td><td>List/search entities by name or type</td></tr>
-      <tr><td>GET</td><td>/api/entities/:id/neighbors</td><td>1-hop entity neighbors</td></tr>
-      <tr><td>GET</td><td>/api/entities/:id/related</td><td>Multi-hop related entities</td></tr>
-      <tr><td>GET</td><td>/api/facts/:uid</td><td>Fact detail with provenance</td></tr>
-      <tr><td>GET</td><td>/api/documents</td><td>List ingested documents</td></tr>
-      <tr><td>DELETE</td><td>/api/documents/:uid</td><td>Remove document + chunks</td></tr>
-      <tr><td>GET</td><td>/api/status</td><td>Knowledge base statistics</td></tr>
-      <tr><td>GET</td><td>/api/connectors</td><td>List available connector types</td></tr>
-      <tr><td>GET</td><td>/api/connectors/:type/schema</td><td>Connector config JSON schema</td></tr>
-      <tr><td>POST</td><td>/api/connections</td><td>Create new connection</td></tr>
-      <tr><td>GET</td><td>/api/connections</td><td>List connections</td></tr>
-      <tr><td>POST</td><td>/api/connections/:uid/check</td><td>Test connection health</td></tr>
-      <tr><td>GET</td><td>/api/connections/:uid/discover</td><td>Discover available streams</td></tr>
-      <tr><td>POST</td><td>/api/connections/:uid/sync</td><td>Trigger sync run</td></tr>
-      <tr><td>GET</td><td>/api/connections/:uid/syncs</td><td>Sync run history</td></tr>
-      <tr><td>DELETE</td><td>/api/connections/:uid</td><td>Remove connection</td></tr>
-    </tbody>
-  </table>
-
-  <hr class="divider">
-
-  <div class="section-title">CLI Commands</div>
-  <div class="section-desc"><code style="color:var(--green-light)">cortex</code> &mdash; installed globally via npm, or run with <code style="color:var(--green-light)">node src/cli.js</code></div>
-
-  <table class="tbl">
-    <thead><tr><th>Command</th><th>Description</th></tr></thead>
-    <tbody>
-      <tr><td>cortex ingest &lt;path|url&gt;</td><td>Ingest file(s) or URL with --namespace, --title flags</td></tr>
-      <tr><td>cortex search "query"</td><td>Search knowledge base, print ranked results</td></tr>
-      <tr><td>cortex status</td><td>Show document/chunk/fact/entity counts</td></tr>
-      <tr><td>cortex migrate</td><td>Run database migrations</td></tr>
-      <tr><td>cortex reset</td><td>Drop all data (with confirmation)</td></tr>
-      <tr><td>cortex keys</td><td>Generate encryption key for credentials</td></tr>
-    </tbody>
-  </table>
-
-  <hr class="divider">
-
-  <div class="section-title">Typical Tool Composition</div>
-  <div class="section-desc">Claude Code chains MCP tools to answer complex questions:</div>
-
-  <div class="flow" style="align-items: flex-start;">
-    <div class="steps" style="max-width: 700px;">
-      <div class="step step-cyan">
-        <div class="step-num">1</div>
-        <div class="step-body">
-          <div class="step-title">search("how does the auth middleware work?")</div>
-          <div class="step-desc">Find relevant facts and chunks</div>
-        </div>
-      </div>
-      <div class="step step-cyan">
-        <div class="step-num">2</div>
-        <div class="step-body">
-          <div class="step-title">search_entity("auth middleware", type="service")</div>
-          <div class="step-desc">Find the entity for this service</div>
-        </div>
-      </div>
-      <div class="step step-pink">
-        <div class="step-num">3</div>
-        <div class="step-body">
-          <div class="step-title">traverse_graph(entity_id, action="neighbors")</div>
-          <div class="step-desc">Find all documents, topics, people connected to this service</div>
-        </div>
-      </div>
-      <div class="step step-violet">
-        <div class="step-num">4</div>
-        <div class="step-body">
-          <div class="step-title">get_entity_context(entity_id)</div>
-          <div class="step-desc">Get full detail: relations, facts, graph metrics</div>
-        </div>
+      <div id="panel-conn-wrap" style="display:none">
+        <div class="panel-section-title">Connections</div>
+        <div class="panel-connections" id="panel-conns"></div>
       </div>
     </div>
   </div>
 </div>
-
-</div><!-- /content -->
 
 <script>
-  // ── Tab switching ─────────────────────────────────────────────────────────
-  const tabs = document.querySelectorAll('.tab');
-  const views = document.querySelectorAll('.view');
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      views.forEach(v => v.classList.remove('active'));
-      tab.classList.add('active');
-      document.getElementById(`view-${tab.dataset.view}`).classList.add('active');
-    });
+// ── State ──────────────────────────────────────────────────────────────────
+const state = {
+  overview:  { tx: 0, ty: 0, scale: 1, dragging: false, lastX: 0, lastY: 0, vw: 1800, vh: 1100 },
+  ingestion: { tx: 0, ty: 0, scale: 1, dragging: false, lastX: 0, lastY: 0, vw: 1800, vh: 1700 },
+  search:    { tx: 0, ty: 0, scale: 1, dragging: false, lastX: 0, lastY: 0, vw: 1800, vh: 1450 },
+  storage:   { tx: 0, ty: 0, scale: 1, dragging: false, lastX: 0, lastY: 0, vw: 1900, vh: 1500 },
+};
+let activeView = 'overview';
+let panelOpen = false;
+
+// ── Colors ─────────────────────────────────────────────────────────────────
+const C = {
+  interface: '#6366f1', interface_dim: 'rgba(99,102,241,0.12)',
+  cognitive: '#06b6d4', cognitive_dim: 'rgba(6,182,212,0.12)',
+  ingestion: '#f97316', ingestion_dim: 'rgba(249,115,22,0.12)',
+  search:    '#10b981', search_dim:    'rgba(16,185,129,0.12)',
+  storage:   '#ec4899', storage_dim:   'rgba(236,72,153,0.12)',
+  llm:       '#8b5cf6', llm_dim:       'rgba(139,92,246,0.12)',
+  fs:        '#64748b', fs_dim:        'rgba(100,116,139,0.12)',
+  embedder:  '#f59e0b', embedder_dim:  'rgba(245,158,11,0.12)',
+  red:       '#ef4444', red_dim:       'rgba(239,68,68,0.12)',
+  bg:        '#080c12',
+  surface:   '#0f1520',
+  border:    '#1e2d40',
+  text:      '#e2e8f0',
+  textMuted: '#94a3b8',
+  textDim:   '#64748b',
+};
+
+// ── SVG helpers ────────────────────────────────────────────────────────────
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs = {}, children = []) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  for (const c of children) if (c) e.appendChild(c);
+  return e;
+}
+function txt(content, attrs = {}) {
+  const t = el('text', { 'font-family': "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", ...attrs });
+  t.textContent = content;
+  return t;
+}
+function monoTxt(content, attrs = {}) {
+  const t = el('text', { 'font-family': "'SF Mono','Fira Code','Consolas',monospace", ...attrs });
+  t.textContent = content;
+  return t;
+}
+
+// Draw a rounded-rect node. Returns <g class="node">
+function drawNode(opts) {
+  const { id, x, y, w, h, color, dim, label, sublabel, filePath, details, badge } = opts;
+  const g = el('g', {
+    class: 'node',
+    'data-node-id': id,
+    'data-details': JSON.stringify(details || {}),
+    style: 'cursor:pointer',
+    transform: `translate(${x},${y})`,
   });
 
-  // ── Canvas utilities ──────────────────────────────────────────────────────
-  function rr(ctx, x, y, w, h, r) {
-    r = Math.min(r, w/2, h/2);
-    ctx.beginPath();
-    ctx.moveTo(x+r, y);
-    ctx.lineTo(x+w-r, y);
-    ctx.arcTo(x+w, y, x+w, y+r, r);
-    ctx.lineTo(x+w, y+h-r);
-    ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
-    ctx.lineTo(x+r, y+h);
-    ctx.arcTo(x, y+h, x, y+h-r, r);
-    ctx.lineTo(x, y+r);
-    ctx.arcTo(x, y, x+r, y, r);
-    ctx.closePath();
+  // Shadow
+  const shadow = el('rect', {
+    x: 3, y: 3, width: w, height: h,
+    rx: 8, ry: 8,
+    fill: 'none',
+    stroke: color,
+    'stroke-width': 1,
+    opacity: 0.15,
+    filter: `blur(6px)`,
+  });
+
+  // Background
+  const bg = el('rect', {
+    width: w, height: h,
+    rx: 8, ry: 8,
+    fill: dim,
+    stroke: color,
+    'stroke-width': 1.5,
+    opacity: 1,
+    class: 'node-rect',
+  });
+
+  // Top accent line
+  const accent = el('rect', {
+    x: 12, y: 0, width: w - 24, height: 2,
+    rx: 1,
+    fill: color,
+    opacity: 0.7,
+  });
+
+  g.appendChild(shadow);
+  g.appendChild(bg);
+  g.appendChild(accent);
+
+  // Badge
+  if (badge) {
+    const bw = badge.length * 6.5 + 12;
+    const bx = w - bw - 8;
+    const badgeRect = el('rect', { x: bx, y: 8, width: bw, height: 16, rx: 4, fill: 'rgba(0,0,0,0.3)', stroke: color, 'stroke-width': 0.5 });
+    const badgeTxt = monoTxt(badge, { x: bx + bw / 2, y: 20, 'text-anchor': 'middle', fill: color, 'font-size': 9, 'font-weight': '600' });
+    g.appendChild(badgeRect);
+    g.appendChild(badgeTxt);
   }
 
-  function qbez(p0, cp, p1, t) {
-    const mt = 1 - t;
-    return [mt*mt*p0[0]+2*mt*t*cp[0]+t*t*p1[0], mt*mt*p0[1]+2*mt*t*cp[1]+t*t*p1[1]];
+  // Label
+  const labelY = sublabel ? h / 2 - 6 : h / 2 + 5;
+  const labelEl = txt(label, {
+    x: w / 2, y: labelY,
+    'text-anchor': 'middle',
+    fill: C.text,
+    'font-size': 13,
+    'font-weight': '600',
+  });
+  g.appendChild(labelEl);
+
+  if (sublabel) {
+    const subEl = txt(sublabel, {
+      x: w / 2, y: labelY + 18,
+      'text-anchor': 'middle',
+      fill: C.textMuted,
+      'font-size': 11,
+    });
+    g.appendChild(subEl);
   }
 
-  function lerp2(a, b, t) {
-    return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t];
+  if (filePath) {
+    const fpEl = monoTxt(filePath, {
+      x: w / 2, y: h - 9,
+      'text-anchor': 'middle',
+      fill: color,
+      'font-size': 9,
+      opacity: 0.8,
+    });
+    g.appendChild(fpEl);
   }
 
-  // ── Theme palette ─────────────────────────────────────────────────────────
-  const T = {
-    indigo: { bg:'#1a1840', br:'#6366f1', tx:'#a5b4fc', glow:'rgba(99,102,241,' },
-    cyan:   { bg:'#051820', br:'#06b6d4', tx:'#67e8f9', glow:'rgba(6,182,212,' },
-    amber:  { bg:'#180e03', br:'#f59e0b', tx:'#fcd34d', glow:'rgba(245,158,11,' },
-    orange: { bg:'#1a0803', br:'#f97316', tx:'#fb923c', glow:'rgba(249,115,22,' },
-    violet: { bg:'#190830', br:'#8b5cf6', tx:'#c4b5fd', glow:'rgba(139,92,246,' },
-    pink:   { bg:'#1c0418', br:'#ec4899', tx:'#f9a8d4', glow:'rgba(236,72,153,' },
-    green:  { bg:'#042612', br:'#10b981', tx:'#6ee7b7', glow:'rgba(16,185,129,' },
-    red:    { bg:'#1a0404', br:'#ef4444', tx:'#f87171', glow:'rgba(239,68,68,'  },
-    dim:    { bg:'#161b22', br:'#30363d', tx:'#8b949e', glow:'rgba(139,149,158,' },
-  };
+  // Hover
+  g.addEventListener('mouseenter', () => {
+    bg.setAttribute('filter', `drop-shadow(0 0 8px ${color})`);
+    bg.setAttribute('stroke-width', 2);
+    bg.setAttribute('stroke-opacity', 1);
+  });
+  g.addEventListener('mouseleave', () => {
+    bg.removeAttribute('filter');
+    bg.setAttribute('stroke-width', 1.5);
+  });
 
-  // ── FlowAnim ──────────────────────────────────────────────────────────────
-  class FlowAnim {
-    constructor(canvasId, nodes, segs, paths, defaultPath, descId) {
-      this.canvas = document.getElementById(canvasId);
-      if (!this.canvas) return;
-      this.ctx = this.canvas.getContext('2d');
-      this.nodes = nodes;
-      this.segs = segs;
-      this.paths = paths;
-      this.active = defaultPath;
-      this.descId = descId;
-      this.particles = [];
-      this.glows = {};       // nodeId → 0..1
-      this.frame = 0;
-      this.SPAWN = 80;       // frames between spawns
-      this._tick = this._tick.bind(this);
-      // DPR scaling
-      const dpr = window.devicePixelRatio || 1;
-      const W = this.canvas.width, H = this.canvas.height;
-      this.canvas.width  = W * dpr;
-      this.canvas.height = H * dpr;
-      this.canvas.style.width  = W + 'px';
-      this.canvas.style.height = H + 'px';
-      this.ctx.scale(dpr, dpr);
-      this.W = W; this.H = H;
-      requestAnimationFrame(this._tick);
-    }
+  return g;
+}
 
-    select(name, btn) {
-      this.active = name;
-      this.particles = [];
-      this.glows = {};
-      if (this.descId) {
-        const el = document.getElementById(this.descId);
-        if (el) { el.textContent = this.paths[name].desc || ''; }
-      }
-      // Reset all buttons in parent
-      btn.closest('.path-btns').querySelectorAll('.path-btn').forEach(b => {
-        b.className = 'path-btn';
-      });
-      const activeClass = 'active-' + (this.paths[name].btnTheme || 'cyan');
-      btn.classList.add(activeClass);
-    }
+// Draw node with multi-line label
+function drawNodeML(opts) {
+  const { id, x, y, w, h, color, dim, lines, filePath, details, badge } = opts;
+  const g = el('g', {
+    class: 'node',
+    'data-node-id': id,
+    'data-details': JSON.stringify(details || {}),
+    style: 'cursor:pointer',
+    transform: `translate(${x},${y})`,
+  });
 
-    _tick() {
-      this.frame++;
-      this._update();
-      this._draw();
-      requestAnimationFrame(this._tick);
-    }
+  const bg = el('rect', {
+    width: w, height: h, rx: 8, ry: 8,
+    fill: dim, stroke: color, 'stroke-width': 1.5, class: 'node-rect',
+  });
+  const accent = el('rect', { x: 12, y: 0, width: w - 24, height: 2, rx: 1, fill: color, opacity: 0.7 });
+  g.appendChild(bg);
+  g.appendChild(accent);
 
-    _update() {
-      const path = this.paths[this.active];
-      if (!path) return;
-
-      // Spawn main particle
-      if (this.frame % this.SPAWN === 1) {
-        this._spawn(path.segs, path.color, 0);
-      }
-      // Spawn fork particles
-      if (path.fork && this.frame % this.SPAWN === Math.floor(this.SPAWN * 0.3)) {
-        for (const f of path.fork) {
-          this._spawn(f.segs, f.color || path.color, f.delay || 0);
-        }
-      }
-
-      // Move particles
-      this.particles = this.particles.filter(p => {
-        if (p.delay > 0) { p.delay--; return true; }
-        p.t += p.speed;
-        if (p.t >= 1) {
-          p.t = 0;
-          p.si++;
-          if (p.si >= p.segs.length) return false;
-          // Glow destination node
-          const seg = this.segs[p.segs[p.si]];
-          if (seg && seg.tn) { this.glows[seg.tn] = 1.0; }
-        }
-        return true;
-      });
-
-      // Decay glows
-      for (const id in this.glows) {
-        this.glows[id] = Math.max(0, this.glows[id] - 0.025);
-        if (this.glows[id] === 0) delete this.glows[id];
-      }
-    }
-
-    _spawn(segIds, color, delay) {
-      // Glow first node
-      const firstSeg = this.segs[segIds[0]];
-      if (firstSeg && firstSeg.fn) this.glows[firstSeg.fn] = 1.0;
-      this.particles.push({ segs: segIds, si: 0, t: 0, speed: 0.018, color, delay });
-    }
-
-    _draw() {
-      const ctx = this.ctx;
-      ctx.clearRect(0, 0, this.W, this.H);
-      ctx.fillStyle = '#0d1117';
-      ctx.fillRect(0, 0, this.W, this.H);
-
-      const path = this.paths[this.active];
-      const activeNodeSet = new Set();
-      const activeSegSet = new Set();
-      if (path) {
-        const allSegs = [...path.segs, ...(path.fork||[]).flatMap(f=>f.segs)];
-        allSegs.forEach(sid => {
-          activeSegSet.add(sid);
-          const s = this.segs[sid];
-          if (s) { if (s.fn) activeNodeSet.add(s.fn); if (s.tn) activeNodeSet.add(s.tn); }
-        });
-      }
-
-      // Draw edges
-      for (const [id, seg] of Object.entries(this.segs)) {
-        this._drawEdge(seg, activeSegSet.has(id) ? 0.55 : 0.12);
-      }
-
-      // Draw nodes
-      for (const [id, node] of Object.entries(this.nodes)) {
-        this._drawNode(id, node, activeNodeSet.has(id) ? 1 : 0.18, this.glows[id] || 0);
-      }
-
-      // Draw particles
-      for (const p of this.particles) {
-        if (p.delay > 0) continue;
-        const seg = this.segs[p.segs[p.si]];
-        if (!seg) continue;
-        const pos = seg.cp ? qbez(seg.from, seg.cp, seg.to, p.t) : lerp2(seg.from, seg.to, p.t);
-        this._drawParticle(pos, p.color);
-      }
-    }
-
-    _drawNode(id, n, alpha, glow) {
-      const ctx = this.ctx;
-      const th = T[n.theme] || T.dim;
-      const x = n.x - n.w/2, y = n.y - n.h/2;
-      ctx.save();
-      ctx.globalAlpha = alpha;
-
-      if (glow > 0.02) {
-        ctx.shadowColor = th.glow + (glow * 0.8) + ')';
-        ctx.shadowBlur = 22 * glow;
-      }
-
-      ctx.fillStyle = th.bg;
-      rr(ctx, x, y, n.w, n.h, 9);
-      ctx.fill();
-
-      ctx.strokeStyle = glow > 0.05 ? th.br : th.br + '66';
-      ctx.lineWidth = glow > 0.1 ? 2 : 1.5;
-      rr(ctx, x, y, n.w, n.h, 9);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      ctx.font = 'bold 11.5px "SF Mono",monospace';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = th.tx;
-      ctx.fillText(n.label, n.x, n.sub ? n.y - 7 : n.y);
-
-      if (n.sub) {
-        ctx.globalAlpha = alpha * 0.65;
-        ctx.font = '9.5px "SF Mono",monospace';
-        ctx.fillStyle = th.br;
-        ctx.fillText(n.sub, n.x, n.y + 8);
-      }
-
-      ctx.restore();
-    }
-
-    _drawEdge(seg, alpha) {
-      const ctx = this.ctx;
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = seg.color || '#30363d';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([5, 5]);
-      ctx.beginPath();
-      ctx.moveTo(seg.from[0], seg.from[1]);
-      if (seg.cp) ctx.quadraticCurveTo(seg.cp[0], seg.cp[1], seg.to[0], seg.to[1]);
-      else ctx.lineTo(seg.to[0], seg.to[1]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.restore();
-    }
-
-    _drawParticle(pos, color) {
-      const ctx = this.ctx;
-      ctx.save();
-      ctx.shadowColor = color;
-      ctx.shadowBlur = 14;
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(pos[0], pos[1], 4, 0, Math.PI*2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.fillStyle = '#fff';
-      ctx.beginPath();
-      ctx.arc(pos[0], pos[1], 1.8, 0, Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-    }
+  if (badge) {
+    const bw = badge.length * 6.5 + 12;
+    const bx = w - bw - 8;
+    const badgeRect = el('rect', { x: bx, y: 8, width: bw, height: 16, rx: 4, fill: 'rgba(0,0,0,0.3)', stroke: color, 'stroke-width': 0.5 });
+    const badgeTxt = monoTxt(badge, { x: bx + bw / 2, y: 20, 'text-anchor': 'middle', fill: color, 'font-size': 9, 'font-weight': '600' });
+    g.appendChild(badgeRect);
+    g.appendChild(badgeTxt);
   }
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // INGESTION FLOW
-  // ══════════════════════════════════════════════════════════════════════════
+  const totalH = lines.length * 16;
+  let startY = (h - totalH) / 2 + 13;
+  lines.forEach((line, i) => {
+    const isFirst = i === 0;
+    const t = txt(line, {
+      x: w / 2, y: startY + i * 16,
+      'text-anchor': 'middle',
+      fill: isFirst ? C.text : C.textMuted,
+      'font-size': isFirst ? 13 : 11,
+      'font-weight': isFirst ? '600' : '400',
+    });
+    g.appendChild(t);
+  });
 
-  const IN = {  // node centers
-    input:   { x:430, y:52,  w:200, h:46, label:'ingestDocument()',    sub:'API · MCP · CLI · connector',     theme:'indigo' },
-    cls:     { x:430, y:152, w:248, h:50, label:'Step 0: Classifier',  sub:'thought / document / noise',      theme:'cyan'   },
-    thought: { x:160, y:278, w:188, h:46, label:'Thought',             sub:'short personal statement',        theme:'orange' },
-    parse:   { x:430, y:278, w:204, h:46, label:'Step 1: Parse',       sub:'md / html / code / json',         theme:'cyan'   },
-    noise:   { x:712, y:278, w:148, h:42, label:'Noise → Skip',        sub:'empty / garbage',                 theme:'red'    },
-    tfacts:  { x:160, y:388, w:192, h:46, label:'Pre-extract Facts',   sub:'direct from classifier LLM',      theme:'orange' },
-    hash:    { x:430, y:388, w:204, h:46, label:'Step 2: Hash Check',  sub:'SHA-256 · skip if unchanged',     theme:'cyan'   },
-    cembed:  { x:430, y:498, w:224, h:52, label:'Step 3: Chunk + Embed', sub:'contextualize → 768d vectors', theme:'amber'  },
-    extract: { x:430, y:608, w:224, h:52, label:'Step 4: Extract Facts', sub:'per-chunk · parallel ×5',      theme:'orange' },
-    audm:    { x:430, y:716, w:216, h:48, label:'AUDM Dedup',          sub:'Add / Update / Delete / Merge',   theme:'violet' },
-    entity:  { x:430, y:806, w:216, h:44, label:'Step 5: Entity Linking', sub:'4-stage cascade',             theme:'pink'   },
-  };
+  if (filePath) {
+    const fpEl = monoTxt(filePath, {
+      x: w / 2, y: h - 9,
+      'text-anchor': 'middle',
+      fill: color, 'font-size': 9, opacity: 0.8,
+    });
+    g.appendChild(fpEl);
+  }
 
-  const IS = {  // segments: {from, to, cp?, color, fn (from-node), tn (to-node)}
-    i0:  { from:[430,75],  to:[430,127],            color:'#6366f1', fn:'input',   tn:'cls'    },
-    it:  { from:[430,177], to:[160,255], cp:[240,208], color:'#f97316', fn:'cls',  tn:'thought' },
-    id:  { from:[430,177], to:[430,255],             color:'#06b6d4', fn:'cls',    tn:'parse'  },
-    in_: { from:[430,177], to:[712,257], cp:[610,208], color:'#ef4444', fn:'cls',  tn:'noise'  },
-    it2: { from:[160,301], to:[160,365],             color:'#f97316', fn:'thought',tn:'tfacts' },
-    id2: { from:[430,301], to:[430,365],             color:'#06b6d4', fn:'parse',  tn:'hash'   },
-    id3: { from:[430,411], to:[430,472],             color:'#f59e0b', fn:'hash',   tn:'cembed' },
-    id4: { from:[430,524], to:[430,582],             color:'#f97316', fn:'cembed', tn:'extract'},
-    id5: { from:[430,634], to:[430,692],             color:'#8b5cf6', fn:'extract',tn:'audm'   },
-    it3: { from:[160,411], to:[430,692], cp:[270,598], color:'#f97316', fn:'tfacts',tn:'audm' },
-    i6:  { from:[430,740], to:[430,784],             color:'#ec4899', fn:'audm',   tn:'entity' },
-  };
+  g.addEventListener('mouseenter', () => {
+    bg.setAttribute('filter', `drop-shadow(0 0 8px ${color})`);
+    bg.setAttribute('stroke-width', 2);
+  });
+  g.addEventListener('mouseleave', () => {
+    bg.removeAttribute('filter');
+    bg.setAttribute('stroke-width', 1.5);
+  });
 
-  const IPATHS = {
-    document: {
-      desc: 'Document / Knowledge → full 6-step pipeline: parse → hash → chunk+contextualize+embed → extract facts/chunk (parallel ×5) → AUDM dedup → entity linking → markdown output',
-      color: '#06b6d4', btnTheme: 'cyan',
-      segs: ['i0','id','id2','id3','id4','id5','i6'],
+  return g;
+}
+
+// Arrow path between two points
+function arrow(x1, y1, x2, y2, color, animated = true, markerUrl = 'arrow-ov', dashed = false) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  const ux = dx / len, uy = dy / len;
+  const ex = x2 - ux * 8, ey = y2 - uy * 8;
+
+  const p = el('path', {
+    d: `M${x1},${y1} L${ex},${ey}`,
+    fill: 'none',
+    stroke: color,
+    'stroke-width': 1.5,
+    'stroke-opacity': 0.6,
+    'marker-end': `url(#${markerUrl})`,
+  });
+  if (animated) {
+    p.setAttribute('stroke-dasharray', '6 6');
+    p.setAttribute('class', 'flow-edge');
+    p.style.animation = 'dashflow 0.7s linear infinite';
+  } else if (dashed) {
+    p.setAttribute('stroke-dasharray', '4 4');
+  }
+  return p;
+}
+
+// Curved path
+function curvedArrow(x1, y1, x2, y2, cx, cy, color, markerUrl = 'arrow-ov', animated = true) {
+  const p = el('path', {
+    d: `M${x1},${y1} Q${cx},${cy} ${x2},${y2}`,
+    fill: 'none',
+    stroke: color,
+    'stroke-width': 1.5,
+    'stroke-opacity': 0.6,
+    'marker-end': `url(#${markerUrl})`,
+  });
+  if (animated) {
+    p.setAttribute('stroke-dasharray', '6 6');
+    p.setAttribute('class', 'flow-edge');
+  }
+  return p;
+}
+
+// Label on edge
+function edgeLabel(x, y, text, color) {
+  const g = el('g');
+  const tw = text.length * 6 + 10;
+  g.appendChild(el('rect', {
+    x: x - tw / 2, y: y - 9, width: tw, height: 14,
+    rx: 3, fill: C.surface, stroke: C.border, 'stroke-width': 0.5,
+  }));
+  g.appendChild(monoTxt(text, {
+    x, y: y + 1, 'text-anchor': 'middle',
+    fill: color, 'font-size': 9,
+  }));
+  return g;
+}
+
+// Section label (floating text)
+function sectionLabel(x, y, text, color) {
+  const g = el('g');
+  g.appendChild(txt(text, {
+    x, y, 'text-anchor': 'middle',
+    fill: color, 'font-size': 10, 'font-weight': '700',
+    'letter-spacing': '1',
+    opacity: 0.6,
+    'font-family': "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+  }));
+  return g;
+}
+
+// Divider line
+function divider(x1, y1, x2, y2) {
+  return el('line', {
+    x1, y1, x2, y2,
+    stroke: C.border, 'stroke-width': 1, 'stroke-dasharray': '4 4', opacity: 0.6,
+  });
+}
+
+// ── NODE CLICK → PANEL ────────────────────────────────────────────────────
+document.addEventListener('click', e => {
+  const node = e.target.closest('.node');
+  if (node) {
+    e.stopPropagation();
+    openPanel(node);
+    return;
+  }
+  const panel = e.target.closest('#side-panel');
+  if (!panel) closePanel();
+});
+
+document.getElementById('panel-close').addEventListener('click', closePanel);
+
+function openPanel(node) {
+  let details = {};
+  try { details = JSON.parse(node.getAttribute('data-details') || '{}'); } catch {}
+
+  const { title = 'Node', description = '', file = '', badge = '', props = {}, connections = [] } = details;
+  const color = details.color || C.cognitive;
+
+  document.getElementById('panel-badge').textContent = badge || 'Component';
+  document.getElementById('panel-badge').style.cssText = `background:${color}22;color:${color};border:1px solid ${color}44`;
+  document.getElementById('panel-title').textContent = title;
+  document.getElementById('panel-desc').textContent = description;
+
+  const fileWrap = document.getElementById('panel-file-wrap');
+  if (file) {
+    document.getElementById('panel-file').textContent = file;
+    fileWrap.style.display = 'block';
+  } else {
+    fileWrap.style.display = 'none';
+  }
+
+  const propsWrap = document.getElementById('panel-props-wrap');
+  const propsCont = document.getElementById('panel-props');
+  const propEntries = Object.entries(props);
+  if (propEntries.length) {
+    propsCont.innerHTML = '';
+    propEntries.forEach(([k, v]) => {
+      const row = document.createElement('div');
+      row.className = 'prop-row';
+      row.innerHTML = `<span class="prop-key">${k}</span><span class="prop-val">${v}</span>`;
+      propsCont.appendChild(row);
+    });
+    propsWrap.style.display = 'block';
+  } else {
+    propsWrap.style.display = 'none';
+  }
+
+  const connWrap = document.getElementById('panel-conn-wrap');
+  const connCont = document.getElementById('panel-conns');
+  if (connections.length) {
+    connCont.innerHTML = '';
+    connections.forEach(c => {
+      const row = document.createElement('div');
+      row.className = 'conn-row';
+      row.innerHTML = `<span class="conn-arrow">${c.dir === 'in' ? '←' : '→'}</span><span class="conn-label">${c.label}</span>`;
+      connCont.appendChild(row);
+    });
+    connWrap.style.display = 'block';
+  } else {
+    connWrap.style.display = 'none';
+  }
+
+  document.getElementById('side-panel').classList.add('open');
+  panelOpen = true;
+}
+
+function closePanel() {
+  document.getElementById('side-panel').classList.remove('open');
+  panelOpen = false;
+}
+
+// ── PAN + ZOOM ─────────────────────────────────────────────────────────────
+function getTransform(view) {
+  const s = state[view];
+  return `translate(${s.tx},${s.ty}) scale(${s.scale})`;
+}
+
+function applyTransform(view) {
+  const dg = document.getElementById(`dg-${view}`);
+  if (dg) dg.setAttribute('transform', getTransform(view));
+  const pct = Math.round(state[view].scale * 100);
+  const zpEl = document.getElementById(`zp-${view}`);
+  if (zpEl) zpEl.textContent = pct + '%';
+}
+
+function zoomIn(view) { zoomBy(view, 1.25, null, null); }
+function zoomOut(view) { zoomBy(view, 0.8, null, null); }
+
+function zoomBy(view, factor, cx, cy) {
+  const s = state[view];
+  const newScale = Math.min(4, Math.max(0.25, s.scale * factor));
+  const svgEl = document.getElementById(`svg-${view}`);
+  const rect = svgEl.getBoundingClientRect();
+  const pcx = cx !== null ? cx : rect.width / 2;
+  const pcy = cy !== null ? cy : rect.height / 2;
+  const wx = (pcx - s.tx) / s.scale;
+  const wy = (pcy - s.ty) / s.scale;
+  s.tx = pcx - wx * newScale;
+  s.ty = pcy - wy * newScale;
+  s.scale = newScale;
+  applyTransform(view);
+}
+
+function zoomFit(view) {
+  const s = state[view];
+  const svgEl = document.getElementById(`svg-${view}`);
+  const rect = svgEl.getBoundingClientRect();
+  const pad = 40;
+  const scaleX = (rect.width - pad * 2) / s.vw;
+  const scaleY = (rect.height - pad * 2) / s.vh;
+  s.scale = Math.min(scaleX, scaleY, 1);
+  s.tx = (rect.width - s.vw * s.scale) / 2;
+  s.ty = (rect.height - s.vh * s.scale) / 2;
+  applyTransform(view);
+}
+
+// Setup pan+zoom for each view
+['overview', 'ingestion', 'search', 'storage'].forEach(view => {
+  const svg = document.getElementById(`svg-${view}`);
+  const s = state[view];
+
+  svg.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    const factor = e.deltaY < 0 ? 1.1 : 0.9;
+    zoomBy(view, factor, e.clientX - rect.left, e.clientY - rect.top);
+  }, { passive: false });
+
+  svg.addEventListener('mousedown', e => {
+    if (e.target.closest('.node')) return;
+    s.dragging = true;
+    s.lastX = e.clientX;
+    s.lastY = e.clientY;
+    svg.classList.add('dragging');
+  });
+
+  svg.addEventListener('mousemove', e => {
+    if (!s.dragging) return;
+    s.tx += e.clientX - s.lastX;
+    s.ty += e.clientY - s.lastY;
+    s.lastX = e.clientX;
+    s.lastY = e.clientY;
+    applyTransform(view);
+  });
+
+  svg.addEventListener('mouseup', () => { s.dragging = false; svg.classList.remove('dragging'); });
+  svg.addEventListener('mouseleave', () => { s.dragging = false; svg.classList.remove('dragging'); });
+});
+
+// ── TABS ───────────────────────────────────────────────────────────────────
+document.getElementById('tabs').addEventListener('click', e => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  const view = tab.dataset.view;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+  document.querySelectorAll('.canvas-view').forEach(v => v.classList.toggle('active', v.id === `view-${view}`));
+  activeView = view;
+  closePanel();
+  // Auto-fit on first switch
+  setTimeout(() => zoomFit(view), 10);
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  DIAGRAM RENDERING
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── OVERVIEW ──────────────────────────────────────────────────────────────
+function buildOverview() {
+  const g = document.getElementById('dg-overview');
+
+  // Background grid
+  const defs = document.querySelector('#svg-overview defs');
+  const gridPat = el('pattern', { id: 'grid-ov', width: 40, height: 40, patternUnits: 'userSpaceOnUse' });
+  gridPat.appendChild(el('path', { d: 'M40 0 L0 0 0 40', fill: 'none', stroke: '#1e2d40', 'stroke-width': 0.5, opacity: 0.4 }));
+  defs.appendChild(gridPat);
+  g.appendChild(el('rect', { width: 1800, height: 1100, fill: 'url(#grid-ov)', opacity: 0.5 }));
+
+  // Section labels
+  g.appendChild(sectionLabel(900, 36, 'CLAUDE CODE SESSION', C.fs));
+  g.appendChild(sectionLabel(900, 235, 'INTERFACE LAYER', C.interface));
+  g.appendChild(sectionLabel(900, 435, 'COGNITIVE LAYER', C.cognitive));
+  g.appendChild(sectionLabel(340, 635, 'INGESTION', C.ingestion));
+  g.appendChild(sectionLabel(1460, 635, 'SEARCH', C.search));
+  g.appendChild(sectionLabel(900, 880, 'INFRASTRUCTURE', C.textDim));
+
+  // Horizontal dividers
+  g.appendChild(divider(80, 60, 1720, 60));
+  g.appendChild(divider(80, 255, 1720, 255));
+  g.appendChild(divider(80, 455, 1720, 455));
+  g.appendChild(divider(80, 830, 1720, 830));
+
+  // ── Claude Code Session ──
+  const claude = drawNode({
+    id: 'claude-session',
+    x: 700, y: 70, w: 200, h: 55,
+    color: C.fs, dim: C.fs_dim,
+    label: 'Claude Code Session',
+    sublabel: 'AI Agent Runtime',
+    details: {
+      title: 'Claude Code Session', badge: 'RUNTIME', color: C.fs,
+      description: 'The AI agent runtime that drives all cortex operations. Claude reads from ~/.claude/CLAUDE.md at session start, pulling in the user\'s cortex instructions and hot context snapshot.',
+      props: { Runtime: 'Claude claude-sonnet-4-6', Transport: 'stdio / MCP', 'Config load': 'Session start' },
+      connections: [
+        { dir: 'out', label: '~/.claude/CLAUDE.md (reads)' },
+        { dir: 'out', label: 'CLI cortex commands' },
+        { dir: 'out', label: 'MCP Server (7 tools)' },
+      ]
+    }
+  });
+  g.appendChild(claude);
+
+  const claudeMd = drawNode({
+    id: 'claude-md',
+    x: 480, y: 130, w: 170, h: 50,
+    color: C.fs, dim: C.fs_dim,
+    label: '~/.claude/CLAUDE.md',
+    sublabel: 'Global instructions',
+    details: {
+      title: '~/.claude/CLAUDE.md', badge: 'CONFIG', color: C.fs,
+      description: 'Global Claude Code configuration. Contains memory commands (cortex search / cortex remember) and delegates to per-project CLAUDE.md files.',
+      props: { Location: '~/.claude/', 'Load time': 'Session start', Format: 'Markdown' },
+      connections: [{ dir: 'in', label: 'Claude reads at startup' }]
+    }
+  });
+  g.appendChild(claudeMd);
+
+  const cortexMd = drawNode({
+    id: 'cortex-md',
+    x: 680, y: 145, w: 180, h: 50,
+    color: C.fs, dim: C.fs_dim,
+    label: '~/.cortex/CLAUDE.md',
+    sublabel: 'Instructions + Hot Context',
+    details: {
+      title: '~/.cortex/CLAUDE.md', badge: 'HOT CONTEXT', color: C.fs,
+      description: 'Per-project cortex config and hot context snapshot. Generated/updated by updateContextSnapshot() after each ingestion. Contains top facts, recent entities, and cortex instructions loaded into Claude\'s context window.',
+      props: { Location: '~/.cortex/', 'Updated by': 'updateContextSnapshot()', 'Contains': 'Hot facts, entities, instructions' },
+      connections: [
+        { dir: 'in', label: 'Claude reads at startup' },
+        { dir: 'in', label: 'Updated after ingestion' },
+      ]
+    }
+  });
+  g.appendChild(cortexMd);
+
+  // ── Interface Layer ──
+  const cli = drawNode({
+    id: 'cli',
+    x: 220, y: 270, w: 190, h: 65,
+    color: C.interface, dim: C.interface_dim,
+    label: 'CLI',
+    sublabel: 'cortex remember/ingest/search',
+    details: {
+      title: 'CLI Tool', badge: 'INTERFACE', color: C.interface,
+      description: 'Command-line interface for all cortex operations. Supports ingest (files, URLs, globs), search, status, migrate, and API key management.',
+      file: 'src/cli.js',
+      props: { Commands: 'ingest, search, status, migrate, keys', Transport: 'subprocess', 'Entry point': 'cortex' },
+      connections: [
+        { dir: 'out', label: 'Input Classifier (cognitive)' },
+        { dir: 'in', label: 'User terminal' }
+      ]
+    }
+  });
+  g.appendChild(cli);
+
+  const restApi = drawNode({
+    id: 'rest-api',
+    x: 680, y: 270, w: 190, h: 65,
+    color: C.interface, dim: C.interface_dim,
+    label: 'REST API',
+    sublabel: 'Fastify :4000',
+    details: {
+      title: 'REST API (Fastify)', badge: 'INTERFACE', color: C.interface,
+      description: 'HTTP REST API built on Fastify. Provides endpoints for ingestion, search, entity graph, facts, documents, and status. API key authentication via HMAC-SHA256.',
+      file: 'src/app.js',
+      props: { Port: '4000', Framework: 'Fastify', Auth: 'API key (HMAC-SHA256)', Routes: '/api/ingest, /api/search, /api/entities, /api/facts, /api/documents, /api/status' },
+      connections: [
+        { dir: 'out', label: 'Cognitive layer' },
+        { dir: 'in', label: 'HTTP clients' }
+      ]
+    }
+  });
+  g.appendChild(restApi);
+
+  const mcpServer = drawNode({
+    id: 'mcp-server',
+    x: 1140, y: 270, w: 200, h: 65,
+    color: C.interface, dim: C.interface_dim,
+    label: 'MCP Server',
+    sublabel: '7 tools — stdio transport',
+    details: {
+      title: 'MCP Server', badge: 'INTERFACE', color: C.interface,
+      description: 'Model Context Protocol server exposing 7 tools to AI agents. Uses stdio transport. Thin wrapper around domain services.',
+      file: 'src/mcp/server.js',
+      props: {
+        Transport: 'stdio',
+        Tools: 'search, search-entity, traverse-graph, get-fact-context, get-entity-context, status, ingest',
+        'Tool count': '7',
+      },
+      connections: [
+        { dir: 'out', label: 'Cognitive layer' },
+        { dir: 'in', label: 'Claude Code MCP client' }
+      ]
+    }
+  });
+  g.appendChild(mcpServer);
+
+  // ── Cognitive Layer ──
+  const inputClassifier = drawNode({
+    id: 'input-classifier',
+    x: 420, y: 470, w: 220, h: 70,
+    color: C.cognitive, dim: C.cognitive_dim,
+    label: 'Input Classifier',
+    sublabel: 'thought / knowledge / noise',
+    details: {
+      title: 'Input Classifier', badge: 'COGNITIVE', color: C.cognitive,
+      description: 'Classifies incoming content into thought, knowledge, or noise. Thoughts go directly to AUDM store. Knowledge goes through the full ingestion pipeline. Noise is discarded.',
+      file: 'src/memory/cognitive/input-classifier.js',
+      props: { Classes: 'thought, knowledge, noise', 'Thought path': 'AUDM direct store', 'Knowledge path': 'Full pipeline', 'Noise path': 'Discard' },
+      connections: [
+        { dir: 'in', label: 'CLI / REST API / MCP' },
+        { dir: 'out', label: 'Ingestion Pipeline (knowledge)' },
+        { dir: 'out', label: 'AUDM direct (thought)' },
+        { dir: 'out', label: 'Discard (noise)' }
+      ]
+    }
+  });
+  g.appendChild(inputClassifier);
+
+  const queryRouter = drawNode({
+    id: 'query-router',
+    x: 1080, y: 470, w: 220, h: 70,
+    color: C.cognitive, dim: C.cognitive_dim,
+    label: 'Query Router',
+    sublabel: '5 intents — LRU cache 200',
+    details: {
+      title: 'Query Router', badge: 'COGNITIVE', color: C.cognitive,
+      description: 'Classifies search queries into 5 intent types and routes to appropriate search strategy. Uses LRU cache with 200-entry capacity and 10-minute TTL for repeated queries.',
+      file: 'src/memory/cognitive/query-router.js',
+      props: {
+        Intents: 'entity_lookup, fact_lookup, temporal, comparison, exploratory',
+        'Cache size': '200 entries (LRU)',
+        'Cache TTL': '10 minutes',
+      },
+      connections: [
+        { dir: 'in', label: 'REST API / MCP search' },
+        { dir: 'out', label: 'Search Engine (5 strategies)' }
+      ]
+    }
+  });
+  g.appendChild(queryRouter);
+
+  // ── Processing ──
+  const ingestionPipeline = drawNode({
+    id: 'ingestion-pipeline',
+    x: 140, y: 580, w: 220, h: 70,
+    color: C.ingestion, dim: C.ingestion_dim,
+    label: 'Ingestion Pipeline',
+    sublabel: 'parse → chunk → embed → extract',
+    details: {
+      title: 'Ingestion Pipeline', badge: 'INGESTION', color: C.ingestion,
+      description: 'Orchestrates the full document ingestion flow: auto-detect format, parse into sections, split into chunks, contextualize, embed, store chunks, extract facts via LLM, deduplicate via AUDM, link entities.',
+      file: 'src/ingestion/pipeline.js',
+      props: {
+        'Input types': 'markdown, text, html, code, json',
+        'Sources': 'file, URL, raw content',
+        'Parallelism': 'CONCURRENCY=5 for facts',
+        'Outputs': 'chunks, facts, entities, relations',
+      },
+      connections: [
+        { dir: 'in', label: 'Input Classifier' },
+        { dir: 'out', label: 'LLM Provider (contextualize + extract)' },
+        { dir: 'out', label: 'Ollama Embedder' },
+        { dir: 'out', label: 'PGlite DB' }
+      ]
+    }
+  });
+  g.appendChild(ingestionPipeline);
+
+  const searchEngine = drawNode({
+    id: 'search-engine',
+    x: 1340, y: 580, w: 220, h: 70,
+    color: C.search, dim: C.search_dim,
+    label: 'Search Engine',
+    sublabel: 'vector + keyword + graph',
+    details: {
+      title: 'Search Engine', badge: 'SEARCH', color: C.search,
+      description: 'Hybrid search combining pgvector cosine similarity, tsvector full-text search, and entity graph enhancement. RRF merge with vector:1.0× and keyword:0.7× weights.',
+      file: 'src/memory/search/',
+      props: {
+        'Vector': 'pgvector cosine + HNSW',
+        'Keyword': 'tsvector + GIN index',
+        'Merge': 'RRF (Reciprocal Rank Fusion)',
+        'RRF weights': 'vector 1.0×, keyword 0.7×',
+        'Graph': 'Entity enhancement (LLM)',
+        K: '20 results',
+      },
+      connections: [
+        { dir: 'in', label: 'Query Router' },
+        { dir: 'out', label: 'PGlite DB (vector + keyword)' },
+        { dir: 'out', label: 'LLM (graph enhancement, exploratory)' }
+      ]
+    }
+  });
+  g.appendChild(searchEngine);
+
+  // ── Infrastructure ──
+  const llmProvider = drawNode({
+    id: 'llm-provider',
+    x: 250, y: 890, w: 220, h: 70,
+    color: C.llm, dim: C.llm_dim,
+    label: 'LLM Provider',
+    sublabel: 'OpenAI / Anthropic / Ollama',
+    details: {
+      title: 'LLM Provider', badge: 'LLM', color: C.llm,
+      description: 'Abstracted LLM interface supporting multiple providers. Used for fact extraction, AUDM deduplication decisions, entity verification, query expansion, and graph enhancement.',
+      file: 'src/lib/llm.js',
+      props: {
+        Providers: 'OpenAI, Anthropic, Ollama',
+        'Extraction model': 'LLM_EXTRACTION_MODEL (default: claude-haiku-4-5)',
+        'Decision model': 'LLM_DECISION_MODEL (default: claude-sonnet-4-6)',
+        'Entity model': 'LLM_ENTITY_MODEL (default: claude-haiku-4-5)',
+        Logging: 'llm_log table (tokens, cost, duration)',
+      },
+      connections: [
+        { dir: 'in', label: 'Ingestion Pipeline (extract + contextualize)' },
+        { dir: 'in', label: 'Search Engine (expand + enhance)' },
+        { dir: 'in', label: 'AUDM (dedup decisions)' }
+      ]
+    }
+  });
+  g.appendChild(llmProvider);
+
+  const ollamaEmbedder = drawNode({
+    id: 'ollama-embedder',
+    x: 750, y: 890, w: 220, h: 70,
+    color: C.embedder, dim: C.embedder_dim,
+    label: 'Ollama Embedder',
+    sublabel: 'nomic-embed-text 768d',
+    details: {
+      title: 'Ollama Embedder', badge: 'EMBEDDER', color: C.embedder,
+      description: 'Local embedding service via Ollama. Generates 768-dimensional embeddings using nomic-embed-text model. Used for chunk embedding, fact embedding, and entity similarity matching.',
+      file: 'src/ingestion/embedder.js',
+      props: {
+        Model: 'nomic-embed-text',
+        Dimensions: '768',
+        Provider: 'Ollama (local)',
+        'Swappable to': 'OpenAI text-embedding-*',
+        Batching: 'Yes',
+      },
+      connections: [
+        { dir: 'in', label: 'Ingestion Pipeline' },
+        { dir: 'in', label: 'AUDM (fact similarity)' },
+        { dir: 'in', label: 'Entity Resolver (embedding match)' }
+      ]
+    }
+  });
+  g.appendChild(ollamaEmbedder);
+
+  const pglite = drawNode({
+    id: 'pglite-db',
+    x: 1260, y: 890, w: 220, h: 70,
+    color: C.storage, dim: C.storage_dim,
+    label: 'PGlite DB',
+    sublabel: '~/.cortex/db — pgvector',
+    details: {
+      title: 'PGlite Database', badge: 'STORAGE', color: C.storage,
+      description: 'Embedded PostgreSQL with pgvector extension. Stores all documents, chunks, facts, entities, relations, and metadata. HNSW indexes for vector search, GIN indexes for full-text.',
+      file: 'src/db/cortex.js',
+      props: {
+        Engine: 'PGlite (PostgreSQL embedded)',
+        Location: '~/.cortex/db',
+        Extension: 'pgvector',
+        'Vector index': 'HNSW (cosine)',
+        'Text index': 'GIN (tsvector)',
+        Tables: '9 tables',
+      },
+      connections: [
+        { dir: 'in', label: 'Ingestion Pipeline (write)' },
+        { dir: 'in', label: 'Search Engine (read)' },
+        { dir: 'out', label: '~/.cortex/CLAUDE.md (hot context)' }
+      ]
+    }
+  });
+  g.appendChild(pglite);
+
+  // ── Edges ──
+  // Claude → config files
+  g.appendChild(arrow(790, 125, 660, 145, C.fs, false, 'arrow-ov-slate', true));
+  g.appendChild(arrow(820, 125, 810, 145, C.fs, false, 'arrow-ov-slate', true));
+
+  // Claude → interfaces
+  g.appendChild(curvedArrow(770, 125, 360, 270, 500, 200, C.interface, 'arrow-ov-indigo', true));
+  g.appendChild(arrow(790, 125, 780, 270, C.interface, true, 'arrow-ov-indigo'));
+  g.appendChild(curvedArrow(810, 125, 1200, 270, 1000, 195, C.interface, 'arrow-ov-indigo', true));
+
+  // Interfaces → cognitive
+  g.appendChild(curvedArrow(360, 335, 520, 470, 440, 410, C.cognitive, 'arrow-ov-cyan', true));
+  g.appendChild(arrow(780, 335, 660, 470, C.cognitive, true, 'arrow-ov-cyan'));
+  g.appendChild(curvedArrow(1200, 335, 1140, 470, 1170, 415, C.cognitive, 'arrow-ov-cyan', true));
+
+  // Cognitive → processing
+  g.appendChild(arrow(530, 540, 380, 580, C.ingestion, true, 'arrow-ov-orange'));
+  g.appendChild(arrow(1140, 540, 1400, 580, C.search, true, 'arrow-ov-emerald'));
+
+  // Ingestion → infra
+  g.appendChild(arrow(260, 650, 370, 890, C.llm, true, 'arrow-ov-indigo'));
+  g.appendChild(arrow(290, 650, 870, 890, C.embedder, true, 'arrow-ov-indigo'));
+  g.appendChild(arrow(300, 650, 1320, 890, C.storage, true, 'arrow-ov-pink'));
+
+  // Search → infra
+  g.appendChild(arrow(1450, 650, 370, 890, C.llm, true, 'arrow-ov-indigo'));
+  g.appendChild(arrow(1450, 650, 960, 890, C.embedder, true, 'arrow-ov-indigo'));
+  g.appendChild(arrow(1450, 650, 1350, 890, C.storage, true, 'arrow-ov-pink'));
+
+  // PGlite → cortexMd feedback
+  g.appendChild(curvedArrow(1380, 890, 860, 195, 1600, 500, C.fs, 'arrow-ov-slate', false));
+}
+
+// ── INGESTION ─────────────────────────────────────────────────────────────
+function buildIngestion() {
+  const g = document.getElementById('dg-ingestion');
+
+  const defs = document.querySelector('#svg-ingestion defs');
+  const gridPat = el('pattern', { id: 'grid-ing', width: 40, height: 40, patternUnits: 'userSpaceOnUse' });
+  gridPat.appendChild(el('path', { d: 'M40 0 L0 0 0 40', fill: 'none', stroke: '#1e2d40', 'stroke-width': 0.5, opacity: 0.4 }));
+  defs.appendChild(gridPat);
+  g.appendChild(el('rect', { width: 1800, height: 1700, fill: 'url(#grid-ing)', opacity: 0.5 }));
+
+  // LLM sidebar
+  const llmSidebar = drawNode({
+    id: 'ing-llm',
+    x: 1380, y: 600, w: 200, h: 450,
+    color: C.llm, dim: C.llm_dim,
+    label: 'LLM Provider',
+    sublabel: 'Claude Haiku / GPT-4o-mini',
+    details: {
+      title: 'LLM Provider', badge: 'LLM', color: C.llm,
+      description: 'Called at multiple stages: context prefix generation (1 call/chunk), fact extraction (1 call/chunk), AUDM deduplication decisions, and entity fuzzy/embedding verification.',
+      file: 'src/lib/llm.js',
+      props: {
+        'Contextualizer': '1 call/chunk',
+        'Fact extractor': '1 call/chunk',
+        'AUDM decision': '1 call/ambiguous fact',
+        'Entity verify': '1 call/candidate',
+      }
+    }
+  });
+  // Draw sidebar as a tall box
+  {
+    const bg = el('rect', { x: 1380, y: 600, width: 200, height: 450, rx: 8, fill: C.llm_dim, stroke: C.llm, 'stroke-width': 1.5, 'stroke-dasharray': '6 4' });
+    g.appendChild(bg);
+    g.appendChild(txt('LLM Provider', { x: 1480, y: 630, 'text-anchor': 'middle', fill: C.text, 'font-size': 13, 'font-weight': '600' }));
+    g.appendChild(txt('Claude Haiku', { x: 1480, y: 648, 'text-anchor': 'middle', fill: C.textMuted, 'font-size': 11 }));
+    // LLM call bullets
+    const calls = [
+      '① contextualizer',
+      '② fact extractor',
+      '③ AUDM decision',
+      '④ entity verify',
+    ];
+    calls.forEach((c, i) => {
+      g.appendChild(monoTxt(c, { x: 1390, y: 690 + i * 32, fill: C.llm, 'font-size': 10 }));
+    });
+    g.appendChild(monoTxt('src/lib/llm.js', { x: 1480, y: 1038, 'text-anchor': 'middle', fill: C.llm, 'font-size': 9, opacity: 0.8 }));
+  }
+
+  // Input
+  const input = drawNode({
+    id: 'ing-input', x: 650, y: 60, w: 220, h: 55,
+    color: C.fs, dim: C.fs_dim,
+    label: 'Input', sublabel: 'content / URL / file path',
+    details: {
+      title: 'Input', badge: 'INPUT', color: C.fs,
+      description: 'Raw input to the ingestion system. Can be direct string content, an HTTP URL to fetch, or a local file path (including glob patterns).',
+      file: 'src/ingestion/sources/',
+      props: { Types: 'raw string, URL, file path, glob', Sources: 'src/ingestion/sources/raw.js, url.js, file.js' },
+    }
+  });
+  g.appendChild(input);
+
+  // Input Classifier
+  const classifier = drawNodeML({
+    id: 'ing-classifier', x: 600, y: 155, w: 320, h: 70,
+    color: C.cognitive, dim: C.cognitive_dim,
+    lines: ['Input Classifier', 'Routes: noise → discard | thought → AUDM | knowledge → pipeline'],
+    filePath: 'src/memory/cognitive/input-classifier.js',
+    details: {
+      title: 'Input Classifier', badge: 'COGNITIVE', color: C.cognitive,
+      description: 'Classifies input content type and routes accordingly. Uses heuristics + LLM classification. Three output routes: noise (discard), thought (direct AUDM store), knowledge/document (full pipeline).',
+      file: 'src/memory/cognitive/input-classifier.js',
+      props: { Classes: 'noise, thought, knowledge', 'Noise': 'Discard immediately', 'Thought': 'Direct to AUDM', 'Knowledge': 'Full ingestion pipeline' },
+    }
+  });
+  g.appendChild(classifier);
+
+  // Noise branch
+  const discarded = drawNode({
+    id: 'ing-discard', x: 100, y: 210, w: 130, h: 45,
+    color: C.red, dim: C.red_dim,
+    label: 'Discarded', sublabel: 'noise filtered',
+    details: { title: 'Discarded', badge: 'DISCARD', color: C.red, description: 'Input classified as noise is discarded immediately without any processing or storage.' }
+  });
+  g.appendChild(discarded);
+
+  // Thought branch → AUDM
+  const audmDirect = drawNodeML({
+    id: 'ing-audm-direct', x: 300, y: 280, w: 200, h: 55,
+    color: C.cognitive, dim: C.cognitive_dim,
+    lines: ['AUDM Direct Store', 'thought → fact storage'],
+    details: {
+      title: 'AUDM Direct Store', badge: 'COGNITIVE', color: C.cognitive,
+      description: 'Thoughts (short atomic facts from the user) bypass the full pipeline and go directly into the AUDM deduplication + fact store.',
+      file: 'src/memory/facts/store.js',
+      props: { 'Input type': 'thought (short statement)', 'Process': 'embed → similarity check → AUDM' },
+    }
+  });
+  g.appendChild(audmDirect);
+
+  // Parser
+  const parser = drawNodeML({
+    id: 'ing-parser', x: 600, y: 280, w: 320, h: 65,
+    color: C.ingestion, dim: C.ingestion_dim,
+    lines: ['Parser', 'auto-detect: markdown / text / html / code / json'],
+    filePath: 'src/ingestion/parsers/index.js',
+    details: {
+      title: 'Parser', badge: 'INGESTION', color: C.ingestion,
+      description: 'Auto-detects content format and dispatches to the appropriate format-specific parser. Returns sections with headings and metadata.',
+      file: 'src/ingestion/parsers/index.js',
+      props: {
+        Formats: 'markdown, plain text, HTML, source code, JSON',
+        Output: '{ text, sections[], metadata }',
+        'MD parser': 'Sections by heading level',
+        'Code parser': 'Functions and class sections',
+      },
+    }
+  });
+  g.appendChild(parser);
+
+  // Chunker
+  const chunker = drawNodeML({
+    id: 'ing-chunker', x: 600, y: 390, w: 320, h: 65,
+    color: C.ingestion, dim: C.ingestion_dim,
+    lines: ['Chunker', 'format-aware splitting — preserves section headings'],
+    filePath: 'src/ingestion/chunker.js',
+    details: {
+      title: 'Chunker', badge: 'INGESTION', color: C.ingestion,
+      description: 'Splits parsed sections into overlapping chunks with configurable token limits. Preserves section heading context for each chunk.',
+      file: 'src/ingestion/chunker.js',
+      props: { Strategy: 'Format-aware token splitting', 'Heading preservation': 'Yes — section_heading per chunk', Overlap: 'Configurable' },
+    }
+  });
+  g.appendChild(chunker);
+
+  // Contextualizer
+  const contextualizer = drawNodeML({
+    id: 'ing-contextualizer', x: 600, y: 505, w: 320, h: 65,
+    color: C.ingestion, dim: C.ingestion_dim,
+    lines: ['Contextualizer', '1 LLM call/chunk — generates context prefix'],
+    filePath: 'src/ingestion/contextualizer.js',
+    badge: 'LLM',
+    details: {
+      title: 'Contextualizer', badge: 'INGESTION+LLM', color: C.ingestion,
+      description: 'Generates a concise context prefix for each chunk using an LLM call. The prefix summarizes where the chunk fits in the document. Runs in parallel batches (CONCURRENCY).',
+      file: 'src/ingestion/contextualizer.js',
+      props: { 'LLM calls': '1 per chunk', 'Output': 'contextual_prefix string', Concurrency: 'Batched (CONCURRENCY env)', 'Stored in': 'chunk.contextual_prefix' },
+    }
+  });
+  g.appendChild(contextualizer);
+
+  // Embedder
+  const embedder = drawNodeML({
+    id: 'ing-embedder', x: 600, y: 620, w: 320, h: 65,
+    color: C.embedder, dim: C.embedder_dim,
+    lines: ['Embedder', 'Ollama nomic-embed-text — 768d — batched'],
+    filePath: 'src/ingestion/embedder.js',
+    details: {
+      title: 'Embedder', badge: 'EMBEDDER', color: C.embedder,
+      description: 'Generates 768-dimensional embeddings for each chunk using Ollama\'s nomic-embed-text model. Processes in batches for efficiency.',
+      file: 'src/ingestion/embedder.js',
+      props: { Model: 'nomic-embed-text (Ollama)', Dimensions: '768', Batching: 'Yes', 'Swappable': 'OpenAI text-embedding-*' },
+    }
+  });
+  g.appendChild(embedder);
+
+  // Store Chunks
+  const storeChunks = drawNodeML({
+    id: 'ing-store-chunks', x: 600, y: 735, w: 320, h: 55,
+    color: C.storage, dim: C.storage_dim,
+    lines: ['Store Chunks → PGlite', 'chunk table — HNSW + GIN indexes'],
+    filePath: 'src/memory/chunks/store.js',
+    details: {
+      title: 'Store Chunks', badge: 'STORAGE', color: C.storage,
+      description: 'Persists chunks with embeddings and search vectors to the chunk table. Indexed for vector similarity (HNSW) and full-text (GIN).',
+      file: 'src/memory/chunks/store.js',
+      props: { Table: 'chunk', 'Vector index': 'HNSW (cosine, embedding col)', 'Text index': 'GIN (search_vector col)' },
+    }
+  });
+  g.appendChild(storeChunks);
+
+  // Fact Extractor
+  const factExtractor = drawNodeML({
+    id: 'ing-fact-extractor', x: 600, y: 840, w: 320, h: 65,
+    color: C.ingestion, dim: C.ingestion_dim,
+    lines: ['Fact Extractor', '1 LLM call/chunk — parallel CONCURRENCY=5'],
+    filePath: 'src/memory/facts/extractor.js',
+    badge: 'LLM',
+    details: {
+      title: 'Fact Extractor', badge: 'INGESTION+LLM', color: C.ingestion,
+      description: 'Extracts atomic facts from each chunk using a structured LLM prompt (tool_use for JSON output). Extracts category, importance score, and temporal validity (valid_from/valid_until).',
+      file: 'src/memory/facts/extractor.js',
+      props: {
+        'LLM calls': '1 per chunk',
+        Concurrency: '5 (CONCURRENCY env)',
+        Output: 'fact[], each with content, category, importance, valid_from, valid_until',
+        Method: 'Claude tool_use (structured JSON)',
+      },
+    }
+  });
+  g.appendChild(factExtractor);
+
+  // AUDM
+  const audm = drawNodeML({
+    id: 'ing-audm', x: 580, y: 960, w: 360, h: 80,
+    color: C.cognitive, dim: C.cognitive_dim,
+    lines: ['AUDM', 'embed → similarity search → LLM: ADD / UPDATE / CONTRADICT / SKIP'],
+    filePath: 'src/memory/facts/store.js',
+    badge: 'LLM',
+    details: {
+      title: 'AUDM Deduplication', badge: 'COGNITIVE+LLM', color: C.cognitive,
+      description: 'Deduplication engine for facts. Embeds new fact, searches for similar existing facts, then uses LLM to decide: ADD (new fact), UPDATE (replace old), CONTRADICT (flag conflict), SKIP (duplicate). Thresholds control LLM escalation.',
+      file: 'src/memory/facts/store.js',
+      props: {
+        'SKIP threshold': '>= 0.88 similarity (no LLM)',
+        'AMBIGUOUS threshold': '>= 0.65 (escalate to LLM)',
+        'Decisions': 'ADD, UPDATE, CONTRADICT, SKIP',
+        'LLM model': 'LLM_DECISION_MODEL',
+        Prompt: 'prompts/audm-decision.md',
+      },
+    }
+  });
+  g.appendChild(audm);
+
+  // Store Facts
+  const storeFacts = drawNodeML({
+    id: 'ing-store-facts', x: 600, y: 1095, w: 320, h: 55,
+    color: C.storage, dim: C.storage_dim,
+    lines: ['Store Facts → PGlite', 'fact table with importance + temporal validity'],
+    filePath: 'src/memory/facts/store.js',
+    details: {
+      title: 'Store Facts', badge: 'STORAGE', color: C.storage,
+      description: 'Persists facts to the fact table with embedding, tsvector, importance score, access count, and temporal validity fields.',
+      file: 'src/memory/facts/store.js',
+      props: { Table: 'fact', Fields: 'content, category, importance, access_count, valid_from, valid_until, embedding, search_vector' },
+    }
+  });
+  g.appendChild(storeFacts);
+
+  // Entity Resolver
+  const entityResolver = drawNodeML({
+    id: 'ing-entity-resolver', x: 600, y: 1205, w: 320, h: 80,
+    color: C.ingestion, dim: C.ingestion_dim,
+    lines: ['Entity Resolver', '4-stage: exact → fuzzy → embedding → create'],
+    filePath: 'src/memory/entities/resolver.js',
+    badge: 'LLM',
+    details: {
+      title: 'Entity Resolver', badge: 'INGESTION+LLM', color: C.ingestion,
+      description: '4-stage deduplication cascade for entities. First tries exact name match, then Levenshtein fuzzy match with LLM verification, then embedding similarity with LLM verification, finally creates new entity if no match found.',
+      file: 'src/memory/entities/resolver.js',
+      props: {
+        'Stage 1': 'Exact name match',
+        'Stage 2': 'Levenshtein fuzzy (src/memory/entities/fuzzy-matcher.js)',
+        'Stage 3': 'Embedding similarity (src/memory/entities/embedding-matcher.js)',
+        'Stage 4': 'Create new entity',
+        'LLM verify': 'Stages 2 and 3',
+      },
+    }
+  });
+  g.appendChild(entityResolver);
+
+  // Store Entities
+  const storeEntities = drawNodeML({
+    id: 'ing-store-entities', x: 600, y: 1340, w: 320, h: 55,
+    color: C.storage, dim: C.storage_dim,
+    lines: ['Store Entities + Relations → PGlite', 'entity, relation, fact_entity tables'],
+    filePath: 'src/memory/entities/store.js',
+    details: {
+      title: 'Store Entities + Relations', badge: 'STORAGE', color: C.storage,
+      description: 'Persists resolved entities, relations between them, and fact-entity junction records.',
+      file: 'src/memory/entities/store.js',
+      props: { Tables: 'entity, relation, fact_entity' },
+    }
+  });
+  g.appendChild(storeEntities);
+
+  // Context Snapshot
+  const ctxSnapshot = drawNodeML({
+    id: 'ing-ctx-snapshot', x: 600, y: 1450, w: 320, h: 55,
+    color: C.cognitive, dim: C.cognitive_dim,
+    lines: ['updateContextSnapshot()', 'writes hot facts + entities to context file'],
+    details: {
+      title: 'updateContextSnapshot()', badge: 'COGNITIVE', color: C.cognitive,
+      description: 'After ingestion completes, updates the ~/.cortex/CLAUDE.md context snapshot with the current hot facts (high importance, frequently accessed) and prominent entities.',
+      props: { Output: '~/.cortex/CLAUDE.md', Content: 'Hot facts, top entities, instructions', Trigger: 'After every successful ingestion' },
+    }
+  });
+  g.appendChild(ctxSnapshot);
+
+  const cortexMdOut = drawNode({
+    id: 'ing-cortexmd-out', x: 650, y: 1560, w: 220, h: 45,
+    color: C.fs, dim: C.fs_dim,
+    label: '~/.cortex/CLAUDE.md updated',
+    details: { title: '~/.cortex/CLAUDE.md', badge: 'FILE', color: C.fs, description: 'Context file updated with latest hot facts and entities.' }
+  });
+  g.appendChild(cortexMdOut);
+
+  // ── Ingestion edges ──
+  // Input → Classifier
+  g.appendChild(arrow(760, 115, 760, 155, C.cognitive, true, 'arrow-ing-cyan'));
+  // Classifier → noise
+  g.appendChild(curvedArrow(600, 190, 230, 210, 420, 180, C.red, 'arrow-ing-red', true));
+  g.appendChild(edgeLabel(410, 196, 'noise', C.red));
+  // Classifier → thought AUDM
+  g.appendChild(curvedArrow(600, 205, 500, 280, 555, 240, C.cognitive, 'arrow-ing-cyan', true));
+  g.appendChild(edgeLabel(528, 238, 'thought', C.cognitive));
+  // Classifier → knowledge pipeline
+  g.appendChild(arrow(760, 225, 760, 280, C.ingestion, true, 'arrow-ing-orange'));
+  g.appendChild(edgeLabel(775, 255, 'knowledge', C.ingestion));
+
+  // AUDM Direct → storage (line goes to PGlite)
+  g.appendChild(curvedArrow(400, 335, 760, 735, 700, 560, C.storage, 'arrow-ing-pink', true));
+
+  // Pipeline flow
+  g.appendChild(arrow(760, 345, 760, 390, C.ingestion, true, 'arrow-ing-orange'));
+  g.appendChild(arrow(760, 455, 760, 505, C.ingestion, true, 'arrow-ing-orange'));
+  g.appendChild(arrow(760, 570, 760, 620, C.ingestion, true, 'arrow-ing-orange'));
+  g.appendChild(arrow(760, 685, 760, 735, C.storage, true, 'arrow-ing-pink'));
+  g.appendChild(arrow(760, 790, 760, 840, C.ingestion, true, 'arrow-ing-orange'));
+  g.appendChild(arrow(760, 905, 760, 960, C.cognitive, true, 'arrow-ing-cyan'));
+  g.appendChild(arrow(760, 1040, 760, 1095, C.storage, true, 'arrow-ing-pink'));
+  g.appendChild(arrow(760, 1150, 760, 1205, C.ingestion, true, 'arrow-ing-orange'));
+  g.appendChild(arrow(760, 1285, 760, 1340, C.storage, true, 'arrow-ing-pink'));
+  g.appendChild(arrow(760, 1395, 760, 1450, C.cognitive, true, 'arrow-ing-cyan'));
+  g.appendChild(arrow(760, 1505, 760, 1560, C.fs, true, 'arrow-ing-cyan'));
+
+  // LLM dashed side arrows
+  const llmX = 1380;
+  [
+    [920, 540, 'contextualizer'],
+    [920, 875, 'fact extractor'],
+    [940, 1000, 'AUDM decision'],
+    [920, 1245, 'entity verify'],
+  ].forEach(([y, ly, label]) => {
+    const p = el('path', {
+      d: `M${920},${y} L${llmX},${ly}`,
+      fill: 'none', stroke: C.llm, 'stroke-width': 1.2,
+      'stroke-dasharray': '4 4', opacity: 0.5,
+    });
+    g.appendChild(p);
+    g.appendChild(edgeLabel((920 + llmX) / 2, (y + ly) / 2, label, C.llm));
+  });
+}
+
+// ── SEARCH ────────────────────────────────────────────────────────────────
+function buildSearch() {
+  const g = document.getElementById('dg-search');
+
+  const defs = document.querySelector('#svg-search defs');
+  const gridPat = el('pattern', { id: 'grid-srch', width: 40, height: 40, patternUnits: 'userSpaceOnUse' });
+  gridPat.appendChild(el('path', { d: 'M40 0 L0 0 0 40', fill: 'none', stroke: '#1e2d40', 'stroke-width': 0.5, opacity: 0.4 }));
+  defs.appendChild(gridPat);
+  g.appendChild(el('rect', { width: 1800, height: 1450, fill: 'url(#grid-srch)', opacity: 0.5 }));
+
+  // Query
+  const query = drawNode({
+    id: 'srch-query', x: 700, y: 50, w: 200, h: 55,
+    color: C.fs, dim: C.fs_dim,
+    label: 'Query', sublabel: 'natural language input',
+    details: { title: 'Search Query', badge: 'INPUT', color: C.fs, description: 'Natural language search query from user, CLI, REST API, or MCP tool.' }
+  });
+  g.appendChild(query);
+
+  // Query Router
+  const router = drawNodeML({
+    id: 'srch-router', x: 580, y: 145, w: 440, h: 80,
+    color: C.cognitive, dim: C.cognitive_dim,
+    lines: ['Query Router', 'intent classification — LRU cache 200 entries / 10min TTL'],
+    filePath: 'src/memory/cognitive/query-router.js',
+    details: {
+      title: 'Query Router', badge: 'COGNITIVE', color: C.cognitive,
+      description: 'Classifies queries into 5 intent types using LLM classification (with caching). Routes to the optimal search strategy for each intent.',
+      file: 'src/memory/cognitive/query-router.js',
+      props: {
+        Intents: 'entity_lookup, fact_lookup, temporal, comparison, exploratory',
+        Cache: 'LRU — 200 entries, 10min TTL',
+        'Cache key': 'query string (normalized)',
+      },
+    }
+  });
+  g.appendChild(router);
+
+  // Intent branches — 5 columns
+  const intents = [
+    { id: 'entity_lookup', x: 90, label: 'entity_lookup', color: C.search },
+    { id: 'fact_lookup', x: 390, label: 'fact_lookup', color: C.search },
+    { id: 'temporal', x: 680, label: 'temporal', color: C.search },
+    { id: 'comparison', x: 970, label: 'comparison', color: C.search },
+    { id: 'exploratory', x: 1260, label: 'exploratory', color: C.search },
+  ];
+
+  const intentY = 300;
+  intents.forEach(intent => {
+    const iw = 180;
+    g.appendChild(drawNode({
+      id: `srch-intent-${intent.id}`, x: intent.x, y: intentY, w: iw, h: 42,
+      color: intent.color, dim: C.search_dim,
+      label: intent.label,
+      details: {
+        title: `Intent: ${intent.label}`, badge: 'INTENT', color: intent.color,
+        description: {
+          entity_lookup: 'Queries asking about specific named entities (people, organizations, technologies). Routes to entity store for direct lookup.',
+          fact_lookup: 'Direct fact retrieval queries. Runs parallel vector + keyword search and merges with RRF.',
+          temporal: 'Time-sensitive queries (what happened when, current status). Runs vector + keyword search with temporal validity filtering.',
+          comparison: 'Queries comparing multiple things. Parallel vector + keyword search.',
+          exploratory: 'Open-ended discovery queries. Expands query with LLM, runs all search types, adds graph enhancement.',
+        }[intent.id] || '',
+      }
+    }));
+
+    // Route arrow from router
+    const routerCx = 800;
+    const branchX = intent.x + iw / 2;
+    g.appendChild(curvedArrow(routerCx, 225, branchX, intentY, (routerCx + branchX) / 2, 275, C.cognitive, 'arrow-srch-cyan', true));
+  });
+
+  // Entity lookup path
+  const entityLookup = drawNodeML({
+    id: 'srch-entity-lookup', x: 50, y: 400, w: 260, h: 65,
+    color: C.search, dim: C.search_dim,
+    lines: ['Entity Store Lookup', 'entityFirstSearch — facts by entity'],
+    filePath: 'src/memory/entities/store.js',
+    details: {
+      title: 'Entity First Search', badge: 'SEARCH', color: C.search,
+      description: 'For entity_lookup intent: finds the entity directly by name/type, then fetches associated facts via fact_entity junction table.',
+      file: 'src/memory/entities/store.js',
+      props: { Strategy: 'Direct entity lookup + related facts', 'Join': 'entity → fact_entity → fact' },
+    }
+  });
+  g.appendChild(entityLookup);
+  g.appendChild(arrow(180, 342, 180, 400, C.search, true, 'arrow-srch-emerald'));
+
+  // Parallel search pair (for fact_lookup, temporal, comparison)
+  const parallelIntents = [
+    { x: 390, id: 'fact_lookup' },
+    { x: 680, id: 'temporal' },
+    { x: 970, id: 'comparison' },
+  ];
+
+  parallelIntents.forEach(pi => {
+    const cx = pi.x + 90;
+    // Vector + Keyword parallel
+    const vx = pi.x;
+    const kx = pi.x + 100;
+    g.appendChild(drawNode({
+      id: `srch-vec-${pi.id}`, x: vx, y: 405, w: 170, h: 55,
+      color: C.search, dim: C.search_dim,
+      label: 'Vector Search', sublabel: 'pgvector cosine + HNSW',
+      details: {
+        title: 'Vector Search', badge: 'SEARCH', color: C.search,
+        description: 'Embeds the query, then uses pgvector cosine similarity with HNSW index for ANN retrieval.',
+        file: 'src/memory/search/vector.js',
+        props: { Index: 'HNSW (cosine)', 'Query embed': 'Ollama nomic-embed-text', K: '20', Table: 'chunk + fact' },
+      }
+    }));
+
+    g.appendChild(arrow(cx, 342, cx, 405, C.search, true, 'arrow-srch-emerald'));
+  });
+
+  // Keyword search boxes
+  parallelIntents.forEach(pi => {
+    const cx = pi.x + 90;
+    g.appendChild(drawNode({
+      id: `srch-kw-${pi.id}`, x: pi.x + 180, y: 405, w: 170, h: 55,
+      color: C.search, dim: C.search_dim,
+      label: 'Keyword Search', sublabel: 'tsvector + GIN',
+      details: {
+        title: 'Keyword Search', badge: 'SEARCH', color: C.search,
+        description: 'Uses PostgreSQL tsvector full-text search with GIN index and ts_rank for relevance scoring.',
+        file: 'src/memory/search/keyword.js',
+        props: { Index: 'GIN (tsvector)', Ranking: 'ts_rank', Tables: 'chunk + fact' },
+      }
+    }));
+  });
+
+  // RRF merge boxes
+  parallelIntents.forEach(pi => {
+    const mx = pi.x + 90;
+    g.appendChild(drawNode({
+      id: `srch-rrf-${pi.id}`, x: pi.x + 60, y: 520, w: 230, h: 55,
+      color: C.search, dim: C.search_dim,
+      label: 'RRF Merge', sublabel: 'vector 1.0× + keyword 0.7× / K=20',
+      details: {
+        title: 'RRF Merge', badge: 'SEARCH', color: C.search,
+        description: 'Reciprocal Rank Fusion merges vector and keyword results. Vector results weighted 1.0×, keyword 0.7×. Returns top K=20.',
+        file: 'src/memory/search/hybrid.js',
+        props: { 'Vector weight': '1.0×', 'Keyword weight': '0.7×', K: '20', Algorithm: 'RRF (Reciprocal Rank Fusion)' },
+      }
+    }));
+    g.appendChild(arrow(pi.x + 85, 460, pi.x + 175, 520, C.search, true, 'arrow-srch-emerald'));
+    g.appendChild(arrow(pi.x + 265, 460, pi.x + 225, 520, C.search, true, 'arrow-srch-emerald'));
+  });
+
+  // Exploratory path (special)
+  const explX = 1260;
+  g.appendChild(drawNode({
+    id: 'srch-query-expand', x: explX, y: 405, w: 200, h: 55,
+    color: C.llm, dim: C.llm_dim,
+    label: 'Query Expansion', sublabel: 'LLM — generate variants',
+    details: {
+      title: 'Query Expansion (LLM)', badge: 'LLM', color: C.llm,
+      description: 'For exploratory intent: uses LLM to expand the query into multiple search variants and related terms for broader coverage.',
+      props: { Model: 'LLM_EXTRACTION_MODEL', Output: 'Expanded query terms' },
+    }
+  }));
+  g.appendChild(arrow(1350, 342, 1360, 405, C.llm, true, 'arrow-srch-violet'));
+
+  g.appendChild(drawNode({
+    id: 'srch-vec-expl', x: explX, y: 510, w: 170, h: 50,
+    color: C.search, dim: C.search_dim,
+    label: 'Vector Search',
+    details: { title: 'Vector Search', badge: 'SEARCH', color: C.search, description: 'Vector similarity search using expanded query.', file: 'src/memory/search/vector.js' }
+  }));
+  g.appendChild(drawNode({
+    id: 'srch-kw-expl', x: explX + 190, y: 510, w: 160, h: 50,
+    color: C.search, dim: C.search_dim,
+    label: 'Keyword Search',
+    details: { title: 'Keyword Search', badge: 'SEARCH', color: C.search, description: 'Full-text search using expanded query.', file: 'src/memory/search/keyword.js' }
+  }));
+  g.appendChild(drawNode({
+    id: 'srch-graph-enh', x: explX + 95, y: 615, w: 250, h: 55,
+    color: C.llm, dim: C.llm_dim,
+    label: 'Graph Enhancement', sublabel: 'LLM — entity graph traversal',
+    details: {
+      title: 'Graph Enhancement', badge: 'LLM', color: C.llm,
+      description: 'Uses entity graph traversal and LLM reasoning to enrich exploratory results with related entities and their facts.',
+      file: 'src/memory/search/graph-enhancement.js',
+      props: { 'Traversal': 'BFS from matched entities', 'LLM': 'Ranks + enriches results' },
+    }
+  }));
+  g.appendChild(drawNode({
+    id: 'srch-rrf-expl', x: explX + 60, y: 730, w: 230, h: 55,
+    color: C.search, dim: C.search_dim,
+    label: 'RRF Merge', sublabel: 'vector 1.0× + keyword 0.7× / K=20',
+    details: { title: 'RRF Merge', badge: 'SEARCH', color: C.search, description: 'RRF merge for exploratory results.', file: 'src/memory/search/hybrid.js' }
+  }));
+
+  g.appendChild(arrow(1360, 460, 1340, 510, C.ingestion, true, 'arrow-srch-emerald'));
+  g.appendChild(arrow(1360, 460, 1450, 510, C.ingestion, true, 'arrow-srch-emerald'));
+  g.appendChild(arrow(1340, 560, 1280, 615, C.llm, true, 'arrow-srch-violet'));
+  g.appendChild(arrow(1450, 560, 1440, 615, C.llm, true, 'arrow-srch-violet'));
+  g.appendChild(arrow(1300, 670, 1280, 730, C.search, true, 'arrow-srch-emerald'));
+
+  // Record Access + Results
+  const recordAccess = drawNodeML({
+    id: 'srch-record-access', x: 560, y: 870, w: 480, h: 60,
+    color: C.storage, dim: C.storage_dim,
+    lines: ['Record Access (fire-and-forget)', 'fact.access_count++, fact.last_accessed_at = now()'],
+    filePath: 'src/memory/facts/store.js',
+    details: {
+      title: 'Record Access', badge: 'STORAGE', color: C.storage,
+      description: 'Fire-and-forget side effect after search. Updates fact access counters and timestamps. Used to identify hot facts for context snapshot.',
+      file: 'src/memory/facts/store.js',
+      props: { Async: 'Fire-and-forget (does not block results)', Updates: 'access_count++, last_accessed_at' },
+    }
+  });
+  g.appendChild(recordAccess);
+
+  const results = drawNode({
+    id: 'srch-results', x: 690, y: 985, w: 220, h: 55,
+    color: C.fs, dim: C.fs_dim,
+    label: 'Results', sublabel: 'ranked facts + chunks',
+    details: { title: 'Search Results', badge: 'OUTPUT', color: C.fs, description: 'Ranked list of facts and chunks with relevance scores, confidence, and provenance.' }
+  });
+  g.appendChild(results);
+
+  // Arrows converging to record access
+  const mergeTargetY = 870;
+  g.appendChild(curvedArrow(180, 465, 700, mergeTargetY, 440, 780, C.search, 'arrow-srch-emerald', true));  // entity
+  [[480, 575], [770, 575], [1060, 575], [1380, 730]].forEach(([fx, fy]) => {
+    g.appendChild(curvedArrow(fx, fy, 800, mergeTargetY, (fx + 800) / 2, (fy + mergeTargetY) / 2 + 40, C.search, 'arrow-srch-emerald', true));
+  });
+
+  g.appendChild(arrow(800, 930, 800, 985, C.search, true, 'arrow-srch-emerald'));
+}
+
+// ── STORAGE ────────────────────────────────────────────────────────────────
+function buildStorage() {
+  const g = document.getElementById('dg-storage');
+
+  const defs = document.querySelector('#svg-storage defs');
+  const gridPat = el('pattern', { id: 'grid-stor', width: 40, height: 40, patternUnits: 'userSpaceOnUse' });
+  gridPat.appendChild(el('path', { d: 'M40 0 L0 0 0 40', fill: 'none', stroke: '#1e2d40', 'stroke-width': 0.5, opacity: 0.4 }));
+  defs.appendChild(gridPat);
+  g.appendChild(el('rect', { width: 1900, height: 1500, fill: 'url(#grid-stor)', opacity: 0.5 }));
+
+  // Title
+  g.appendChild(txt('PostgreSQL Schema — PGlite + pgvector', {
+    x: 950, y: 40, 'text-anchor': 'middle',
+    fill: C.textMuted, 'font-size': 13, 'font-weight': '600', 'letter-spacing': 0.5,
+  }));
+
+  function table(id, x, y, name, columns, details) {
+    const rowH = 20;
+    const headerH = 36;
+    const w = 260;
+    const h = headerH + columns.length * rowH + 8;
+    const gr = el('g', {
+      class: 'node',
+      'data-node-id': id,
+      'data-details': JSON.stringify(details || {}),
+      style: 'cursor:pointer',
+      transform: `translate(${x},${y})`,
+    });
+
+    const bg = el('rect', { width: w, height: h, rx: 7, fill: C.storage_dim, stroke: C.storage, 'stroke-width': 1.5, class: 'node-rect' });
+    const hdr = el('rect', { width: w, height: headerH, rx: 7, fill: `rgba(236,72,153,0.2)` });
+    const hdr2 = el('rect', { y: headerH - 7, width: w, height: 7, fill: `rgba(236,72,153,0.2)` });
+    gr.appendChild(bg);
+    gr.appendChild(hdr);
+    gr.appendChild(hdr2);
+
+    gr.appendChild(monoTxt(name, { x: 12, y: 22, fill: C.storage, 'font-size': 12, 'font-weight': '700' }));
+
+    columns.forEach((col, i) => {
+      const cy = headerH + 8 + i * rowH + 13;
+      const [cname, ctype, ...flags] = col.split(' ');
+      const isPK = flags.includes('PK') || cname === 'id';
+      const isFK = flags.includes('FK') || ctype?.includes('→');
+      const isIdx = flags.includes('IDX');
+      const color = isPK ? C.amber : isFK ? '#f97316' : isIdx ? C.llm : C.textMuted;
+      gr.appendChild(monoTxt(cname, { x: 12, y: cy, fill: color, 'font-size': 10 }));
+      if (ctype) {
+        gr.appendChild(monoTxt(ctype.replace('→', ' →'), { x: w - 8, y: cy, 'text-anchor': 'end', fill: isFK ? '#f97316' : C.textDim, 'font-size': 9, opacity: 0.8 }));
+      }
+      if (isPK || isIdx) {
+        gr.appendChild(el('rect', { x: w - 28, y: cy - 11, width: 20, height: 12, rx: 3, fill: isPK ? 'rgba(245,158,11,0.12)' : 'rgba(139,92,246,0.12)' }));
+        gr.appendChild(monoTxt(isPK ? 'PK' : 'IDX', { x: w - 18, y: cy, 'text-anchor': 'middle', fill: isPK ? C.amber : C.llm, 'font-size': 8 }));
+      }
+    });
+
+    bg.addEventListener('mouseenter', () => { bg.setAttribute('filter', `drop-shadow(0 0 8px ${C.storage})`); bg.setAttribute('stroke-width', 2); });
+    bg.addEventListener('mouseleave', () => { bg.removeAttribute('filter'); bg.setAttribute('stroke-width', 1.5); });
+
+    return gr;
+  }
+
+  function fkArrow(x1, y1, x2, y2) {
+    const p = el('path', {
+      d: `M${x1},${y1} L${x2},${y2}`,
+      fill: 'none', stroke: '#f97316', 'stroke-width': 1, 'stroke-opacity': 0.4,
+      'stroke-dasharray': '3 3', 'marker-end': 'url(#arrow-stor)',
+    });
+    return p;
+  }
+
+  // document table
+  g.appendChild(table('stor-document', 60, 70, 'document', [
+    'id PK',
+    'uid text',
+    'source_path text',
+    'source_type text',
+    'title text',
+    'content_hash text',
+    'namespace text',
+    'chunk_count int',
+    'fact_count int',
+    'last_ingested_at timestamptz',
+  ], {
+    title: 'document', badge: 'TABLE', color: C.storage,
+    description: 'Registry of all ingested documents. Tracks source path, content hash for dedup, and counts of derived chunks and facts.',
+    props: { Purpose: 'Document registry', 'Hash dedup': 'content_hash prevents re-ingestion', Namespace: 'Multi-tenant isolation' },
+  }));
+
+  // chunk table
+  g.appendChild(table('stor-chunk', 380, 70, 'chunk', [
+    'id PK',
+    'document_id →document FK',
+    'chunk_index int',
+    'content text',
+    'section_heading text',
+    'namespace text',
+    'contextual_prefix text',
+    'embedding vector(768) IDX',
+    'search_vector tsvector IDX',
+  ], {
+    title: 'chunk', badge: 'TABLE', color: C.storage,
+    description: 'Stores document chunks with embeddings and full-text search vectors. HNSW index on embedding for fast ANN search. GIN index on search_vector for full-text.',
+    props: { Purpose: 'Chunk storage + search', 'Vector index': 'HNSW (cosine) on embedding', 'Text index': 'GIN on search_vector', Dimensions: '768' },
+  }));
+
+  // fact table
+  g.appendChild(table('stor-fact', 700, 70, 'fact', [
+    'id PK',
+    'uid text',
+    'content text',
+    'category text',
+    'namespace text',
+    'status text',
+    'importance float',
+    'access_count int',
+    'last_accessed_at timestamptz',
+    'valid_from date',
+    'valid_until date',
+    'embedding vector(768) IDX',
+    'search_vector tsvector IDX',
+  ], {
+    title: 'fact', badge: 'TABLE', color: C.storage,
+    description: 'Atomic facts extracted from documents. Includes importance scoring, temporal validity, and access tracking. Dual-indexed for vector and keyword search.',
+    props: {
+      Purpose: 'Fact storage + dedup',
+      Status: 'active | updated | contradicted',
+      'Vector index': 'HNSW on embedding',
+      'Text index': 'GIN on search_vector',
+      'Importance': '0.0–1.0 float',
+      Temporal: 'valid_from / valid_until dates',
     },
-    thought: {
-      desc: 'Thought (short personal statement) → classifier pre-extracts facts in one LLM call → AUDM dedup → entity linking. No chunking or embedding needed. ~2-3s.',
-      color: '#f97316', btnTheme: 'orange',
-      segs: ['i0','it','it2','it3','i6'],
-    },
-    noise: {
-      desc: 'Noise → empty, too-short, or garbage input → skipped entirely. No LLM calls, no DB writes.',
-      color: '#ef4444', btnTheme: 'red',
-      segs: ['i0','in_'],
-    },
-  };
+  }));
 
-  // ══════════════════════════════════════════════════════════════════════════
-  // SEARCH FLOW
-  // ══════════════════════════════════════════════════════════════════════════
+  // entity table
+  g.appendChild(table('stor-entity', 1030, 70, 'entity', [
+    'id PK',
+    'uid text',
+    'name text',
+    'entity_type text',
+    'namespace text',
+    'canonical_id →entity FK',
+    'embedding vector(768)',
+  ], {
+    title: 'entity', badge: 'TABLE', color: C.storage,
+    description: 'Named entities extracted from documents. Self-referential canonical_id for entity merging (redirects to canonical entity).',
+    props: { Purpose: 'Entity graph nodes', 'Self-FK': 'canonical_id for entity merge', Types: 'person, org, technology, concept, ...' },
+  }));
 
-  const SN = {
-    query:   { x:430, y:50,  w:200, h:46, label:'search(query)',        sub:'MCP · REST API · CLI',            theme:'indigo' },
-    router:  { x:430, y:150, w:254, h:50, label:'Query Router',         sub:'intent · categories · expand',    theme:'cyan'   },
-    edet:    { x:430, y:254, w:232, h:46, label:'Entity Detection',     sub:'DB name lookup · no LLM',         theme:'cyan'   },
-    efirst:  { x:175, y:378, w:208, h:52, label:'Entity-First Search',  sub:'facts + relations + hybrid',      theme:'pink'   },
-    embedq:  { x:640, y:368, w:198, h:46, label:'Embed Query',          sub:'nomic-embed-text 768d',           theme:'amber'  },
-    vecf:    { x:524, y:478, w:188, h:46, label:'Vector Search',        sub:'pgvector cosine ≥0.45',           theme:'amber'  },
-    kwdf:    { x:734, y:478, w:188, h:46, label:'Keyword Search',       sub:'tsvector ts_rank',                theme:'indigo' },
-    rrf:     { x:630, y:578, w:212, h:48, label:'RRF Merge',            sub:'K=20 · vector 1.0 · keyword 0.7', theme:'violet' },
-    results: { x:430, y:662, w:212, h:46, label:'Results',              sub:'facts · chunks · matchedEntity',  theme:'green'  },
-  };
+  // relation table
+  g.appendChild(table('stor-relation', 1360, 70, 'relation', [
+    'id PK',
+    'source_id →entity FK',
+    'target_id →entity FK',
+    'relation_type text',
+    'namespace text',
+    'valid_from date',
+    'invalid_at date',
+  ], {
+    title: 'relation', badge: 'TABLE', color: C.storage,
+    description: 'Directed relations between entities with temporal tracking. Supports time-bounded relationships.',
+    props: { Purpose: 'Entity graph edges', Direction: 'Directed (source → target)', Temporal: 'valid_from / invalid_at' },
+  }));
 
-  const SS = {
-    sq0:  { from:[430,73],  to:[430,125],             color:'#6366f1', fn:'query',  tn:'router'  },
-    sq1:  { from:[430,175], to:[430,231],             color:'#06b6d4', fn:'router', tn:'edet'    },
-    sqe:  { from:[360,277], to:[175,352], cp:[240,312], color:'#ec4899', fn:'edet', tn:'efirst'  },
-    sqef: { from:[175,404], to:[380,639], cp:[175,580], color:'#ec4899', fn:'efirst',tn:'results' },
-    sqstd:{ from:[500,277], to:[640,345], cp:[598,308], color:'#f59e0b', fn:'edet', tn:'embedq'  },
-    sqv:  { from:[588,391], to:[524,455], cp:[550,424], color:'#f59e0b', fn:'embedq',tn:'vecf'   },
-    sqk:  { from:[692,391], to:[734,455], cp:[720,424], color:'#6366f1', fn:'embedq',tn:'kwdf'   },
-    sqrv: { from:[524,501], to:[570,554], cp:[540,530], color:'#8b5cf6', fn:'vecf',  tn:'rrf'    },
-    sqrk: { from:[734,501], to:[690,554], cp:[716,530], color:'#8b5cf6', fn:'kwdf',  tn:'rrf'    },
-    sqr:  { from:[560,602], to:[470,639], cp:[510,630], color:'#10b981', fn:'rrf',   tn:'results' },
-  };
+  // fact_entity junction
+  g.appendChild(table('stor-fact-entity', 60, 580, 'fact_entity', [
+    'fact_id →fact FK',
+    'entity_id →entity FK',
+    'mention_type text',
+  ], {
+    title: 'fact_entity', badge: 'JUNCTION', color: C.storage,
+    description: 'Junction table linking facts to entities. Enables finding all facts about an entity and all entities mentioned in a fact.',
+    props: { Purpose: 'fact ↔ entity many-to-many', mention_type: 'primary | secondary | context' },
+  }));
 
-  const SPATHS = {
-    standard: {
-      desc: 'Query → router classifies intent → embed query → parallel vector (cosine ≥0.45) + keyword (tsvector) → RRF merge (K=20, vector 1.0 · keyword 0.7) → optional graph enhancement → results',
-      color: '#f59e0b', btnTheme: 'cyan',
-      segs: ['sq0','sq1','sqstd','sqv','sqrv','sqr'],
-      fork: [{ segs: ['sqstd','sqk','sqrk','sqr'], color:'#6366f1' }],
-    },
-    entity: {
-      desc: 'Entity detected in query → entity-first path: fetch entity facts + relations from DB in parallel with hybrid search → merge results (entity facts take priority) → return with matchedEntity context',
-      color: '#ec4899', btnTheme: 'cyan',
-      segs: ['sq0','sq1','sqe','sqef'],
-    },
-  };
+  // history table
+  g.appendChild(table('stor-history', 380, 580, 'history', [
+    'id PK',
+    'fact_id →fact FK',
+    'operation text',
+    'old_content text',
+    'new_content text',
+    'changed_at timestamptz',
+  ], {
+    title: 'history', badge: 'TABLE', color: C.storage,
+    description: 'Audit log of fact changes. Records every ADD, UPDATE, CONTRADICT operation with before/after content.',
+    props: { Purpose: 'Fact audit trail', Operations: 'ADD, UPDATE, CONTRADICT, SKIP', 'Retention': 'Permanent' },
+  }));
 
-  // ── Bootstrap ─────────────────────────────────────────────────────────────
-  const ingestAnim = new FlowAnim('ingest-canvas', IN, IS, IPATHS, 'document', 'ingest-desc');
-  const searchAnim = new FlowAnim('search-canvas', SN, SS, SPATHS, 'standard', 'search-desc');
+  // llm_log table
+  g.appendChild(table('stor-llm-log', 700, 580, 'llm_log', [
+    'id PK',
+    'provider text',
+    'model text',
+    'caller text',
+    'prompt_tokens int',
+    'completion_tokens int',
+    'cost_usd float',
+    'duration_ms int',
+    'created_at timestamptz',
+  ], {
+    title: 'llm_log', badge: 'TABLE', color: C.storage,
+    description: 'Logs every LLM API call with token counts, cost, and duration. Used for usage tracking and budget monitoring.',
+    props: { Purpose: 'LLM usage + cost tracking', 'Providers': 'OpenAI, Anthropic, Ollama' },
+  }));
+
+  // api_key table
+  g.appendChild(table('stor-api-key', 1030, 580, 'api_key', [
+    'id PK',
+    'name text',
+    'key_hash text',
+    'prefix text',
+    'created_at timestamptz',
+    'last_used_at timestamptz',
+    'revoked_at timestamptz',
+  ], {
+    title: 'api_key', badge: 'TABLE', color: C.storage,
+    description: 'API key storage. Keys are stored as HMAC-SHA256 hashes. Prefix stored for display (e.g., cx_abc123...).',
+    props: { Purpose: 'REST API authentication', Storage: 'HMAC-SHA256 hash only', 'Revocation': 'Soft delete via revoked_at' },
+  }));
+
+  // FK Arrows
+  // document ← chunk
+  g.appendChild(fkArrow(380, 100, 320, 100));
+  // fact ← chunk (conceptual via document)
+  g.appendChild(fkArrow(700, 110, 660, 110));
+  // entity ← relation (source)
+  g.appendChild(fkArrow(1360, 100, 1290, 100));
+  // entity ← relation (target)
+  g.appendChild(fkArrow(1360, 120, 1290, 120));
+  // entity ← entity (canonical)
+  g.appendChild(fkArrow(1180, 135, 1180, 200)); // self-ref loop
+  // fact ← fact_entity
+  g.appendChild(fkArrow(200, 580, 200, 390));
+  // entity ← fact_entity
+  g.appendChild(fkArrow(320, 590, 1100, 200));
+  // fact ← history
+  g.appendChild(fkArrow(540, 580, 900, 390));
+
+  // Legend for table column colors
+  const legY = 1400;
+  [
+    [C.amber, 'Primary Key'],
+    ['#f97316', 'Foreign Key'],
+    [C.llm, 'Indexed Column'],
+    [C.textMuted, 'Regular Column'],
+  ].forEach(([color, label], i) => {
+    const lx = 200 + i * 200;
+    g.appendChild(el('rect', { x: lx, y: legY - 8, width: 10, height: 10, rx: 2, fill: color }));
+    g.appendChild(txt(label, { x: lx + 14, y: legY, fill: C.textMuted, 'font-size': 11 }));
+  });
+}
+
+// ── BUILD ALL + FIT ────────────────────────────────────────────────────────
+buildOverview();
+buildIngestion();
+buildSearch();
+buildStorage();
+
+// Initial fit for the active view (overview)
+setTimeout(() => {
+  zoomFit('overview');
+}, 50);
 </script>
-
 </body>
 </html>

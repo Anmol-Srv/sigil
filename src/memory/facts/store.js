@@ -6,6 +6,7 @@ import path from 'node:path';
 import cortexDb from '../../db/cortex.js';
 import { embed } from '../../ingestion/embedder.js';
 import { prompt as llmPrompt } from '../../lib/llm.js';
+import { pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -86,7 +87,7 @@ async function insertFact({ content, category, confidence, importance, namespace
       status: 'active',
       sourceDocumentIds: sourceDocumentIds || [],
       sourceSection: sourceSection || null,
-      embedding: embedding ? `[${embedding.join(',')}]` : null,
+      embedding: pgVector(embedding),
       validFrom: new Date(),
     })
     .returning('*');
@@ -109,7 +110,7 @@ async function updateFact(factId, { content, category, confidence, importance, s
       confidence,
       importance,
       sourceDocumentIds,
-      embedding: embedding ? `[${embedding.join(',')}]` : undefined,
+      embedding: pgVector(embedding) ?? undefined,
     });
 
   await cortexDb.raw(`
@@ -154,7 +155,7 @@ async function markSuperseded(factId, supersededById) {
 }
 
 async function findSimilar(embedding, { namespace, threshold = AMBIGUOUS_THRESHOLD, limit = 5 }) {
-  const vec = `[${embedding.join(',')}]`;
+  const vec = pgVector(embedding);
 
   const { rows } = await cortexDb.raw(`
     SELECT id, uid, content, category, status,

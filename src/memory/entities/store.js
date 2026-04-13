@@ -1,6 +1,8 @@
 import { nanoid } from 'nanoid';
 
 import cortexDb from '../../db/cortex.js';
+import { pgVector } from '../../lib/vectors.js';
+import config from '../../config.js';
 
 async function insertEntity({ name, entityType, description, namespace, externalId, embedding }) {
   const uid = `ent-${nanoid(16)}`;
@@ -11,10 +13,10 @@ async function insertEntity({ name, entityType, description, namespace, external
       name,
       entityType,
       description: description || null,
-      namespace: namespace || 'default',
+      namespace: namespace || config.defaults.namespace,
       externalId: externalId || null,
       mentionCount: 1,
-      embedding: embedding ? `[${embedding.join(',')}]` : null,
+      embedding: pgVector(embedding),
     })
     .returning('*');
 
@@ -24,7 +26,7 @@ async function insertEntity({ name, entityType, description, namespace, external
 async function findByName(name, namespace) {
   return cortexDb('entity')
     .whereRaw('LOWER(name) = LOWER(?)', [name])
-    .where({ namespace: namespace || 'default' })
+    .where({ namespace: namespace || config.defaults.namespace })
     .whereNull('mergedWith')
     .first() || null;
 }
@@ -38,7 +40,7 @@ async function findById(id) {
 }
 
 async function findSimilar(embedding, { entityType, namespace, threshold = 0.85, limit = 3 }) {
-  const vec = `[${embedding.join(',')}]`;
+  const vec = pgVector(embedding);
 
   const { rows } = await cortexDb.raw(`
     SELECT id, uid, name, entity_type AS "entityType", description,
@@ -46,13 +48,13 @@ async function findSimilar(embedding, { entityType, namespace, threshold = 0.85,
            1 - (embedding <=> ?) AS similarity
     FROM entity
     WHERE entity_type = ?
-      AND namespace = COALESCE(?, 'default')
+      AND namespace = COALESCE(?, ?)
       AND embedding IS NOT NULL
       AND merged_with IS NULL
       AND 1 - (embedding <=> ?) >= ?
     ORDER BY embedding <=> ?
     LIMIT ?
-  `, [vec, entityType, namespace || 'default', vec, threshold, vec, limit]);
+  `, [vec, entityType, namespace, config.defaults.namespace, vec, threshold, vec, limit]);
 
   return rows;
 }
@@ -104,9 +106,12 @@ async function updateEntityTypes(entityId, newType) {
   const entity = await findById(entityId);
   if (!entity) return;
 
-  const types = entity.entityTypes
-    ? JSON.parse(entity.entityTypes)
-    : [entity.entityType];
+  let types;
+  try {
+    types = entity.entityTypes ? JSON.parse(entity.entityTypes) : [entity.entityType];
+  } catch {
+    types = [entity.entityType];
+  }
 
   if (!types.includes(newType)) {
     types.push(newType);

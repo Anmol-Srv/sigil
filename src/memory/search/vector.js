@@ -1,8 +1,10 @@
 import cortexDb from '../../db/cortex.js';
+import { pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
+import { CONFIDENCE_CASE, buildFactFilters } from './filters.js';
 
 async function searchChunks(embedding, { namespaces, limit = 20 }) {
-  const vec = `[${embedding.join(',')}]`;
+  const vec = pgVector(embedding);
 
   const { rows } = await cortexDb.raw(`
     SELECT id, document_id AS "documentId", chunk_index AS "chunkIndex",
@@ -19,24 +21,10 @@ async function searchChunks(embedding, { namespaces, limit = 20 }) {
 }
 
 async function searchFacts(embedding, { namespaces, limit = 20, minConfidence = 'medium', pointInTime, categories }) {
-  const vec = `[${embedding.join(',')}]`;
-  const confidenceRank = { low: 0, medium: 1, high: 2 };
-  const minRank = confidenceRank[minConfidence] ?? 1;
+  const vec = pgVector(embedding);
+  const { temporalClause, categoryClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories });
 
-  const params = [vec, namespaces, minRank];
-  let temporalFilter = '';
-  if (pointInTime) {
-    temporalFilter = 'AND valid_from <= ? AND (valid_until IS NULL OR valid_until > ?)';
-    params.push(pointInTime, pointInTime);
-  }
-
-  let categoryFilter = '';
-  if (categories?.length) {
-    categoryFilter = 'AND category = ANY(?)';
-    params.push(categories);
-  }
-
-  params.push(vec, config.memory.minFactSimilarity, vec, limit);
+  const params = [vec, namespaces, ...filterParams, vec, config.memory.minFactSimilarity, vec, limit];
 
   const { rows } = await cortexDb.raw(`
     SELECT id, uid, content, category, confidence, importance, namespace, status,
@@ -47,13 +35,9 @@ async function searchFacts(embedding, { namespaces, limit = 20, minConfidence = 
     WHERE namespace = ANY(?)
       AND status = 'active'
       AND embedding IS NOT NULL
-      AND CASE confidence
-            WHEN 'high' THEN 2
-            WHEN 'medium' THEN 1
-            ELSE 0
-          END >= ?
-      ${temporalFilter}
-      ${categoryFilter}
+      AND ${CONFIDENCE_CASE} >= ?
+      ${temporalClause}
+      ${categoryClause}
       AND 1 - (embedding <=> ?) >= ?
     ORDER BY embedding <=> ?
     LIMIT ?

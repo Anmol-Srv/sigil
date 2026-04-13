@@ -4,6 +4,7 @@ import cortexDb from '../../db/cortex.js';
 import { findByUid } from '../../memory/facts/store.js';
 import { getEntitiesForFact } from '../../memory/facts/entity-linker.js';
 import { getRelationsByFact } from '../../memory/entities/relations.js';
+import { textResponse } from '../utils.js';
 
 function registerGetFactContextTool(server) {
   server.tool(
@@ -66,10 +67,6 @@ This is the detail view — search returns truncated facts, this returns everyth
       return textResponse(parts.join('\n'));
     },
   );
-}
-
-function textResponse(text) {
-  return { content: [{ type: 'text', text }] };
 }
 
 export { registerGetFactContextTool };
