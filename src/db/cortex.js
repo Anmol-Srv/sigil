@@ -44,7 +44,10 @@ function toCamel(obj) {
   if (Array.isArray(obj)) return obj.map(toCamel);
   const out = {};
   for (const [key, val] of Object.entries(obj)) {
-    out[key.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = toCamel(val);
+    // Only camelCase the top-level keys from DB columns.
+    // Do NOT recurse into values — they may contain JSON data
+    // with intentional snake_case keys (metadata, entityTypes, etc.).
+    out[key.replace(/_([a-z])/g, (_, c) => c.toUpperCase())] = val;
   }
   return out;
 }

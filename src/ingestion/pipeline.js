@@ -3,8 +3,6 @@ import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { chunk as batchChunk } from 'lodash-es';
-
 import { parse } from './parsers/index.js';
 import { chunkSections } from './chunker.js';
 import { embedBatch } from './embedder.js';
@@ -191,32 +189,27 @@ async function ingestDocument({
   };
 }
 
-const AUDM_CONCURRENCY = 10;
-
 async function storeFactsInBatches(facts, { documentId, namespace, embeddings, defaultConfidence = 'medium', defaultImportance = 'supplementary' }) {
   const counts = { total: facts.length, added: 0, skipped: 0, updated: 0, contradicted: 0 };
-
   const allResults = [];
-  for (const batch of batchChunk(facts, AUDM_CONCURRENCY)) {
-    const batchResults = await Promise.all(
-      batch.map((raw, i) => {
-        const idx = allResults.length + i;
-        return saveFact({
-          content: raw.content,
-          category: raw.category,
-          confidence: raw.confidence || defaultConfidence,
-          importance: raw.importance || defaultImportance,
-          namespace,
-          sourceDocumentIds: documentId ? [documentId] : [],
-          sourceSection: raw.sourceSection || raw.category,
-          embedding: embeddings[idx],
-        });
-      }),
-    );
-    allResults.push(...batchResults);
-  }
 
-  for (const result of allResults) {
+  // Facts are stored sequentially to prevent AUDM race conditions.
+  // Two similar facts processed in parallel could both pass findSimilar
+  // before either is inserted, bypassing deduplication.
+  for (let a = 0; a < facts.length; a++) {
+    const raw = facts[a];
+    const result = await saveFact({
+      content: raw.content,
+      category: raw.category,
+      confidence: raw.confidence || defaultConfidence,
+      importance: raw.importance || defaultImportance,
+      namespace,
+      sourceDocumentIds: documentId ? [documentId] : [],
+      sourceSection: raw.sourceSection || raw.category,
+      embedding: embeddings[a],
+    });
+    allResults.push(result);
+
     const action = result.action.toLowerCase();
     if (action === 'add') counts.added++;
     else if (action === 'skip') counts.skipped++;

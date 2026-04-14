@@ -37,7 +37,6 @@ Commands:
   status                   Show knowledge base statistics
   migrate                  Run database migrations
   reset                    Reset the database (drops all data)
-  keys                     Manage REST API keys
   register                 Register as a Claude Code MCP server (advanced)
 
 Options:
@@ -59,7 +58,6 @@ const commands = {
   status: runStatus,
   migrate: runMigrate,
   reset: runReset,
-  keys: runKeys,
   register: runRegister,
 };
 
@@ -107,11 +105,12 @@ async function runInit(args) {
   const llmProvider = await select({
     message: 'LLM provider (for fact extraction and reasoning)',
     options: [
-      { value: 'openai',    label: 'OpenAI',    hint: 'gpt-4o-mini — recommended' },
-      { value: 'anthropic', label: 'Anthropic', hint: 'Claude Haiku' },
-      { value: 'ollama',    label: 'Ollama',    hint: 'local models — no API cost' },
+      { value: 'claude-cli', label: 'Claude Code', hint: 'uses your existing subscription — no extra API key' },
+      { value: 'openai',     label: 'OpenAI',      hint: 'gpt-4o-mini' },
+      { value: 'anthropic',  label: 'Anthropic',   hint: 'Claude Haiku — requires API key' },
+      { value: 'ollama',     label: 'Ollama',      hint: 'local models — no API cost' },
     ],
-    initialValue: existing.LLM_PROVIDER || 'openai',
+    initialValue: existing.LLM_PROVIDER || 'claude-cli',
   });
   if (isCancel(llmProvider)) { cancel('Setup cancelled.'); process.exit(0); }
 
@@ -241,8 +240,8 @@ async function runInit(args) {
 
   const claudeSpinner = spinner();
   claudeSpinner.start('Configuring Claude Code memory...');
-  await writeCortexMd();                  // write instructions to ~/.cortex/CLAUDE.md
-  await writeClaudeMd();                  // add single @import line to ~/.claude/CLAUDE.md
+  await writeCortexMd();
+  await writeClaudeMd();
   const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
   await updateContextSnapshot({ namespace: namespace.toString() }).catch(() => {});
   claudeSpinner.stop('Claude memory configured');
@@ -829,57 +828,6 @@ Requires --confirm flag to prevent accidental data loss.`);
   await cortexDb.destroy();
 }
 
-// ─── Keys ────────────────────────────────────────────────────────────────────
-
-async function runKeys(args) {
-  const subcommand = args[0];
-
-  if (!subcommand || args.includes('--help')) {
-    console.log(`cortex keys — Manage REST API keys
-
-Usage:
-  cortex keys list
-  cortex keys create --name=<name>
-  cortex keys revoke <key-prefix>`);
-    process.exit(0);
-  }
-
-  let auth;
-  try {
-    auth = await import('./api/auth.js');
-  } catch {
-    console.error('API key management is not available yet.');
-    process.exit(1);
-  }
-  const { listApiKeys, createApiKey, revokeApiKey } = auth;
-  const cortexDb = (await import('./db/cortex.js')).default;
-
-  if (subcommand === 'list') {
-    const keys = await listApiKeys();
-    if (!keys.length) {
-      console.log('No API keys.');
-    } else {
-      for (const k of keys) {
-        console.log(`  ${k.name} — ${k.prefix}*** (created ${k.createdAt?.toISOString?.().slice(0, 10) ?? 'unknown'})`);
-      }
-    }
-  } else if (subcommand === 'create') {
-    const name = args.find((a) => a.startsWith('--name='))?.split('=')[1] || 'default';
-    const { key, record } = await createApiKey(name);
-    console.log(`Created: ${key}`);
-    console.log(`(Store this — it won't be shown again)`);
-  } else if (subcommand === 'revoke') {
-    const prefix = args[1];
-    if (!prefix) { console.error('Provide a key prefix to revoke.'); process.exit(1); }
-    await revokeApiKey(prefix);
-    console.log(`Revoked key starting with: ${prefix}`);
-  } else {
-    console.error(`Unknown subcommand: ${subcommand}`);
-    process.exit(1);
-  }
-
-  await cortexDb.destroy();
-}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

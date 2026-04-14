@@ -36,7 +36,7 @@ User query: "${query}"
 Respond with ONLY a JSON array of strings. Do not include the original query.`;
 
   try {
-    const variants = await promptJson(prompt, { model: config.llm.extractionModel });
+    const variants = await promptJson(prompt, { model: config.llm.extractionModel, caller: 'query-expander' });
 
     if (!Array.isArray(variants)) return [query];
 

@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "cortex": {
-      "command": "node",
-      "args": ["src/server.js", "--mcp"],
-      "cwd": "/Users/anmol/Drive/Projects/CORTEX-new"
-    }
-  }
-}
