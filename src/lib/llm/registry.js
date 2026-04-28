@@ -138,4 +138,6 @@ export {
   detectProvider,
   detectEmbeddingProvider,
   resetDetection,
+  isOllamaReachable,
+  isClaudeCliAvailable,
 };

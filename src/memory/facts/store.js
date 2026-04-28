@@ -159,13 +159,13 @@ async function findSimilar(embedding, { namespace, threshold = AMBIGUOUS_THRESHO
 
   const { rows } = await cortexDb.raw(`
     SELECT id, uid, content, category, status,
-           1 - (embedding <=> ?) as similarity
+           1 - (embedding::halfvec(768) <=> ?::halfvec(768)) as similarity
     FROM fact
     WHERE namespace = ?
       AND status = 'active'
       AND embedding IS NOT NULL
-      AND 1 - (embedding <=> ?) >= ?
-    ORDER BY embedding <=> ?
+      AND 1 - (embedding::halfvec(768) <=> ?::halfvec(768)) >= ?
+    ORDER BY embedding::halfvec(768) <=> ?::halfvec(768)
     LIMIT ?
   `, [vec, namespace, vec, threshold, vec, limit]);
 
@@ -185,8 +185,10 @@ async function recordHistory({ targetType, targetId, event, oldContent, newConte
 
 async function recordAccess(factIds) {
   if (!factIds.length) return;
-  await cortexDb('fact')
-    .whereIn('id', factIds)
+  // Writes to the skinny fact_lifecycle table — does NOT touch the fact row
+  // (which is in the HNSW index). Prevents index bloat on every search hit.
+  await cortexDb('fact_lifecycle')
+    .whereIn('factId', factIds)
     .update({
       accessCount: cortexDb.raw('access_count + 1'),
       lastAccessedAt: cortexDb.fn.now(),
@@ -194,14 +196,16 @@ async function recordAccess(factIds) {
 }
 
 async function getHotFacts(namespace, { limit = 10, since } = {}) {
-  const query = cortexDb('fact')
-    .where({ status: 'active' })
-    .where('accessCount', '>', 0)
-    .orderBy('accessCount', 'desc')
-    .limit(limit);
+  const query = cortexDb('fact as f')
+    .join('fact_lifecycle as fl', 'fl.fact_id', 'f.id')
+    .where({ 'f.status': 'active' })
+    .where('fl.access_count', '>', 0)
+    .orderBy('fl.access_count', 'desc')
+    .limit(limit)
+    .select('f.*');
 
-  if (namespace) query.where({ namespace });
-  if (since) query.where('lastAccessedAt', '>=', since);
+  if (namespace) query.where({ 'f.namespace': namespace });
+  if (since) query.where('fl.last_accessed_at', '>=', since);
 
   return query;
 }
@@ -226,6 +230,38 @@ async function getFactCount(namespace) {
   return Number(count);
 }
 
+async function deleteFact(idOrUid) {
+  const isUid = typeof idOrUid === 'string' && idOrUid.length > 8;
+  const where = isUid ? { uid: idOrUid } : { id: Number(idOrUid) };
+
+  // Clean up junction table first
+  const fact = await cortexDb('fact').where(where).first();
+  if (!fact) return null;
+
+  await cortexDb('fact_entity').where({ factId: fact.id }).del();
+  await cortexDb('fact').where({ id: fact.id }).del();
+  return fact;
+}
+
+async function listNamespaces() {
+  const rows = await cortexDb('fact')
+    .where({ status: 'active' })
+    .select('namespace')
+    .count('id as factCount')
+    .groupBy('namespace')
+    .orderBy('namespace');
+  return rows.map((r) => ({ namespace: r.namespace, factCount: Number(r.factCount) }));
+}
+
+async function deleteNamespace(namespace) {
+  // Cascade: facts, chunks, documents, entities, relations scoped to this namespace
+  const factsDeleted = await cortexDb('fact').where({ namespace }).del();
+  const chunksDeleted = await cortexDb('chunk').where({ namespace }).del();
+  const docsDeleted = await cortexDb('document').where({ namespace }).del();
+  const entitiesDeleted = await cortexDb('entity').where({ namespace }).del();
+  return { factsDeleted, chunksDeleted, docsDeleted, entitiesDeleted };
+}
+
 export {
   saveFact,
   insertFact,
@@ -239,4 +275,7 @@ export {
   recordAccess,
   getHotFacts,
   getFactCount,
+  deleteFact,
+  listNamespaces,
+  deleteNamespace,
 };

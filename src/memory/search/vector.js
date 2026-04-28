@@ -3,17 +3,21 @@ import { pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
 import { CONFIDENCE_CASE, buildFactFilters } from './filters.js';
 
+// Queries cast embedding + query to halfvec(768) to use the halfvec HNSW index.
+// Column stays vector(768); only the comparison uses the reduced-precision representation.
+// ~50% smaller index, negligible quality loss.
+
 async function searchChunks(embedding, { namespaces, limit = 20 }) {
   const vec = pgVector(embedding);
 
   const { rows } = await cortexDb.raw(`
     SELECT id, document_id AS "documentId", chunk_index AS "chunkIndex",
            content, section_heading AS "sectionHeading", namespace,
-           1 - (embedding <=> ?) as similarity
+           1 - (embedding::halfvec(768) <=> ?::halfvec(768)) as similarity
     FROM chunk
     WHERE namespace = ANY(?)
       AND embedding IS NOT NULL
-    ORDER BY embedding <=> ?
+    ORDER BY embedding::halfvec(768) <=> ?::halfvec(768)
     LIMIT ?
   `, [vec, namespaces, vec, limit]);
 
@@ -30,7 +34,7 @@ async function searchFacts(embedding, { namespaces, limit = 20, minConfidence = 
     SELECT id, uid, content, category, confidence, importance, namespace, status,
            source_document_ids AS "sourceDocumentIds",
            source_section AS "sourceSection",
-           1 - (embedding <=> ?) as similarity
+           1 - (embedding::halfvec(768) <=> ?::halfvec(768)) as similarity
     FROM fact
     WHERE namespace = ANY(?)
       AND status = 'active'
@@ -38,8 +42,8 @@ async function searchFacts(embedding, { namespaces, limit = 20, minConfidence = 
       AND ${CONFIDENCE_CASE} >= ?
       ${temporalClause}
       ${categoryClause}
-      AND 1 - (embedding <=> ?) >= ?
-    ORDER BY embedding <=> ?
+      AND 1 - (embedding::halfvec(768) <=> ?::halfvec(768)) >= ?
+    ORDER BY embedding::halfvec(768) <=> ?::halfvec(768)
     LIMIT ?
   `, params);
 

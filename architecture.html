@@ -1,2185 +1,928 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cortex — Architecture</title>
-  <style>
-    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cortex — System Architecture</title>
+<style>
+:root {
+  --bg: #0A0E1A;
+  --surface: #141B2D;
+  --surface-2: #1A2235;
+  --border: #1E293B;
+  --text: #E2E8F0;
+  --text-dim: #94A3B8;
+  --text-faint: #64748B;
+  --purple: #8B5CF6;
+  --purple-dim: rgba(139,92,246,0.12);
+  --cyan: #22D3EE;
+  --cyan-dim: rgba(34,211,238,0.12);
+  --amber: #F59E0B;
+  --amber-dim: rgba(245,158,11,0.12);
+  --green: #34D399;
+  --green-dim: rgba(52,211,153,0.12);
+  --pink: #F472B6;
+  --red: #F87171;
+}
 
-    :root {
-      --bg: #080c12;
-      --surface: #0f1520;
-      --surface2: #131c2b;
-      --border: #1e2d40;
-      --border-light: #162235;
-      --text: #e2e8f0;
-      --text-muted: #94a3b8;
-      --text-dim: #64748b;
-      --indigo: #6366f1;
-      --indigo-dim: rgba(99,102,241,0.15);
-      --cyan: #06b6d4;
-      --cyan-dim: rgba(6,182,212,0.15);
-      --orange: #f97316;
-      --orange-dim: rgba(249,115,22,0.15);
-      --emerald: #10b981;
-      --emerald-dim: rgba(16,185,129,0.15);
-      --pink: #ec4899;
-      --pink-dim: rgba(236,72,153,0.15);
-      --violet: #8b5cf6;
-      --violet-dim: rgba(139,92,246,0.15);
-      --slate: #64748b;
-      --slate-dim: rgba(100,116,139,0.15);
-      --amber: #f59e0b;
-      --amber-dim: rgba(245,158,11,0.15);
-      --red: #ef4444;
-      --mono: 'SF Mono','Fira Code','Consolas','Monaco',monospace;
-      --sans: -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
-    }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
 
-    html, body { background: var(--bg); color: var(--text); font-family: var(--sans); height: 100vh; overflow: hidden; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.6;
+  padding: 2rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
 
-    /* ── Header ── */
-    .header {
-      height: 56px;
-      padding: 0 24px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 20px;
-      background: var(--surface);
-      flex-shrink: 0;
-    }
-    .header-logo {
-      font-family: var(--mono);
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--text);
-      letter-spacing: -0.3px;
-    }
-    .header-logo span { color: var(--cyan); }
-    .header-sep { width: 1px; height: 20px; background: var(--border); }
-    .header-sub { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+code, pre, .mono {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+}
 
-    /* ── Tabs ── */
-    .tabs {
-      display: flex;
-      gap: 2px;
-      padding: 0 24px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-    }
-    .tab {
-      padding: 10px 16px;
-      font-size: 13px;
-      font-weight: 500;
-      color: var(--text-muted);
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      transition: color 0.15s, border-color 0.15s;
-      user-select: none;
-    }
-    .tab:hover { color: var(--text); }
-    .tab.active { color: var(--text); border-bottom-color: var(--cyan); }
-    .tab-dot {
-      display: inline-block;
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      margin-right: 6px;
-      vertical-align: middle;
-      opacity: 0.8;
-    }
+.header {
+  text-align: center;
+  margin-bottom: 4rem;
+  padding: 3rem 0 2rem;
+  border-bottom: 1px solid var(--border);
+}
 
-    /* ── Main layout ── */
-    .workspace {
-      display: flex;
-      height: calc(100vh - 56px - 41px);
-      position: relative;
-      overflow: hidden;
-    }
+.header h1 {
+  font-size: 3rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin-bottom: 0.5rem;
+}
 
-    /* ── Canvas ── */
-    .canvas-wrapper {
-      flex: 1;
-      position: relative;
-      overflow: hidden;
-    }
-    .canvas-view { display: none; width: 100%; height: 100%; }
-    .canvas-view.active { display: block; }
-    .canvas-svg {
-      width: 100%;
-      height: 100%;
-      cursor: grab;
-      display: block;
-    }
-    .canvas-svg.dragging { cursor: grabbing; }
+.header h1 span { color: var(--purple); }
 
-    /* ── Controls ── */
-    .zoom-controls {
-      position: absolute;
-      top: 14px;
-      right: 14px;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 4px;
-      z-index: 20;
-    }
-    .zoom-btn {
-      width: 28px; height: 28px;
-      display: flex; align-items: center; justify-content: center;
-      background: transparent;
-      border: none;
-      border-radius: 5px;
-      color: var(--text-muted);
-      cursor: pointer;
-      font-size: 14px;
-      transition: background 0.15s, color 0.15s;
-    }
-    .zoom-btn:hover { background: var(--border); color: var(--text); }
-    .zoom-pct {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--text-dim);
-      min-width: 38px;
-      text-align: center;
-    }
-    .zoom-sep { width: 1px; height: 16px; background: var(--border); margin: 0 2px; }
+.header p {
+  color: var(--text-dim);
+  font-size: 1.05rem;
+  max-width: 600px;
+  margin: 0 auto;
+}
 
-    /* ── Legend ── */
-    .legend {
-      position: absolute;
-      bottom: 14px;
-      left: 14px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 14px;
-      z-index: 20;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px 16px;
-      max-width: 480px;
-    }
-    .legend-item {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-    .legend-dot {
-      width: 8px; height: 8px;
-      border-radius: 2px;
-      flex-shrink: 0;
-    }
+.toc {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem 2rem;
+  margin-bottom: 3rem;
+}
 
-    /* ── Side Panel ── */
-    .side-panel {
-      width: 0;
-      overflow: hidden;
-      background: var(--surface);
-      border-left: 1px solid var(--border);
-      transition: width 0.25s cubic-bezier(0.4,0,0.2,1);
-      flex-shrink: 0;
-      display: flex;
-      flex-direction: column;
-    }
-    .side-panel.open { width: 340px; }
-    .panel-inner {
-      width: 340px;
-      height: 100%;
-      overflow-y: auto;
-      overflow-x: hidden;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }
-    .panel-header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
-    }
-    .panel-title-wrap { flex: 1; min-width: 0; }
-    .panel-badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-size: 10px;
-      font-family: var(--mono);
-      font-weight: 600;
-      letter-spacing: 0.5px;
-      margin-bottom: 6px;
-    }
-    .panel-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--text);
-      line-height: 1.3;
-    }
-    .panel-close {
-      width: 28px; height: 28px;
-      display: flex; align-items: center; justify-content: center;
-      background: transparent;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text-muted);
-      cursor: pointer;
-      font-size: 16px;
-      flex-shrink: 0;
-      transition: background 0.15s, color 0.15s;
-    }
-    .panel-close:hover { background: var(--border); color: var(--text); }
-    .panel-desc {
-      font-size: 13px;
-      color: var(--text-muted);
-      line-height: 1.6;
-    }
-    .panel-file {
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--cyan);
-      background: rgba(6,182,212,0.08);
-      padding: 6px 10px;
-      border-radius: 6px;
-      border: 1px solid rgba(6,182,212,0.2);
-      word-break: break-all;
-    }
-    .panel-section-title {
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.8px;
-      text-transform: uppercase;
-      color: var(--text-dim);
-      margin-bottom: 8px;
-    }
-    .panel-props {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .prop-row {
-      display: flex;
-      gap: 8px;
-      font-size: 12px;
-    }
-    .prop-key {
-      color: var(--text-dim);
-      min-width: 100px;
-      flex-shrink: 0;
-      font-family: var(--mono);
-    }
-    .prop-val { color: var(--text); }
-    .panel-connections { display: flex; flex-direction: column; gap: 6px; }
-    .conn-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      color: var(--text-muted);
-    }
-    .conn-arrow {
-      font-size: 10px;
-      opacity: 0.5;
-    }
-    .conn-label { color: var(--text); }
+.toc h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  margin-bottom: 1rem;
+}
 
-    /* ── SVG node/edge animations ── */
-    @keyframes dashflow {
-      to { stroke-dashoffset: -24; }
-    }
-    @keyframes dashin {
-      to { stroke-dashoffset: 24; }
-    }
-    .flow-edge {
-      stroke-dasharray: 6 6;
-      animation: dashflow 0.7s linear infinite;
-    }
-    .flow-edge-rev {
-      stroke-dasharray: 6 6;
-      animation: dashin 0.7s linear infinite;
-    }
+.toc ol {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.5rem 1.5rem;
+}
 
-    /* Scrollbar */
-    .panel-inner::-webkit-scrollbar { width: 4px; }
-    .panel-inner::-webkit-scrollbar-track { background: transparent; }
-    .panel-inner::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-  </style>
+.toc ol a {
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+  padding: 0.3rem 0;
+  display: block;
+}
+
+.toc ol a:hover { color: var(--purple); }
+
+section { margin-bottom: 4rem; }
+
+h2 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--purple);
+  display: inline-block;
+}
+
+h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin: 1.5rem 0 0.75rem;
+}
+
+h4 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 1rem 0 0.5rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+p { margin-bottom: 1rem; color: var(--text-dim); }
+p strong { color: var(--text); }
+
+ul, ol { margin: 0.5rem 0 1rem 1.5rem; color: var(--text-dim); }
+li { margin-bottom: 0.3rem; }
+
+code {
+  background: var(--surface-2);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: var(--cyan);
+}
+
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin: 1rem 0;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  color: var(--text);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+
+th, td {
+  padding: 0.7rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+td { color: var(--text-dim); }
+td:first-child {
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--cyan);
+  font-size: 0.8rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1rem 0;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.pipeline {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 2rem;
+  margin: 1.5rem 0;
+}
+
+.stage {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 1.25rem;
+  padding: 1.25rem 0;
+  border-bottom: 1px dashed var(--border);
+  align-items: start;
+}
+
+.stage:last-child { border-bottom: none; }
+
+.stage-num {
+  width: 32px;
+  height: 32px;
+  background: var(--purple);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  font-family: 'JetBrains Mono', monospace;
+  flex-shrink: 0;
+}
+
+.stage-content h4 {
+  color: var(--purple);
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.stage-content p { margin-bottom: 0.5rem; font-size: 0.9rem; }
+
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1.5rem 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+}
+
+.flow-step {
+  background: var(--surface-2);
+  border-left: 3px solid var(--purple);
+  padding: 0.75rem 1rem;
+  border-radius: 0 6px 6px 0;
+}
+
+.flow-step strong { color: var(--purple); }
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge-purple { background: var(--purple-dim); color: var(--purple); }
+.badge-cyan { background: var(--cyan-dim); color: var(--cyan); }
+.badge-amber { background: var(--amber-dim); color: var(--amber); }
+.badge-green { background: var(--green-dim); color: var(--green); }
+
+.ascii-diagram {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.5rem;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+  white-space: pre;
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.decision-tree {
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+}
+
+.decision {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  background: var(--surface-2);
+  border-radius: 6px;
+  margin: 0.4rem 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+}
+
+.decision strong { color: var(--amber); min-width: 140px; }
+.decision-arrow { color: var(--text-faint); }
+
+.callout {
+  border-left: 3px solid var(--cyan);
+  padding: 0.75rem 1rem;
+  background: var(--cyan-dim);
+  border-radius: 0 6px 6px 0;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+}
+
+.callout strong { color: var(--cyan); }
+
+footer {
+  text-align: center;
+  padding: 3rem 0 1rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-faint);
+  font-size: 0.8rem;
+  margin-top: 4rem;
+}
+</style>
 </head>
 <body>
 
 <div class="header">
-  <div class="header-logo">cortex<span>.</span>arch</div>
-  <div class="header-sep"></div>
-  <div class="header-sub">v2.0 — knowledge graph + cognitive layer</div>
+  <h1><span>cortex</span> &mdash; system architecture</h1>
+  <p>A local-first memory engine for AI coding assistants.<br>Installation, ingestion, search, data model, and integration &mdash; all documented here.</p>
 </div>
 
-<div class="tabs" id="tabs">
-  <div class="tab active" data-view="overview">
-    <span class="tab-dot" style="background:#06b6d4"></span>Overview
-  </div>
-  <div class="tab" data-view="ingestion">
-    <span class="tab-dot" style="background:#f97316"></span>Ingestion
-  </div>
-  <div class="tab" data-view="search">
-    <span class="tab-dot" style="background:#10b981"></span>Search
-  </div>
-  <div class="tab" data-view="storage">
-    <span class="tab-dot" style="background:#ec4899"></span>Storage
-  </div>
-</div>
+<nav class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li><a href="#overview">1. System overview</a></li>
+    <li><a href="#layers">2. Three-layer knowledge model</a></li>
+    <li><a href="#install">3. Installation &amp; setup</a></li>
+    <li><a href="#ingestion">4. Ingestion pipeline</a></li>
+    <li><a href="#audm">5. AUDM deduplication</a></li>
+    <li><a href="#entities">6. Entity resolution</a></li>
+    <li><a href="#search">7. Search pipeline</a></li>
+    <li><a href="#data-model">8. Data model</a></li>
+    <li><a href="#providers">9. LLM provider system</a></li>
+    <li><a href="#integration">10. Claude Code integration</a></li>
+    <li><a href="#mcp">11. MCP tools</a></li>
+    <li><a href="#files">12. File layout</a></li>
+  </ol>
+</nav>
 
-<div class="workspace">
-  <!-- Canvas Views -->
-  <div id="canvas-container" style="flex:1;position:relative;overflow:hidden;display:flex;flex-direction:column;">
+<section id="overview">
+  <h2>1. System overview</h2>
+  <p>Cortex is a <strong>personal knowledge engine</strong> that runs entirely on your machine. It ingests documents, code, URLs, and quick notes, extracts atomic facts via LLM, builds an entity graph, and serves everything through hybrid semantic + keyword search.</p>
 
-    <!-- OVERVIEW -->
-    <div class="canvas-view active" id="view-overview">
-      <svg class="canvas-svg" id="svg-overview" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <marker id="arrow-ov" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#1e2d40"/>
-          </marker>
-          <marker id="arrow-ov-indigo" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#6366f1" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-ov-cyan" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#06b6d4" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-ov-orange" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#f97316" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-ov-emerald" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#10b981" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-ov-slate" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#64748b" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-ov-pink" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#ec4899" fill-opacity="0.7"/>
-          </marker>
-          <filter id="glow-indigo" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="4" result="blur"/>
-            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-          </filter>
-          <filter id="glow-cyan" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="4" result="blur"/>
-            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-          </filter>
-        </defs>
-        <g class="diagram-group" id="dg-overview"></g>
-      </svg>
-      <div class="zoom-controls" id="zc-overview">
-        <button class="zoom-btn" onclick="zoomOut('overview')" title="Zoom out">−</button>
-        <div class="zoom-sep"></div>
-        <button class="zoom-btn" onclick="zoomFit('overview')" title="Fit to screen" style="font-size:11px;">⊡</button>
-        <div class="zoom-sep"></div>
-        <button class="zoom-btn" onclick="zoomIn('overview')" title="Zoom in">+</button>
-        <div class="zoom-sep"></div>
-        <div class="zoom-pct" id="zp-overview">100%</div>
-      </div>
-      <div class="legend" id="legend-overview">
-        <div class="legend-item"><div class="legend-dot" style="background:#64748b"></div>File System</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#6366f1"></div>Interface</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#06b6d4"></div>Cognitive</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#f97316"></div>Ingestion</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div>Search</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>LLM</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Embedder</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div>Storage</div>
-      </div>
+  <p>Three surfaces connect Cortex to Claude Code:</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <h4>Hooks (automatic)</h4>
+      <p style="font-size:0.85rem;margin-bottom:0;">Registered in <code>~/.claude/settings.json</code>. Fire on every prompt and tool use. Zero user action required.</p>
     </div>
-
-    <!-- INGESTION -->
-    <div class="canvas-view" id="view-ingestion">
-      <svg class="canvas-svg" id="svg-ingestion" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <marker id="arrow-ing" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#1e2d40"/>
-          </marker>
-          <marker id="arrow-ing-orange" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#f97316" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-ing-violet" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#8b5cf6" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-ing-pink" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#ec4899" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-ing-red" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#ef4444" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-ing-cyan" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#06b6d4" fill-opacity="0.7"/>
-          </marker>
-        </defs>
-        <g class="diagram-group" id="dg-ingestion"></g>
-      </svg>
-      <div class="zoom-controls" id="zc-ingestion">
-        <button class="zoom-btn" onclick="zoomOut('ingestion')" title="Zoom out">−</button>
-        <div class="zoom-sep"></div>
-        <button class="zoom-btn" onclick="zoomFit('ingestion')" title="Fit to screen" style="font-size:11px;">⊡</button>
-        <div class="zoom-sep"></div>
-        <button class="zoom-btn" onclick="zoomIn('ingestion')" title="Zoom in">+</button>
-        <div class="zoom-sep"></div>
-        <div class="zoom-pct" id="zp-ingestion">100%</div>
-      </div>
-      <div class="legend" id="legend-ingestion">
-        <div class="legend-item"><div class="legend-dot" style="background:#06b6d4"></div>Cognitive</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#f97316"></div>Ingestion</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>LLM call</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Embedder</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div>Storage</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div>Discard</div>
-      </div>
+    <div class="card">
+      <h4>Hot context (passive)</h4>
+      <p style="font-size:0.85rem;margin-bottom:0;">Top 20 relevant facts written to <code>~/.cortex/CLAUDE.md</code>, auto-imported into every session.</p>
     </div>
-
-    <!-- SEARCH -->
-    <div class="canvas-view" id="view-search">
-      <svg class="canvas-svg" id="svg-search" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <marker id="arrow-srch" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#1e2d40"/>
-          </marker>
-          <marker id="arrow-srch-emerald" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#10b981" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-srch-cyan" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#06b6d4" fill-opacity="0.7"/>
-          </marker>
-          <marker id="arrow-srch-violet" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#8b5cf6" fill-opacity="0.7"/>
-          </marker>
-        </defs>
-        <g class="diagram-group" id="dg-search"></g>
-      </svg>
-      <div class="zoom-controls" id="zc-search">
-        <button class="zoom-btn" onclick="zoomOut('search')" title="Zoom out">−</button>
-        <div class="zoom-sep"></div>
-        <button class="zoom-btn" onclick="zoomFit('search')" title="Fit to screen" style="font-size:11px;">⊡</button>
-        <div class="zoom-sep"></div>
-        <button class="zoom-btn" onclick="zoomIn('search')" title="Zoom in">+</button>
-        <div class="zoom-sep"></div>
-        <div class="zoom-pct" id="zp-search">100%</div>
-      </div>
-      <div class="legend" id="legend-search">
-        <div class="legend-item"><div class="legend-dot" style="background:#06b6d4"></div>Cognitive</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div>Search</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>LLM</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div>Storage</div>
-      </div>
+    <div class="card">
+      <h4>MCP tools (on-demand)</h4>
+      <p style="font-size:0.85rem;margin-bottom:0;">7 tools for deep knowledge access. Claude calls them when it needs more than the injected context.</p>
     </div>
-
-    <!-- STORAGE -->
-    <div class="canvas-view" id="view-storage">
-      <svg class="canvas-svg" id="svg-storage" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <marker id="arrow-stor" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L8,3 z" fill="#ec4899" fill-opacity="0.6"/>
-          </marker>
-        </defs>
-        <g class="diagram-group" id="dg-storage"></g>
-      </svg>
-      <div class="zoom-controls" id="zc-storage">
-        <button class="zoom-btn" onclick="zoomOut('storage')" title="Zoom out">−</button>
-        <div class="zoom-sep"></div>
-        <button class="zoom-btn" onclick="zoomFit('storage')" title="Fit to screen" style="font-size:11px;">⊡</button>
-        <div class="zoom-sep"></div>
-        <button class="zoom-btn" onclick="zoomIn('storage')" title="Zoom in">+</button>
-        <div class="zoom-sep"></div>
-        <div class="zoom-pct" id="zp-storage">100%</div>
-      </div>
-      <div class="legend" id="legend-storage">
-        <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div>Tables</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>Indexes</div>
-        <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div>Foreign Keys</div>
-      </div>
-    </div>
-
   </div>
 
-  <!-- Side Panel -->
-  <div class="side-panel" id="side-panel">
-    <div class="panel-inner" id="panel-inner">
-      <div class="panel-header">
-        <div class="panel-title-wrap">
-          <div class="panel-badge" id="panel-badge"></div>
-          <div class="panel-title" id="panel-title"></div>
+  <div class="ascii-diagram">┌────────────────────────────────────────────────────────────────────────┐
+│                                CORTEX                                  │
+│                                                                        │
+│   Surfaces                                                             │
+│   ┌────────────┐    ┌────────────┐    ┌────────────┐                   │
+│   │    CLI     │    │   Hooks    │    │    MCP     │                   │
+│   │  14 cmds   │    │  2 events  │    │  7 tools   │                   │
+│   └─────┬──────┘    └─────┬──────┘    └─────┬──────┘                   │
+│         └─────────────────┼──────────────────┘                         │
+│                           │                                            │
+│   ┌─────────────────────────────────────────────────────────────────┐  │
+│   │                      Domain layer                               │  │
+│   │                                                                 │  │
+│   │  ingestion/     pipeline.js ─┬→  parsers/   (md, html, code, …) │  │
+│   │                              ├→  sources/   (file, url, raw)    │  │
+│   │                              ├→  chunker + contextualizer       │  │
+│   │                              └→  embedder   (ollama / openai)   │  │
+│   │                                                                 │  │
+│   │  memory/       facts/        entities/       search/            │  │
+│   │                ├ store.js    ├ store.js      ├ hybrid.js        │  │
+│   │                ├ AUDM dedup  ├ resolver      ├ vector.js        │  │
+│   │                ├ extractor   ├ merger        ├ keyword.js       │  │
+│   │                └ hot-context └ traversal     └ graph-enh.js     │  │
+│   │                                                                 │  │
+│   │                cognitive/                                       │  │
+│   │                ├ input-classifier  (thought/knowledge/noise)    │  │
+│   │                └ query-router     (intent-based tuning)         │  │
+│   └─────────────────────────────────────────────────────────────────┘  │
+│                                                                        │
+│   Infrastructure                                                       │
+│   ┌─────────────────────────┐    ┌─────────────────────────────────┐   │
+│   │  PGlite + pgvector      │    │  LLM Provider Layer             │   │
+│   │  (embedded PostgreSQL)  │    │   ┌───────────────────────────┐ │   │
+│   │  ~/.cortex/db/          │    │   │ openai · anthropic        │ │   │
+│   │  No server, no Docker   │    │   │ ollama · claude-cli       │ │   │
+│   │  pgvector cosine sim    │    │   │  + auto-detect            │ │   │
+│   │  tsvector FTS           │    │   └───────────────────────────┘ │   │
+│   │  Recursive CTEs (graph) │    │  Embeddings: ollama / openai    │   │
+│   └─────────────────────────┘    └─────────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────┘</div>
+</section>
+
+<section id="layers">
+  <h2>2. Three-layer knowledge model</h2>
+  <p>Cortex stores knowledge at three levels of abstraction. Different questions need different layers.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Layer</th>
+        <th>What's stored</th>
+        <th>When it wins</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="badge badge-purple">Chunks</span></td>
+        <td>512-token text blocks with contextual prefixes + 768-dim embeddings</td>
+        <td>Raw section recall: "show me that paragraph"</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-cyan">Facts</span></td>
+        <td>LLM-extracted atomic statements with category, confidence, importance, temporal validity</td>
+        <td>Structured knowledge: "what do we know about X"</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-amber">Entity graph</span></td>
+        <td>Named nodes (people, topics, documents) with typed relations</td>
+        <td>Connections: "what's related to X"</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>The same ingested document populates all three layers. Chunks give breadth, facts give precision, the graph gives relationships.</p>
+</section>
+
+<section id="install">
+  <h2>3. Installation &amp; setup</h2>
+
+  <h3>Install</h3>
+  <pre><code>npm install -g @anmol-srv/cortex</code></pre>
+
+  <h3>Initialize</h3>
+  <pre><code>cortex init</code></pre>
+
+  <p>Runs an interactive wizard that:</p>
+  <ol>
+    <li>Picks LLM provider (defaults to <code>claude-cli</code> &mdash; uses Claude Code subscription, no API key)</li>
+    <li>Picks embedding provider (Ollama default)</li>
+    <li>Pulls <code>nomic-embed-text</code> Ollama model if missing (~270MB)</li>
+    <li>Sets default namespace</li>
+    <li>Creates <code>~/.cortex/.env</code> with chosen settings</li>
+    <li>Initializes PGlite database at <code>~/.cortex/db</code> and runs migrations</li>
+    <li>Writes <code>~/.cortex/CLAUDE.md</code> with Cortex instructions + hot-context block</li>
+    <li>Adds <code>@~/.cortex/CLAUDE.md</code> to <code>~/.claude/CLAUDE.md</code></li>
+    <li>Registers <code>UserPromptSubmit</code> + <code>PostToolUse</code> hooks in <code>~/.claude/settings.json</code></li>
+  </ol>
+
+  <h3>Verify</h3>
+  <pre><code>cortex doctor</code></pre>
+  <p>Checks every component: config file, database, LLM provider, embedding provider, hook registration, CLAUDE.md integration. Exits with non-zero status if anything fails.</p>
+</section>
+
+<section id="ingestion">
+  <h2>4. Ingestion pipeline</h2>
+  <p>Every piece of content (<code>cortex ingest</code>, <code>cortex remember</code>, MCP <code>ingest</code> tool) flows through six stages.</p>
+
+  <div class="pipeline">
+    <div class="stage">
+      <div class="stage-num">0</div>
+      <div class="stage-content">
+        <h4>CLASSIFY</h4>
+        <p>LLM classifies the input into one of three routes:</p>
+        <div class="flow">
+          <div class="flow-step"><strong>thought</strong> &mdash; Short personal fact or note. Skip chunking / contextualization, store directly.</div>
+          <div class="flow-step"><strong>knowledge</strong> &mdash; Document or structured content. Run the full pipeline.</div>
+          <div class="flow-step"><strong>noise</strong> &mdash; Trivial, meaningless (e.g., "hi"). Discard.</div>
         </div>
-        <button class="panel-close" id="panel-close">×</button>
+        <p>Heuristic fast-paths: empty/tiny &rarr; noise; long-form (&gt;2000 chars) &rarr; knowledge. LLM only called for ambiguous cases.</p>
       </div>
-      <div class="panel-desc" id="panel-desc"></div>
-      <div id="panel-file-wrap" style="display:none">
-        <div class="panel-file" id="panel-file"></div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-num">1</div>
+      <div class="stage-content">
+        <h4>DEDUP CHECK</h4>
+        <p>Compute <code>SHA-256(content)</code>. Compare against the <code>document</code> table. If hash matches, skip without parsing, embedding, or LLM calls.</p>
+        <div class="callout"><strong>Why hash before parse?</strong> Saves the full pipeline cost on re-ingestion. Running <code>cortex ingest "docs/**/*.md"</code> repeatedly is essentially free.</div>
       </div>
-      <div id="panel-props-wrap" style="display:none">
-        <div class="panel-section-title">Properties</div>
-        <div class="panel-props" id="panel-props"></div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-num">2</div>
+      <div class="stage-content">
+        <h4>PARSE</h4>
+        <p>Format-specific parser extracts sections and clean text:</p>
+        <table>
+          <tr><td><code>markdown.js</code></td><td>Splits by headings, preserves hierarchy</td></tr>
+          <tr><td><code>code.js</code></td><td>Splits by functions / classes (JS, TS, Python, Go, Rust, Java, C++, etc.)</td></tr>
+          <tr><td><code>html.js</code></td><td>Strips tags, extracts readable text</td></tr>
+          <tr><td><code>json-parser.js</code></td><td>Converts JSON to readable prose</td></tr>
+          <tr><td><code>text.js</code></td><td>Paragraph-based split for plain text</td></tr>
+        </table>
       </div>
-      <div id="panel-conn-wrap" style="display:none">
-        <div class="panel-section-title">Connections</div>
-        <div class="panel-connections" id="panel-conns"></div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-num">3</div>
+      <div class="stage-content">
+        <h4>CHUNK + CONTEXTUALIZE + EMBED</h4>
+        <p>Sections are split into ~512-token chunks with 50-token overlap to preserve context across boundaries.</p>
+        <p>Each chunk gets a contextual prefix via LLM:</p>
+        <pre><code>"This chunk describes the authentication middleware
+ in the Express.js backend."</code></pre>
+        <p>Chunks are then embedded (768-dim Ollama <code>nomic-embed-text</code> or 1536-dim OpenAI) and stored in the <code>chunk</code> table with their <code>pgvector</code> embeddings.</p>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-num">4</div>
+      <div class="stage-content">
+        <h4>EXTRACT FACTS</h4>
+        <p>Each chunk is sent to the LLM with the extraction prompt. The LLM returns atomic facts:</p>
+        <pre><code>Input: "We migrated from MySQL to PostgreSQL in Q3 2024
+because of JSON support and pgvector."
+
+Facts:
+ · Database migrated from MySQL to PostgreSQL
+   [architecture, high, vital]
+ · Migration happened in Q3 2024
+   [timeline, high, supplementary]
+ · PostgreSQL chosen for JSON + pgvector
+   [decision, high, vital]</code></pre>
+        <p>Each fact has: <code>category</code> &middot; <code>confidence</code> &middot; <code>importance</code> (vital/supplementary) &middot; <code>valid_from</code> / <code>valid_until</code>.</p>
+        <p>Each fact then runs through <strong>AUDM</strong> (next section).</p>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-num">5</div>
+      <div class="stage-content">
+        <h4>LINK ENTITIES</h4>
+        <p>Topic entities are extracted from the facts via a separate LLM call. Each entity runs through 3-stage resolution (section 6). Entities are linked to facts via the <code>fact_entity</code> junction table. Relationships between entities are stored in the <code>relation</code> table with temporal validity and mention counts.</p>
       </div>
     </div>
   </div>
-</div>
+</section>
 
-<script>
-// ── State ──────────────────────────────────────────────────────────────────
-const state = {
-  overview:  { tx: 0, ty: 0, scale: 1, dragging: false, lastX: 0, lastY: 0, vw: 1800, vh: 1100 },
-  ingestion: { tx: 0, ty: 0, scale: 1, dragging: false, lastX: 0, lastY: 0, vw: 1800, vh: 1700 },
-  search:    { tx: 0, ty: 0, scale: 1, dragging: false, lastX: 0, lastY: 0, vw: 1800, vh: 1450 },
-  storage:   { tx: 0, ty: 0, scale: 1, dragging: false, lastX: 0, lastY: 0, vw: 1900, vh: 1500 },
-};
-let activeView = 'overview';
-let panelOpen = false;
+<section id="audm">
+  <h2>5. AUDM deduplication</h2>
+  <p>AUDM = <strong>A</strong>dd / <strong>U</strong>pdate / <strong>D</strong>elete / <strong>M</strong>erge. For each new fact, Cortex checks similarity against existing facts using pgvector cosine distance, then decides:</p>
 
-// ── Colors ─────────────────────────────────────────────────────────────────
-const C = {
-  interface: '#6366f1', interface_dim: 'rgba(99,102,241,0.12)',
-  cognitive: '#06b6d4', cognitive_dim: 'rgba(6,182,212,0.12)',
-  ingestion: '#f97316', ingestion_dim: 'rgba(249,115,22,0.12)',
-  search:    '#10b981', search_dim:    'rgba(16,185,129,0.12)',
-  storage:   '#ec4899', storage_dim:   'rgba(236,72,153,0.12)',
-  llm:       '#8b5cf6', llm_dim:       'rgba(139,92,246,0.12)',
-  fs:        '#64748b', fs_dim:        'rgba(100,116,139,0.12)',
-  embedder:  '#f59e0b', embedder_dim:  'rgba(245,158,11,0.12)',
-  red:       '#ef4444', red_dim:       'rgba(239,68,68,0.12)',
-  bg:        '#080c12',
-  surface:   '#0f1520',
-  border:    '#1e2d40',
-  text:      '#e2e8f0',
-  textMuted: '#94a3b8',
-  textDim:   '#64748b',
-};
+  <div class="decision-tree">
+    <div class="decision"><strong>sim &ge; 0.88</strong><span class="decision-arrow">&rarr;</span>SKIP &mdash; paraphrase of existing fact</div>
+    <div class="decision"><strong>sim &ge; 0.65</strong><span class="decision-arrow">&rarr;</span>LLM decides: ADD / UPDATE / DELETE / MERGE</div>
+    <div class="decision"><strong>sim &lt; 0.65</strong><span class="decision-arrow">&rarr;</span>ADD &mdash; clearly new fact</div>
+  </div>
 
-// ── SVG helpers ────────────────────────────────────────────────────────────
-const NS = 'http://www.w3.org/2000/svg';
-function el(tag, attrs = {}, children = []) {
-  const e = document.createElementNS(NS, tag);
-  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-  for (const c of children) if (c) e.appendChild(c);
-  return e;
-}
-function txt(content, attrs = {}) {
-  const t = el('text', { 'font-family': "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", ...attrs });
-  t.textContent = content;
-  return t;
-}
-function monoTxt(content, attrs = {}) {
-  const t = el('text', { 'font-family': "'SF Mono','Fira Code','Consolas',monospace", ...attrs });
-  t.textContent = content;
-  return t;
-}
+  <p>LLM decisions (from <code>prompts/audm-decision.md</code>):</p>
+  <ul>
+    <li><strong>ADD</strong> &mdash; new information, store alongside the existing fact</li>
+    <li><strong>UPDATE</strong> &mdash; newer version of the same fact; old fact marked superseded</li>
+    <li><strong>DELETE</strong> &mdash; new fact contradicts the old one; old fact marked invalid</li>
+    <li><strong>MERGE</strong> &mdash; combine both into a richer fact</li>
+  </ul>
 
-// Draw a rounded-rect node. Returns <g class="node">
-function drawNode(opts) {
-  const { id, x, y, w, h, color, dim, label, sublabel, filePath, details, badge } = opts;
-  const g = el('g', {
-    class: 'node',
-    'data-node-id': id,
-    'data-details': JSON.stringify(details || {}),
-    style: 'cursor:pointer',
-    transform: `translate(${x},${y})`,
-  });
+  <p>Every decision is logged to the <code>history</code> table &mdash; full audit trail of knowledge evolution.</p>
 
-  // Shadow
-  const shadow = el('rect', {
-    x: 3, y: 3, width: w, height: h,
-    rx: 8, ry: 8,
-    fill: 'none',
-    stroke: color,
-    'stroke-width': 1,
-    opacity: 0.15,
-    filter: `blur(6px)`,
-  });
+  <div class="callout"><strong>Why this matters.</strong> Without AUDM, re-ingesting the same content over time pollutes the knowledge base with duplicates. With AUDM, facts stay clean and current &mdash; old versions are superseded, contradictions are flagged.</div>
+</section>
 
-  // Background
-  const bg = el('rect', {
-    width: w, height: h,
-    rx: 8, ry: 8,
-    fill: dim,
-    stroke: color,
-    'stroke-width': 1.5,
-    opacity: 1,
-    class: 'node-rect',
-  });
+<section id="entities">
+  <h2>6. Entity resolution</h2>
+  <p>When a new entity name enters the system, Cortex runs a 3-stage resolution cascade to avoid duplicates.</p>
 
-  // Top accent line
-  const accent = el('rect', {
-    x: 12, y: 0, width: w - 24, height: 2,
-    rx: 1,
-    fill: color,
-    opacity: 0.7,
-  });
+  <div class="pipeline">
+    <div class="stage">
+      <div class="stage-num">1</div>
+      <div class="stage-content">
+        <h4>EXACT NAME MATCH</h4>
+        <p>DB lookup on <code>entity.name</code> within the active namespace. Fast, no LLM calls.</p>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="stage-num">2</div>
+      <div class="stage-content">
+        <h4>EMBEDDING SIMILARITY + LLM VERIFY</h4>
+        <p>Embed the name, find top-3 similar entities via pgvector, ask LLM: "Are these the same real-world entity?"</p>
+        <p>Catches cases like "React" &equiv; "React.js" &equiv; "ReactJS" without hardcoded rules.</p>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="stage-num">3</div>
+      <div class="stage-content">
+        <h4>CREATE NEW</h4>
+        <p>If no match found, create a new entity with its own embedding and type.</p>
+      </div>
+    </div>
+  </div>
+</section>
 
-  g.appendChild(shadow);
-  g.appendChild(bg);
-  g.appendChild(accent);
+<section id="search">
+  <h2>7. Search pipeline</h2>
+  <p>A single call to <code>search(query)</code> orchestrates cognitive routing, hybrid retrieval, and graph enhancement.</p>
 
-  // Badge
-  if (badge) {
-    const bw = badge.length * 6.5 + 12;
-    const bx = w - bw - 8;
-    const badgeRect = el('rect', { x: bx, y: 8, width: bw, height: 16, rx: 4, fill: 'rgba(0,0,0,0.3)', stroke: color, 'stroke-width': 0.5 });
-    const badgeTxt = monoTxt(badge, { x: bx + bw / 2, y: 20, 'text-anchor': 'middle', fill: color, 'font-size': 9, 'font-weight': '600' });
-    g.appendChild(badgeRect);
-    g.appendChild(badgeTxt);
+  <div class="ascii-diagram">User Query: "what database do we use"
+         │
+         ▼
+┌──────────────────────────────────────────┐
+│ COGNITIVE ROUTER                         │
+│   classifies query intent (cached):      │
+│     preference | factual | entity_lookup │
+│     | exploratory | temporal             │
+│   sets categories, graph, expand, limit  │
+└──────────────┬───────────────────────────┘
+               │
+     ┌─────────┴─────────┐
+     ▼                   ▼
+┌────────────┐     ┌────────────┐
+│ VECTOR     │     │ KEYWORD    │
+│ SEARCH     │     │ SEARCH     │
+│ embed  →   │     │ tsvector + │
+│ pgvector   │     │ ts_rank    │
+│ cosine     │     │ full-text  │
+└─────┬──────┘     └──────┬─────┘
+      │                   │
+      └─────────┬─────────┘
+                ▼
+┌──────────────────────────────────────────┐
+│ RECIPROCAL RANK FUSION                   │
+│   score = Σ weight / (K + rank)          │
+│   vector weight: 1.0                     │
+│   keyword weight: 0.7                    │
+│   K = 20                                 │
+│   vital facts promoted at ties           │
+└──────────────┬───────────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────────────┐
+│ GRAPH ENHANCEMENT (optional)             │
+│   extract entities from results  →       │
+│   traverse entity graph          →       │
+│   fetch facts for related entities →     │
+│   rerank with related facts              │
+└──────────────────────────────────────────┘</div>
+
+  <p>Search latency is <strong>~30ms</strong> on thousands of facts (p50 31ms, p95 61ms).</p>
+
+  <h3>Query expansion</h3>
+  <p>For exploratory queries, the router triggers expansion:</p>
+  <pre><code>"what tech stack should I use?"
+  → "technology preferences"
+  → "preferred programming languages"
+  → "frameworks to avoid"
+  → "recommended tools and libraries"</code></pre>
+  <p>Each variant is searched independently; results are merged. Surfaces facts that don't literally match the query.</p>
+</section>
+
+<section id="data-model">
+  <h2>8. Data model</h2>
+
+  <div class="ascii-diagram">document  ──1:N──►  chunk      (raw text segments with embeddings)
+document  ──1:N──►  fact       (atomic knowledge with embeddings)
+fact      ──N:N──►  entity     (via fact_entity junction)
+entity    ──N:N──►  entity     (via relation table)
+fact      ──1:N──►  history    (AUDM audit trail)</div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Table</th>
+        <th>Purpose</th>
+        <th>Key columns</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>document</code></td>
+        <td>Source registry</td>
+        <td>source_path (UNIQUE), content_hash, namespace, title</td>
+      </tr>
+      <tr>
+        <td><code>chunk</code></td>
+        <td>Raw text segments</td>
+        <td>content, section_heading, contextual_prefix, embedding</td>
+      </tr>
+      <tr>
+        <td><code>fact</code></td>
+        <td>Atomic knowledge</td>
+        <td>uid, content, category, confidence, importance, embedding, status, valid_from, valid_until, access_count</td>
+      </tr>
+      <tr>
+        <td><code>entity</code></td>
+        <td>People, topics, documents</td>
+        <td>uid, name, entity_type, embedding, mention_count, merged_with</td>
+      </tr>
+      <tr>
+        <td><code>relation</code></td>
+        <td>Entity relationships</td>
+        <td>source_id, target_id, relation_type, mention_count, invalid_at</td>
+      </tr>
+      <tr>
+        <td><code>fact_entity</code></td>
+        <td>Fact &harr; entity junction</td>
+        <td>fact_id, entity_id</td>
+      </tr>
+      <tr>
+        <td><code>history</code></td>
+        <td>AUDM audit trail</td>
+        <td>fact_id, action, old_content, new_content, timestamp</td>
+      </tr>
+      <tr>
+        <td><code>llm_log</code></td>
+        <td>LLM call observability</td>
+        <td>provider, model, caller, input_tokens, output_tokens, cost, duration_ms</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Indexes</h3>
+  <ul>
+    <li><code>HNSW</code> indexes on <code>chunk.embedding</code> and <code>fact.embedding</code> for fast pgvector search</li>
+    <li><code>tsvector</code> + <code>GIN</code> index on content for keyword search</li>
+    <li>Composite indexes on <code>(namespace, status)</code> for filtered scans</li>
+    <li>Unique constraint on <code>(source_id, target_id, relation_type)</code> in <code>relation</code></li>
+  </ul>
+</section>
+
+<section id="providers">
+  <h2>9. LLM provider system</h2>
+  <p>Cortex supports four LLM providers with zero-config auto-detection.</p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Provider</th>
+        <th>API key</th>
+        <th>Cost</th>
+        <th>Default model</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="badge badge-purple">claude-cli</span></td>
+        <td>None (uses Claude Code subscription)</td>
+        <td>Free with subscription</td>
+        <td><code>haiku</code></td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-cyan">openai</span></td>
+        <td><code>OPENAI_API_KEY</code></td>
+        <td>$0.15/M input (gpt-4o-mini)</td>
+        <td><code>gpt-4o-mini</code></td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-amber">anthropic</span></td>
+        <td><code>ANTHROPIC_API_KEY</code></td>
+        <td>$0.80/M input (Haiku)</td>
+        <td><code>claude-haiku-4-5-20251001</code></td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-green">ollama</span></td>
+        <td>None (fully local)</td>
+        <td>Free</td>
+        <td><code>qwen2.5:7b</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Auto-detection waterfall</h3>
+  <div class="decision-tree">
+    <div class="decision"><strong>LLM_PROVIDER set</strong><span class="decision-arrow">&rarr;</span>use it</div>
+    <div class="decision"><strong>ANTHROPIC_API_KEY</strong><span class="decision-arrow">&rarr;</span>anthropic</div>
+    <div class="decision"><strong>OPENAI_API_KEY</strong><span class="decision-arrow">&rarr;</span>openai</div>
+    <div class="decision"><strong>Ollama reachable</strong><span class="decision-arrow">&rarr;</span>ollama</div>
+    <div class="decision"><strong>claude in PATH</strong><span class="decision-arrow">&rarr;</span>claude-cli</div>
+    <div class="decision"><strong>none above</strong><span class="decision-arrow">&rarr;</span>actionable error</div>
+  </div>
+
+  <h3>Per-task provider:model overrides</h3>
+  <pre><code># Use cheap claude-cli for extraction
+LLM_EXTRACTION_MODEL=claude-cli:haiku
+
+# Use Anthropic API for accurate AUDM decisions
+LLM_DECISION_MODEL=anthropic:claude-sonnet-4-6
+
+# Use Ollama for entity matching (no API cost)
+LLM_ENTITY_MODEL=ollama:qwen2.5:7b</code></pre>
+</section>
+
+<section id="integration">
+  <h2>10. Claude Code integration</h2>
+  <p>Three complementary mechanisms make Cortex invisible to Claude while always being used.</p>
+
+  <h3>Hooks (automatic)</h3>
+  <p><code>cortex init</code> writes two hook entries to <code>~/.claude/settings.json</code>:</p>
+
+  <pre><code>{
+  "hooks": {
+    "UserPromptSubmit": [{
+      "hooks": [{
+        "type": "command",
+        "command": "node &lt;cortex&gt;/hooks/user-prompt-submit.js",
+        "timeout": 10,
+        "statusMessage": "Searching memory..."
+      }]
+    }],
+    "PostToolUse": [{
+      "matcher": "Edit|Write|Bash",
+      "hooks": [{
+        "type": "command",
+        "command": "node &lt;cortex&gt;/hooks/post-tool-use.js",
+        "timeout": 10,
+        "async": true
+      }]
+    }]
   }
+}</code></pre>
+
+  <h4>UserPromptSubmit flow</h4>
+  <ol>
+    <li>Claude Code pipes JSON to hook stdin</li>
+    <li>Hook reads <code>prompt</code>, calls <code>search()</code></li>
+    <li>Returns <code>additionalContext</code> with top matching facts</li>
+    <li>Claude sees the context automatically &mdash; no <code>! cortex search</code> needed</li>
+  </ol>
+
+  <h4>PostToolUse flow</h4>
+  <ol>
+    <li>After every Edit/Write/Bash tool call, hook fires async (non-blocking)</li>
+    <li>Filters out noisy commands (ls, cat, grep, npm test, node invocations, etc.)</li>
+    <li>Captures meaningful observations ("Edited src/auth.js", "Ran git push")</li>
+    <li>Stores directly as a fact in the <code>observation</code> category &mdash; no LLM call, fast</li>
+  </ol>
+
+  <h3>Hot context (passive)</h3>
+  <p>Top 20 facts (scored by <code>importance &times; access_count &times; recency</code>) are written to <code>~/.cortex/CLAUDE.md</code>, auto-imported via <code>@import</code> into every Claude session. Refreshed after <code>cortex remember</code> and <code>cortex ingest</code>, or manually via <code>cortex context</code>.</p>
+
+  <h3>MCP tools (on-demand)</h3>
+  <p>When Claude needs more than the injected context, it calls MCP tools directly.</p>
+</section>
+
+<section id="mcp">
+  <h2>11. MCP tools</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Tool</th>
+        <th>Purpose</th>
+        <th>When Claude uses it</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>search</code></td><td>Hybrid search across facts and chunks</td><td>"What do we know about X?"</td></tr>
+      <tr><td><code>search_entity</code></td><td>Find entities by name or type</td><td>"Find all people / topics / documents"</td></tr>
+      <tr><td><code>traverse_graph</code></td><td>Navigate entity relationships (neighbors / path / related)</td><td>"What's connected to X?"</td></tr>
+      <tr><td><code>get_fact_context</code></td><td>Full detail on a fact (provenance, source, entities)</td><td>Drill into a search result</td></tr>
+      <tr><td><code>get_entity_context</code></td><td>Full detail on an entity (relations, facts, mentions)</td><td>Deep dive on a specific entity</td></tr>
+      <tr><td><code>status</code></td><td>Knowledge base statistics</td><td>"How much does Cortex know?"</td></tr>
+      <tr><td><code>ingest</code></td><td>Ingest content via MCP</td><td>"Remember this document"</td></tr>
+    </tbody>
+  </table>
+
+  <p>All tools use <code>textResponse</code> format with truncation for token efficiency. <code>search</code> supports a <code>format="compact"</code> mode that groups facts by category.</p>
+</section>
+
+<section id="files">
+  <h2>12. File layout</h2>
+
+  <pre><code>~/.cortex/
+├── .env              # Provider config, API keys, namespace
+├── db/               # PGlite embedded database (auto-created)
+└── CLAUDE.md         # Instructions + hot-context snapshot
+
+~/.claude/
+├── CLAUDE.md         # Contains @import line to ~/.cortex/CLAUDE.md
+└── settings.json     # UserPromptSubmit + PostToolUse hooks</code></pre>
+
+  <p>Everything lives in <code>~/.cortex/</code>. No files in your project directory. No cloud. No external services (except Ollama for embeddings if chosen).</p>
+
+  <h3>Environment variables</h3>
+  <table>
+    <thead>
+      <tr><th>Variable</th><th>Purpose</th><th>Default</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>LLM_PROVIDER</code></td><td>Explicit LLM provider</td><td><em>(auto-detect)</em></td></tr>
+      <tr><td><code>EMBEDDING_PROVIDER</code></td><td>Explicit embedding provider</td><td><em>(auto-detect)</em></td></tr>
+      <tr><td><code>LLM_EXTRACTION_MODEL</code></td><td>Per-task model for fact extraction</td><td><em>(provider default)</em></td></tr>
+      <tr><td><code>LLM_DECISION_MODEL</code></td><td>Per-task model for AUDM decisions</td><td><em>(provider default)</em></td></tr>
+      <tr><td><code>LLM_ENTITY_MODEL</code></td><td>Per-task model for entity resolution</td><td><em>(provider default)</em></td></tr>
+      <tr><td><code>DEFAULT_NAMESPACE</code></td><td>Namespace for new facts</td><td><code>default</code></td></tr>
+      <tr><td><code>MEMORY_SKIP_THRESHOLD</code></td><td>AUDM similarity &rarr; SKIP</td><td><code>0.88</code></td></tr>
+      <tr><td><code>MEMORY_AMBIGUOUS_THRESHOLD</code></td><td>AUDM similarity &rarr; ask LLM</td><td><code>0.65</code></td></tr>
+      <tr><td><code>CORTEX_DB_TYPE</code></td><td><code>pglite</code> or <code>postgres</code></td><td><code>pglite</code></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer>
+  Cortex &mdash; local-first persistent memory for AI coding assistants.<br>
+  Built with Node.js &middot; PGlite &middot; pgvector &middot; Ollama &middot; Knex.js &middot; MCP SDK
+</footer>
 
-  // Label
-  const labelY = sublabel ? h / 2 - 6 : h / 2 + 5;
-  const labelEl = txt(label, {
-    x: w / 2, y: labelY,
-    'text-anchor': 'middle',
-    fill: C.text,
-    'font-size': 13,
-    'font-weight': '600',
-  });
-  g.appendChild(labelEl);
-
-  if (sublabel) {
-    const subEl = txt(sublabel, {
-      x: w / 2, y: labelY + 18,
-      'text-anchor': 'middle',
-      fill: C.textMuted,
-      'font-size': 11,
-    });
-    g.appendChild(subEl);
-  }
-
-  if (filePath) {
-    const fpEl = monoTxt(filePath, {
-      x: w / 2, y: h - 9,
-      'text-anchor': 'middle',
-      fill: color,
-      'font-size': 9,
-      opacity: 0.8,
-    });
-    g.appendChild(fpEl);
-  }
-
-  // Hover
-  g.addEventListener('mouseenter', () => {
-    bg.setAttribute('filter', `drop-shadow(0 0 8px ${color})`);
-    bg.setAttribute('stroke-width', 2);
-    bg.setAttribute('stroke-opacity', 1);
-  });
-  g.addEventListener('mouseleave', () => {
-    bg.removeAttribute('filter');
-    bg.setAttribute('stroke-width', 1.5);
-  });
-
-  return g;
-}
-
-// Draw node with multi-line label
-function drawNodeML(opts) {
-  const { id, x, y, w, h, color, dim, lines, filePath, details, badge } = opts;
-  const g = el('g', {
-    class: 'node',
-    'data-node-id': id,
-    'data-details': JSON.stringify(details || {}),
-    style: 'cursor:pointer',
-    transform: `translate(${x},${y})`,
-  });
-
-  const bg = el('rect', {
-    width: w, height: h, rx: 8, ry: 8,
-    fill: dim, stroke: color, 'stroke-width': 1.5, class: 'node-rect',
-  });
-  const accent = el('rect', { x: 12, y: 0, width: w - 24, height: 2, rx: 1, fill: color, opacity: 0.7 });
-  g.appendChild(bg);
-  g.appendChild(accent);
-
-  if (badge) {
-    const bw = badge.length * 6.5 + 12;
-    const bx = w - bw - 8;
-    const badgeRect = el('rect', { x: bx, y: 8, width: bw, height: 16, rx: 4, fill: 'rgba(0,0,0,0.3)', stroke: color, 'stroke-width': 0.5 });
-    const badgeTxt = monoTxt(badge, { x: bx + bw / 2, y: 20, 'text-anchor': 'middle', fill: color, 'font-size': 9, 'font-weight': '600' });
-    g.appendChild(badgeRect);
-    g.appendChild(badgeTxt);
-  }
-
-  const totalH = lines.length * 16;
-  let startY = (h - totalH) / 2 + 13;
-  lines.forEach((line, i) => {
-    const isFirst = i === 0;
-    const t = txt(line, {
-      x: w / 2, y: startY + i * 16,
-      'text-anchor': 'middle',
-      fill: isFirst ? C.text : C.textMuted,
-      'font-size': isFirst ? 13 : 11,
-      'font-weight': isFirst ? '600' : '400',
-    });
-    g.appendChild(t);
-  });
-
-  if (filePath) {
-    const fpEl = monoTxt(filePath, {
-      x: w / 2, y: h - 9,
-      'text-anchor': 'middle',
-      fill: color, 'font-size': 9, opacity: 0.8,
-    });
-    g.appendChild(fpEl);
-  }
-
-  g.addEventListener('mouseenter', () => {
-    bg.setAttribute('filter', `drop-shadow(0 0 8px ${color})`);
-    bg.setAttribute('stroke-width', 2);
-  });
-  g.addEventListener('mouseleave', () => {
-    bg.removeAttribute('filter');
-    bg.setAttribute('stroke-width', 1.5);
-  });
-
-  return g;
-}
-
-// Arrow path between two points
-function arrow(x1, y1, x2, y2, color, animated = true, markerUrl = 'arrow-ov', dashed = false) {
-  const dx = x2 - x1, dy = y2 - y1;
-  const len = Math.sqrt(dx * dx + dy * dy);
-  const ux = dx / len, uy = dy / len;
-  const ex = x2 - ux * 8, ey = y2 - uy * 8;
-
-  const p = el('path', {
-    d: `M${x1},${y1} L${ex},${ey}`,
-    fill: 'none',
-    stroke: color,
-    'stroke-width': 1.5,
-    'stroke-opacity': 0.6,
-    'marker-end': `url(#${markerUrl})`,
-  });
-  if (animated) {
-    p.setAttribute('stroke-dasharray', '6 6');
-    p.setAttribute('class', 'flow-edge');
-    p.style.animation = 'dashflow 0.7s linear infinite';
-  } else if (dashed) {
-    p.setAttribute('stroke-dasharray', '4 4');
-  }
-  return p;
-}
-
-// Curved path
-function curvedArrow(x1, y1, x2, y2, cx, cy, color, markerUrl = 'arrow-ov', animated = true) {
-  const p = el('path', {
-    d: `M${x1},${y1} Q${cx},${cy} ${x2},${y2}`,
-    fill: 'none',
-    stroke: color,
-    'stroke-width': 1.5,
-    'stroke-opacity': 0.6,
-    'marker-end': `url(#${markerUrl})`,
-  });
-  if (animated) {
-    p.setAttribute('stroke-dasharray', '6 6');
-    p.setAttribute('class', 'flow-edge');
-  }
-  return p;
-}
-
-// Label on edge
-function edgeLabel(x, y, text, color) {
-  const g = el('g');
-  const tw = text.length * 6 + 10;
-  g.appendChild(el('rect', {
-    x: x - tw / 2, y: y - 9, width: tw, height: 14,
-    rx: 3, fill: C.surface, stroke: C.border, 'stroke-width': 0.5,
-  }));
-  g.appendChild(monoTxt(text, {
-    x, y: y + 1, 'text-anchor': 'middle',
-    fill: color, 'font-size': 9,
-  }));
-  return g;
-}
-
-// Section label (floating text)
-function sectionLabel(x, y, text, color) {
-  const g = el('g');
-  g.appendChild(txt(text, {
-    x, y, 'text-anchor': 'middle',
-    fill: color, 'font-size': 10, 'font-weight': '700',
-    'letter-spacing': '1',
-    opacity: 0.6,
-    'font-family': "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
-  }));
-  return g;
-}
-
-// Divider line
-function divider(x1, y1, x2, y2) {
-  return el('line', {
-    x1, y1, x2, y2,
-    stroke: C.border, 'stroke-width': 1, 'stroke-dasharray': '4 4', opacity: 0.6,
-  });
-}
-
-// ── NODE CLICK → PANEL ────────────────────────────────────────────────────
-document.addEventListener('click', e => {
-  const node = e.target.closest('.node');
-  if (node) {
-    e.stopPropagation();
-    openPanel(node);
-    return;
-  }
-  const panel = e.target.closest('#side-panel');
-  if (!panel) closePanel();
-});
-
-document.getElementById('panel-close').addEventListener('click', closePanel);
-
-function openPanel(node) {
-  let details = {};
-  try { details = JSON.parse(node.getAttribute('data-details') || '{}'); } catch {}
-
-  const { title = 'Node', description = '', file = '', badge = '', props = {}, connections = [] } = details;
-  const color = details.color || C.cognitive;
-
-  document.getElementById('panel-badge').textContent = badge || 'Component';
-  document.getElementById('panel-badge').style.cssText = `background:${color}22;color:${color};border:1px solid ${color}44`;
-  document.getElementById('panel-title').textContent = title;
-  document.getElementById('panel-desc').textContent = description;
-
-  const fileWrap = document.getElementById('panel-file-wrap');
-  if (file) {
-    document.getElementById('panel-file').textContent = file;
-    fileWrap.style.display = 'block';
-  } else {
-    fileWrap.style.display = 'none';
-  }
-
-  const propsWrap = document.getElementById('panel-props-wrap');
-  const propsCont = document.getElementById('panel-props');
-  const propEntries = Object.entries(props);
-  if (propEntries.length) {
-    propsCont.innerHTML = '';
-    propEntries.forEach(([k, v]) => {
-      const row = document.createElement('div');
-      row.className = 'prop-row';
-      row.innerHTML = `<span class="prop-key">${k}</span><span class="prop-val">${v}</span>`;
-      propsCont.appendChild(row);
-    });
-    propsWrap.style.display = 'block';
-  } else {
-    propsWrap.style.display = 'none';
-  }
-
-  const connWrap = document.getElementById('panel-conn-wrap');
-  const connCont = document.getElementById('panel-conns');
-  if (connections.length) {
-    connCont.innerHTML = '';
-    connections.forEach(c => {
-      const row = document.createElement('div');
-      row.className = 'conn-row';
-      row.innerHTML = `<span class="conn-arrow">${c.dir === 'in' ? '←' : '→'}</span><span class="conn-label">${c.label}</span>`;
-      connCont.appendChild(row);
-    });
-    connWrap.style.display = 'block';
-  } else {
-    connWrap.style.display = 'none';
-  }
-
-  document.getElementById('side-panel').classList.add('open');
-  panelOpen = true;
-}
-
-function closePanel() {
-  document.getElementById('side-panel').classList.remove('open');
-  panelOpen = false;
-}
-
-// ── PAN + ZOOM ─────────────────────────────────────────────────────────────
-function getTransform(view) {
-  const s = state[view];
-  return `translate(${s.tx},${s.ty}) scale(${s.scale})`;
-}
-
-function applyTransform(view) {
-  const dg = document.getElementById(`dg-${view}`);
-  if (dg) dg.setAttribute('transform', getTransform(view));
-  const pct = Math.round(state[view].scale * 100);
-  const zpEl = document.getElementById(`zp-${view}`);
-  if (zpEl) zpEl.textContent = pct + '%';
-}
-
-function zoomIn(view) { zoomBy(view, 1.25, null, null); }
-function zoomOut(view) { zoomBy(view, 0.8, null, null); }
-
-function zoomBy(view, factor, cx, cy) {
-  const s = state[view];
-  const newScale = Math.min(4, Math.max(0.25, s.scale * factor));
-  const svgEl = document.getElementById(`svg-${view}`);
-  const rect = svgEl.getBoundingClientRect();
-  const pcx = cx !== null ? cx : rect.width / 2;
-  const pcy = cy !== null ? cy : rect.height / 2;
-  const wx = (pcx - s.tx) / s.scale;
-  const wy = (pcy - s.ty) / s.scale;
-  s.tx = pcx - wx * newScale;
-  s.ty = pcy - wy * newScale;
-  s.scale = newScale;
-  applyTransform(view);
-}
-
-function zoomFit(view) {
-  const s = state[view];
-  const svgEl = document.getElementById(`svg-${view}`);
-  const rect = svgEl.getBoundingClientRect();
-  const pad = 40;
-  const scaleX = (rect.width - pad * 2) / s.vw;
-  const scaleY = (rect.height - pad * 2) / s.vh;
-  s.scale = Math.min(scaleX, scaleY, 1);
-  s.tx = (rect.width - s.vw * s.scale) / 2;
-  s.ty = (rect.height - s.vh * s.scale) / 2;
-  applyTransform(view);
-}
-
-// Setup pan+zoom for each view
-['overview', 'ingestion', 'search', 'storage'].forEach(view => {
-  const svg = document.getElementById(`svg-${view}`);
-  const s = state[view];
-
-  svg.addEventListener('wheel', e => {
-    e.preventDefault();
-    const rect = svg.getBoundingClientRect();
-    const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    zoomBy(view, factor, e.clientX - rect.left, e.clientY - rect.top);
-  }, { passive: false });
-
-  svg.addEventListener('mousedown', e => {
-    if (e.target.closest('.node')) return;
-    s.dragging = true;
-    s.lastX = e.clientX;
-    s.lastY = e.clientY;
-    svg.classList.add('dragging');
-  });
-
-  svg.addEventListener('mousemove', e => {
-    if (!s.dragging) return;
-    s.tx += e.clientX - s.lastX;
-    s.ty += e.clientY - s.lastY;
-    s.lastX = e.clientX;
-    s.lastY = e.clientY;
-    applyTransform(view);
-  });
-
-  svg.addEventListener('mouseup', () => { s.dragging = false; svg.classList.remove('dragging'); });
-  svg.addEventListener('mouseleave', () => { s.dragging = false; svg.classList.remove('dragging'); });
-});
-
-// ── TABS ───────────────────────────────────────────────────────────────────
-document.getElementById('tabs').addEventListener('click', e => {
-  const tab = e.target.closest('.tab');
-  if (!tab) return;
-  const view = tab.dataset.view;
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
-  document.querySelectorAll('.canvas-view').forEach(v => v.classList.toggle('active', v.id === `view-${view}`));
-  activeView = view;
-  closePanel();
-  // Auto-fit on first switch
-  setTimeout(() => zoomFit(view), 10);
-});
-
-// ════════════════════════════════════════════════════════════════════════════
-//  DIAGRAM RENDERING
-// ════════════════════════════════════════════════════════════════════════════
-
-// ── OVERVIEW ──────────────────────────────────────────────────────────────
-function buildOverview() {
-  const g = document.getElementById('dg-overview');
-
-  // Background grid
-  const defs = document.querySelector('#svg-overview defs');
-  const gridPat = el('pattern', { id: 'grid-ov', width: 40, height: 40, patternUnits: 'userSpaceOnUse' });
-  gridPat.appendChild(el('path', { d: 'M40 0 L0 0 0 40', fill: 'none', stroke: '#1e2d40', 'stroke-width': 0.5, opacity: 0.4 }));
-  defs.appendChild(gridPat);
-  g.appendChild(el('rect', { width: 1800, height: 1100, fill: 'url(#grid-ov)', opacity: 0.5 }));
-
-  // Section labels
-  g.appendChild(sectionLabel(900, 36, 'CLAUDE CODE SESSION', C.fs));
-  g.appendChild(sectionLabel(900, 235, 'INTERFACE LAYER', C.interface));
-  g.appendChild(sectionLabel(900, 435, 'COGNITIVE LAYER', C.cognitive));
-  g.appendChild(sectionLabel(340, 635, 'INGESTION', C.ingestion));
-  g.appendChild(sectionLabel(1460, 635, 'SEARCH', C.search));
-  g.appendChild(sectionLabel(900, 880, 'INFRASTRUCTURE', C.textDim));
-
-  // Horizontal dividers
-  g.appendChild(divider(80, 60, 1720, 60));
-  g.appendChild(divider(80, 255, 1720, 255));
-  g.appendChild(divider(80, 455, 1720, 455));
-  g.appendChild(divider(80, 830, 1720, 830));
-
-  // ── Claude Code Session ──
-  const claude = drawNode({
-    id: 'claude-session',
-    x: 700, y: 70, w: 200, h: 55,
-    color: C.fs, dim: C.fs_dim,
-    label: 'Claude Code Session',
-    sublabel: 'AI Agent Runtime',
-    details: {
-      title: 'Claude Code Session', badge: 'RUNTIME', color: C.fs,
-      description: 'The AI agent runtime that drives all cortex operations. Claude reads from ~/.claude/CLAUDE.md at session start, pulling in the user\'s cortex instructions and hot context snapshot.',
-      props: { Runtime: 'Claude claude-sonnet-4-6', Transport: 'stdio / MCP', 'Config load': 'Session start' },
-      connections: [
-        { dir: 'out', label: '~/.claude/CLAUDE.md (reads)' },
-        { dir: 'out', label: 'CLI cortex commands' },
-        { dir: 'out', label: 'MCP Server (7 tools)' },
-      ]
-    }
-  });
-  g.appendChild(claude);
-
-  const claudeMd = drawNode({
-    id: 'claude-md',
-    x: 480, y: 130, w: 170, h: 50,
-    color: C.fs, dim: C.fs_dim,
-    label: '~/.claude/CLAUDE.md',
-    sublabel: 'Global instructions',
-    details: {
-      title: '~/.claude/CLAUDE.md', badge: 'CONFIG', color: C.fs,
-      description: 'Global Claude Code configuration. Contains memory commands (cortex search / cortex remember) and delegates to per-project CLAUDE.md files.',
-      props: { Location: '~/.claude/', 'Load time': 'Session start', Format: 'Markdown' },
-      connections: [{ dir: 'in', label: 'Claude reads at startup' }]
-    }
-  });
-  g.appendChild(claudeMd);
-
-  const cortexMd = drawNode({
-    id: 'cortex-md',
-    x: 680, y: 145, w: 180, h: 50,
-    color: C.fs, dim: C.fs_dim,
-    label: '~/.cortex/CLAUDE.md',
-    sublabel: 'Instructions + Hot Context',
-    details: {
-      title: '~/.cortex/CLAUDE.md', badge: 'HOT CONTEXT', color: C.fs,
-      description: 'Per-project cortex config and hot context snapshot. Generated/updated by updateContextSnapshot() after each ingestion. Contains top facts, recent entities, and cortex instructions loaded into Claude\'s context window.',
-      props: { Location: '~/.cortex/', 'Updated by': 'updateContextSnapshot()', 'Contains': 'Hot facts, entities, instructions' },
-      connections: [
-        { dir: 'in', label: 'Claude reads at startup' },
-        { dir: 'in', label: 'Updated after ingestion' },
-      ]
-    }
-  });
-  g.appendChild(cortexMd);
-
-  // ── Interface Layer ──
-  const cli = drawNode({
-    id: 'cli',
-    x: 220, y: 270, w: 190, h: 65,
-    color: C.interface, dim: C.interface_dim,
-    label: 'CLI',
-    sublabel: 'cortex remember/ingest/search',
-    details: {
-      title: 'CLI Tool', badge: 'INTERFACE', color: C.interface,
-      description: 'Command-line interface for all cortex operations. Supports ingest (files, URLs, globs), search, status, migrate, and API key management.',
-      file: 'src/cli.js',
-      props: { Commands: 'ingest, search, status, migrate, keys', Transport: 'subprocess', 'Entry point': 'cortex' },
-      connections: [
-        { dir: 'out', label: 'Input Classifier (cognitive)' },
-        { dir: 'in', label: 'User terminal' }
-      ]
-    }
-  });
-  g.appendChild(cli);
-
-  const restApi = drawNode({
-    id: 'rest-api',
-    x: 680, y: 270, w: 190, h: 65,
-    color: C.interface, dim: C.interface_dim,
-    label: 'REST API',
-    sublabel: 'Fastify :4000',
-    details: {
-      title: 'REST API (Fastify)', badge: 'INTERFACE', color: C.interface,
-      description: 'HTTP REST API built on Fastify. Provides endpoints for ingestion, search, entity graph, facts, documents, and status. API key authentication via HMAC-SHA256.',
-      file: 'src/app.js',
-      props: { Port: '4000', Framework: 'Fastify', Auth: 'API key (HMAC-SHA256)', Routes: '/api/ingest, /api/search, /api/entities, /api/facts, /api/documents, /api/status' },
-      connections: [
-        { dir: 'out', label: 'Cognitive layer' },
-        { dir: 'in', label: 'HTTP clients' }
-      ]
-    }
-  });
-  g.appendChild(restApi);
-
-  const mcpServer = drawNode({
-    id: 'mcp-server',
-    x: 1140, y: 270, w: 200, h: 65,
-    color: C.interface, dim: C.interface_dim,
-    label: 'MCP Server',
-    sublabel: '7 tools — stdio transport',
-    details: {
-      title: 'MCP Server', badge: 'INTERFACE', color: C.interface,
-      description: 'Model Context Protocol server exposing 7 tools to AI agents. Uses stdio transport. Thin wrapper around domain services.',
-      file: 'src/mcp/server.js',
-      props: {
-        Transport: 'stdio',
-        Tools: 'search, search-entity, traverse-graph, get-fact-context, get-entity-context, status, ingest',
-        'Tool count': '7',
-      },
-      connections: [
-        { dir: 'out', label: 'Cognitive layer' },
-        { dir: 'in', label: 'Claude Code MCP client' }
-      ]
-    }
-  });
-  g.appendChild(mcpServer);
-
-  // ── Cognitive Layer ──
-  const inputClassifier = drawNode({
-    id: 'input-classifier',
-    x: 420, y: 470, w: 220, h: 70,
-    color: C.cognitive, dim: C.cognitive_dim,
-    label: 'Input Classifier',
-    sublabel: 'thought / knowledge / noise',
-    details: {
-      title: 'Input Classifier', badge: 'COGNITIVE', color: C.cognitive,
-      description: 'Classifies incoming content into thought, knowledge, or noise. Thoughts go directly to AUDM store. Knowledge goes through the full ingestion pipeline. Noise is discarded.',
-      file: 'src/memory/cognitive/input-classifier.js',
-      props: { Classes: 'thought, knowledge, noise', 'Thought path': 'AUDM direct store', 'Knowledge path': 'Full pipeline', 'Noise path': 'Discard' },
-      connections: [
-        { dir: 'in', label: 'CLI / REST API / MCP' },
-        { dir: 'out', label: 'Ingestion Pipeline (knowledge)' },
-        { dir: 'out', label: 'AUDM direct (thought)' },
-        { dir: 'out', label: 'Discard (noise)' }
-      ]
-    }
-  });
-  g.appendChild(inputClassifier);
-
-  const queryRouter = drawNode({
-    id: 'query-router',
-    x: 1080, y: 470, w: 220, h: 70,
-    color: C.cognitive, dim: C.cognitive_dim,
-    label: 'Query Router',
-    sublabel: '5 intents — LRU cache 200',
-    details: {
-      title: 'Query Router', badge: 'COGNITIVE', color: C.cognitive,
-      description: 'Classifies search queries into 5 intent types and routes to appropriate search strategy. Uses LRU cache with 200-entry capacity and 10-minute TTL for repeated queries.',
-      file: 'src/memory/cognitive/query-router.js',
-      props: {
-        Intents: 'entity_lookup, fact_lookup, temporal, comparison, exploratory',
-        'Cache size': '200 entries (LRU)',
-        'Cache TTL': '10 minutes',
-      },
-      connections: [
-        { dir: 'in', label: 'REST API / MCP search' },
-        { dir: 'out', label: 'Search Engine (5 strategies)' }
-      ]
-    }
-  });
-  g.appendChild(queryRouter);
-
-  // ── Processing ──
-  const ingestionPipeline = drawNode({
-    id: 'ingestion-pipeline',
-    x: 140, y: 580, w: 220, h: 70,
-    color: C.ingestion, dim: C.ingestion_dim,
-    label: 'Ingestion Pipeline',
-    sublabel: 'parse → chunk → embed → extract',
-    details: {
-      title: 'Ingestion Pipeline', badge: 'INGESTION', color: C.ingestion,
-      description: 'Orchestrates the full document ingestion flow: auto-detect format, parse into sections, split into chunks, contextualize, embed, store chunks, extract facts via LLM, deduplicate via AUDM, link entities.',
-      file: 'src/ingestion/pipeline.js',
-      props: {
-        'Input types': 'markdown, text, html, code, json',
-        'Sources': 'file, URL, raw content',
-        'Parallelism': 'CONCURRENCY=5 for facts',
-        'Outputs': 'chunks, facts, entities, relations',
-      },
-      connections: [
-        { dir: 'in', label: 'Input Classifier' },
-        { dir: 'out', label: 'LLM Provider (contextualize + extract)' },
-        { dir: 'out', label: 'Ollama Embedder' },
-        { dir: 'out', label: 'PGlite DB' }
-      ]
-    }
-  });
-  g.appendChild(ingestionPipeline);
-
-  const searchEngine = drawNode({
-    id: 'search-engine',
-    x: 1340, y: 580, w: 220, h: 70,
-    color: C.search, dim: C.search_dim,
-    label: 'Search Engine',
-    sublabel: 'vector + keyword + graph',
-    details: {
-      title: 'Search Engine', badge: 'SEARCH', color: C.search,
-      description: 'Hybrid search combining pgvector cosine similarity, tsvector full-text search, and entity graph enhancement. RRF merge with vector:1.0× and keyword:0.7× weights.',
-      file: 'src/memory/search/',
-      props: {
-        'Vector': 'pgvector cosine + HNSW',
-        'Keyword': 'tsvector + GIN index',
-        'Merge': 'RRF (Reciprocal Rank Fusion)',
-        'RRF weights': 'vector 1.0×, keyword 0.7×',
-        'Graph': 'Entity enhancement (LLM)',
-        K: '20 results',
-      },
-      connections: [
-        { dir: 'in', label: 'Query Router' },
-        { dir: 'out', label: 'PGlite DB (vector + keyword)' },
-        { dir: 'out', label: 'LLM (graph enhancement, exploratory)' }
-      ]
-    }
-  });
-  g.appendChild(searchEngine);
-
-  // ── Infrastructure ──
-  const llmProvider = drawNode({
-    id: 'llm-provider',
-    x: 250, y: 890, w: 220, h: 70,
-    color: C.llm, dim: C.llm_dim,
-    label: 'LLM Provider',
-    sublabel: 'OpenAI / Anthropic / Ollama',
-    details: {
-      title: 'LLM Provider', badge: 'LLM', color: C.llm,
-      description: 'Abstracted LLM interface supporting multiple providers. Used for fact extraction, AUDM deduplication decisions, entity verification, query expansion, and graph enhancement.',
-      file: 'src/lib/llm.js',
-      props: {
-        Providers: 'OpenAI, Anthropic, Ollama',
-        'Extraction model': 'LLM_EXTRACTION_MODEL (default: claude-haiku-4-5)',
-        'Decision model': 'LLM_DECISION_MODEL (default: claude-sonnet-4-6)',
-        'Entity model': 'LLM_ENTITY_MODEL (default: claude-haiku-4-5)',
-        Logging: 'llm_log table (tokens, cost, duration)',
-      },
-      connections: [
-        { dir: 'in', label: 'Ingestion Pipeline (extract + contextualize)' },
-        { dir: 'in', label: 'Search Engine (expand + enhance)' },
-        { dir: 'in', label: 'AUDM (dedup decisions)' }
-      ]
-    }
-  });
-  g.appendChild(llmProvider);
-
-  const ollamaEmbedder = drawNode({
-    id: 'ollama-embedder',
-    x: 750, y: 890, w: 220, h: 70,
-    color: C.embedder, dim: C.embedder_dim,
-    label: 'Ollama Embedder',
-    sublabel: 'nomic-embed-text 768d',
-    details: {
-      title: 'Ollama Embedder', badge: 'EMBEDDER', color: C.embedder,
-      description: 'Local embedding service via Ollama. Generates 768-dimensional embeddings using nomic-embed-text model. Used for chunk embedding, fact embedding, and entity similarity matching.',
-      file: 'src/ingestion/embedder.js',
-      props: {
-        Model: 'nomic-embed-text',
-        Dimensions: '768',
-        Provider: 'Ollama (local)',
-        'Swappable to': 'OpenAI text-embedding-*',
-        Batching: 'Yes',
-      },
-      connections: [
-        { dir: 'in', label: 'Ingestion Pipeline' },
-        { dir: 'in', label: 'AUDM (fact similarity)' },
-        { dir: 'in', label: 'Entity Resolver (embedding match)' }
-      ]
-    }
-  });
-  g.appendChild(ollamaEmbedder);
-
-  const pglite = drawNode({
-    id: 'pglite-db',
-    x: 1260, y: 890, w: 220, h: 70,
-    color: C.storage, dim: C.storage_dim,
-    label: 'PGlite DB',
-    sublabel: '~/.cortex/db — pgvector',
-    details: {
-      title: 'PGlite Database', badge: 'STORAGE', color: C.storage,
-      description: 'Embedded PostgreSQL with pgvector extension. Stores all documents, chunks, facts, entities, relations, and metadata. HNSW indexes for vector search, GIN indexes for full-text.',
-      file: 'src/db/cortex.js',
-      props: {
-        Engine: 'PGlite (PostgreSQL embedded)',
-        Location: '~/.cortex/db',
-        Extension: 'pgvector',
-        'Vector index': 'HNSW (cosine)',
-        'Text index': 'GIN (tsvector)',
-        Tables: '9 tables',
-      },
-      connections: [
-        { dir: 'in', label: 'Ingestion Pipeline (write)' },
-        { dir: 'in', label: 'Search Engine (read)' },
-        { dir: 'out', label: '~/.cortex/CLAUDE.md (hot context)' }
-      ]
-    }
-  });
-  g.appendChild(pglite);
-
-  // ── Edges ──
-  // Claude → config files
-  g.appendChild(arrow(790, 125, 660, 145, C.fs, false, 'arrow-ov-slate', true));
-  g.appendChild(arrow(820, 125, 810, 145, C.fs, false, 'arrow-ov-slate', true));
-
-  // Claude → interfaces
-  g.appendChild(curvedArrow(770, 125, 360, 270, 500, 200, C.interface, 'arrow-ov-indigo', true));
-  g.appendChild(arrow(790, 125, 780, 270, C.interface, true, 'arrow-ov-indigo'));
-  g.appendChild(curvedArrow(810, 125, 1200, 270, 1000, 195, C.interface, 'arrow-ov-indigo', true));
-
-  // Interfaces → cognitive
-  g.appendChild(curvedArrow(360, 335, 520, 470, 440, 410, C.cognitive, 'arrow-ov-cyan', true));
-  g.appendChild(arrow(780, 335, 660, 470, C.cognitive, true, 'arrow-ov-cyan'));
-  g.appendChild(curvedArrow(1200, 335, 1140, 470, 1170, 415, C.cognitive, 'arrow-ov-cyan', true));
-
-  // Cognitive → processing
-  g.appendChild(arrow(530, 540, 380, 580, C.ingestion, true, 'arrow-ov-orange'));
-  g.appendChild(arrow(1140, 540, 1400, 580, C.search, true, 'arrow-ov-emerald'));
-
-  // Ingestion → infra
-  g.appendChild(arrow(260, 650, 370, 890, C.llm, true, 'arrow-ov-indigo'));
-  g.appendChild(arrow(290, 650, 870, 890, C.embedder, true, 'arrow-ov-indigo'));
-  g.appendChild(arrow(300, 650, 1320, 890, C.storage, true, 'arrow-ov-pink'));
-
-  // Search → infra
-  g.appendChild(arrow(1450, 650, 370, 890, C.llm, true, 'arrow-ov-indigo'));
-  g.appendChild(arrow(1450, 650, 960, 890, C.embedder, true, 'arrow-ov-indigo'));
-  g.appendChild(arrow(1450, 650, 1350, 890, C.storage, true, 'arrow-ov-pink'));
-
-  // PGlite → cortexMd feedback
-  g.appendChild(curvedArrow(1380, 890, 860, 195, 1600, 500, C.fs, 'arrow-ov-slate', false));
-}
-
-// ── INGESTION ─────────────────────────────────────────────────────────────
-function buildIngestion() {
-  const g = document.getElementById('dg-ingestion');
-
-  const defs = document.querySelector('#svg-ingestion defs');
-  const gridPat = el('pattern', { id: 'grid-ing', width: 40, height: 40, patternUnits: 'userSpaceOnUse' });
-  gridPat.appendChild(el('path', { d: 'M40 0 L0 0 0 40', fill: 'none', stroke: '#1e2d40', 'stroke-width': 0.5, opacity: 0.4 }));
-  defs.appendChild(gridPat);
-  g.appendChild(el('rect', { width: 1800, height: 1700, fill: 'url(#grid-ing)', opacity: 0.5 }));
-
-  // LLM sidebar
-  const llmSidebar = drawNode({
-    id: 'ing-llm',
-    x: 1380, y: 600, w: 200, h: 450,
-    color: C.llm, dim: C.llm_dim,
-    label: 'LLM Provider',
-    sublabel: 'Claude Haiku / GPT-4o-mini',
-    details: {
-      title: 'LLM Provider', badge: 'LLM', color: C.llm,
-      description: 'Called at multiple stages: context prefix generation (1 call/chunk), fact extraction (1 call/chunk), AUDM deduplication decisions, and entity fuzzy/embedding verification.',
-      file: 'src/lib/llm.js',
-      props: {
-        'Contextualizer': '1 call/chunk',
-        'Fact extractor': '1 call/chunk',
-        'AUDM decision': '1 call/ambiguous fact',
-        'Entity verify': '1 call/candidate',
-      }
-    }
-  });
-  // Draw sidebar as a tall box
-  {
-    const bg = el('rect', { x: 1380, y: 600, width: 200, height: 450, rx: 8, fill: C.llm_dim, stroke: C.llm, 'stroke-width': 1.5, 'stroke-dasharray': '6 4' });
-    g.appendChild(bg);
-    g.appendChild(txt('LLM Provider', { x: 1480, y: 630, 'text-anchor': 'middle', fill: C.text, 'font-size': 13, 'font-weight': '600' }));
-    g.appendChild(txt('Claude Haiku', { x: 1480, y: 648, 'text-anchor': 'middle', fill: C.textMuted, 'font-size': 11 }));
-    // LLM call bullets
-    const calls = [
-      '① contextualizer',
-      '② fact extractor',
-      '③ AUDM decision',
-      '④ entity verify',
-    ];
-    calls.forEach((c, i) => {
-      g.appendChild(monoTxt(c, { x: 1390, y: 690 + i * 32, fill: C.llm, 'font-size': 10 }));
-    });
-    g.appendChild(monoTxt('src/lib/llm.js', { x: 1480, y: 1038, 'text-anchor': 'middle', fill: C.llm, 'font-size': 9, opacity: 0.8 }));
-  }
-
-  // Input
-  const input = drawNode({
-    id: 'ing-input', x: 650, y: 60, w: 220, h: 55,
-    color: C.fs, dim: C.fs_dim,
-    label: 'Input', sublabel: 'content / URL / file path',
-    details: {
-      title: 'Input', badge: 'INPUT', color: C.fs,
-      description: 'Raw input to the ingestion system. Can be direct string content, an HTTP URL to fetch, or a local file path (including glob patterns).',
-      file: 'src/ingestion/sources/',
-      props: { Types: 'raw string, URL, file path, glob', Sources: 'src/ingestion/sources/raw.js, url.js, file.js' },
-    }
-  });
-  g.appendChild(input);
-
-  // Input Classifier
-  const classifier = drawNodeML({
-    id: 'ing-classifier', x: 600, y: 155, w: 320, h: 70,
-    color: C.cognitive, dim: C.cognitive_dim,
-    lines: ['Input Classifier', 'Routes: noise → discard | thought → AUDM | knowledge → pipeline'],
-    filePath: 'src/memory/cognitive/input-classifier.js',
-    details: {
-      title: 'Input Classifier', badge: 'COGNITIVE', color: C.cognitive,
-      description: 'Classifies input content type and routes accordingly. Uses heuristics + LLM classification. Three output routes: noise (discard), thought (direct AUDM store), knowledge/document (full pipeline).',
-      file: 'src/memory/cognitive/input-classifier.js',
-      props: { Classes: 'noise, thought, knowledge', 'Noise': 'Discard immediately', 'Thought': 'Direct to AUDM', 'Knowledge': 'Full ingestion pipeline' },
-    }
-  });
-  g.appendChild(classifier);
-
-  // Noise branch
-  const discarded = drawNode({
-    id: 'ing-discard', x: 100, y: 210, w: 130, h: 45,
-    color: C.red, dim: C.red_dim,
-    label: 'Discarded', sublabel: 'noise filtered',
-    details: { title: 'Discarded', badge: 'DISCARD', color: C.red, description: 'Input classified as noise is discarded immediately without any processing or storage.' }
-  });
-  g.appendChild(discarded);
-
-  // Thought branch → AUDM
-  const audmDirect = drawNodeML({
-    id: 'ing-audm-direct', x: 300, y: 280, w: 200, h: 55,
-    color: C.cognitive, dim: C.cognitive_dim,
-    lines: ['AUDM Direct Store', 'thought → fact storage'],
-    details: {
-      title: 'AUDM Direct Store', badge: 'COGNITIVE', color: C.cognitive,
-      description: 'Thoughts (short atomic facts from the user) bypass the full pipeline and go directly into the AUDM deduplication + fact store.',
-      file: 'src/memory/facts/store.js',
-      props: { 'Input type': 'thought (short statement)', 'Process': 'embed → similarity check → AUDM' },
-    }
-  });
-  g.appendChild(audmDirect);
-
-  // Parser
-  const parser = drawNodeML({
-    id: 'ing-parser', x: 600, y: 280, w: 320, h: 65,
-    color: C.ingestion, dim: C.ingestion_dim,
-    lines: ['Parser', 'auto-detect: markdown / text / html / code / json'],
-    filePath: 'src/ingestion/parsers/index.js',
-    details: {
-      title: 'Parser', badge: 'INGESTION', color: C.ingestion,
-      description: 'Auto-detects content format and dispatches to the appropriate format-specific parser. Returns sections with headings and metadata.',
-      file: 'src/ingestion/parsers/index.js',
-      props: {
-        Formats: 'markdown, plain text, HTML, source code, JSON',
-        Output: '{ text, sections[], metadata }',
-        'MD parser': 'Sections by heading level',
-        'Code parser': 'Functions and class sections',
-      },
-    }
-  });
-  g.appendChild(parser);
-
-  // Chunker
-  const chunker = drawNodeML({
-    id: 'ing-chunker', x: 600, y: 390, w: 320, h: 65,
-    color: C.ingestion, dim: C.ingestion_dim,
-    lines: ['Chunker', 'format-aware splitting — preserves section headings'],
-    filePath: 'src/ingestion/chunker.js',
-    details: {
-      title: 'Chunker', badge: 'INGESTION', color: C.ingestion,
-      description: 'Splits parsed sections into overlapping chunks with configurable token limits. Preserves section heading context for each chunk.',
-      file: 'src/ingestion/chunker.js',
-      props: { Strategy: 'Format-aware token splitting', 'Heading preservation': 'Yes — section_heading per chunk', Overlap: 'Configurable' },
-    }
-  });
-  g.appendChild(chunker);
-
-  // Contextualizer
-  const contextualizer = drawNodeML({
-    id: 'ing-contextualizer', x: 600, y: 505, w: 320, h: 65,
-    color: C.ingestion, dim: C.ingestion_dim,
-    lines: ['Contextualizer', '1 LLM call/chunk — generates context prefix'],
-    filePath: 'src/ingestion/contextualizer.js',
-    badge: 'LLM',
-    details: {
-      title: 'Contextualizer', badge: 'INGESTION+LLM', color: C.ingestion,
-      description: 'Generates a concise context prefix for each chunk using an LLM call. The prefix summarizes where the chunk fits in the document. Runs in parallel batches (CONCURRENCY).',
-      file: 'src/ingestion/contextualizer.js',
-      props: { 'LLM calls': '1 per chunk', 'Output': 'contextual_prefix string', Concurrency: 'Batched (CONCURRENCY env)', 'Stored in': 'chunk.contextual_prefix' },
-    }
-  });
-  g.appendChild(contextualizer);
-
-  // Embedder
-  const embedder = drawNodeML({
-    id: 'ing-embedder', x: 600, y: 620, w: 320, h: 65,
-    color: C.embedder, dim: C.embedder_dim,
-    lines: ['Embedder', 'Ollama nomic-embed-text — 768d — batched'],
-    filePath: 'src/ingestion/embedder.js',
-    details: {
-      title: 'Embedder', badge: 'EMBEDDER', color: C.embedder,
-      description: 'Generates 768-dimensional embeddings for each chunk using Ollama\'s nomic-embed-text model. Processes in batches for efficiency.',
-      file: 'src/ingestion/embedder.js',
-      props: { Model: 'nomic-embed-text (Ollama)', Dimensions: '768', Batching: 'Yes', 'Swappable': 'OpenAI text-embedding-*' },
-    }
-  });
-  g.appendChild(embedder);
-
-  // Store Chunks
-  const storeChunks = drawNodeML({
-    id: 'ing-store-chunks', x: 600, y: 735, w: 320, h: 55,
-    color: C.storage, dim: C.storage_dim,
-    lines: ['Store Chunks → PGlite', 'chunk table — HNSW + GIN indexes'],
-    filePath: 'src/memory/chunks/store.js',
-    details: {
-      title: 'Store Chunks', badge: 'STORAGE', color: C.storage,
-      description: 'Persists chunks with embeddings and search vectors to the chunk table. Indexed for vector similarity (HNSW) and full-text (GIN).',
-      file: 'src/memory/chunks/store.js',
-      props: { Table: 'chunk', 'Vector index': 'HNSW (cosine, embedding col)', 'Text index': 'GIN (search_vector col)' },
-    }
-  });
-  g.appendChild(storeChunks);
-
-  // Fact Extractor
-  const factExtractor = drawNodeML({
-    id: 'ing-fact-extractor', x: 600, y: 840, w: 320, h: 65,
-    color: C.ingestion, dim: C.ingestion_dim,
-    lines: ['Fact Extractor', '1 LLM call/chunk — parallel CONCURRENCY=5'],
-    filePath: 'src/memory/facts/extractor.js',
-    badge: 'LLM',
-    details: {
-      title: 'Fact Extractor', badge: 'INGESTION+LLM', color: C.ingestion,
-      description: 'Extracts atomic facts from each chunk using a structured LLM prompt (tool_use for JSON output). Extracts category, importance score, and temporal validity (valid_from/valid_until).',
-      file: 'src/memory/facts/extractor.js',
-      props: {
-        'LLM calls': '1 per chunk',
-        Concurrency: '5 (CONCURRENCY env)',
-        Output: 'fact[], each with content, category, importance, valid_from, valid_until',
-        Method: 'Claude tool_use (structured JSON)',
-      },
-    }
-  });
-  g.appendChild(factExtractor);
-
-  // AUDM
-  const audm = drawNodeML({
-    id: 'ing-audm', x: 580, y: 960, w: 360, h: 80,
-    color: C.cognitive, dim: C.cognitive_dim,
-    lines: ['AUDM', 'embed → similarity search → LLM: ADD / UPDATE / CONTRADICT / SKIP'],
-    filePath: 'src/memory/facts/store.js',
-    badge: 'LLM',
-    details: {
-      title: 'AUDM Deduplication', badge: 'COGNITIVE+LLM', color: C.cognitive,
-      description: 'Deduplication engine for facts. Embeds new fact, searches for similar existing facts, then uses LLM to decide: ADD (new fact), UPDATE (replace old), CONTRADICT (flag conflict), SKIP (duplicate). Thresholds control LLM escalation.',
-      file: 'src/memory/facts/store.js',
-      props: {
-        'SKIP threshold': '>= 0.88 similarity (no LLM)',
-        'AMBIGUOUS threshold': '>= 0.65 (escalate to LLM)',
-        'Decisions': 'ADD, UPDATE, CONTRADICT, SKIP',
-        'LLM model': 'LLM_DECISION_MODEL',
-        Prompt: 'prompts/audm-decision.md',
-      },
-    }
-  });
-  g.appendChild(audm);
-
-  // Store Facts
-  const storeFacts = drawNodeML({
-    id: 'ing-store-facts', x: 600, y: 1095, w: 320, h: 55,
-    color: C.storage, dim: C.storage_dim,
-    lines: ['Store Facts → PGlite', 'fact table with importance + temporal validity'],
-    filePath: 'src/memory/facts/store.js',
-    details: {
-      title: 'Store Facts', badge: 'STORAGE', color: C.storage,
-      description: 'Persists facts to the fact table with embedding, tsvector, importance score, access count, and temporal validity fields.',
-      file: 'src/memory/facts/store.js',
-      props: { Table: 'fact', Fields: 'content, category, importance, access_count, valid_from, valid_until, embedding, search_vector' },
-    }
-  });
-  g.appendChild(storeFacts);
-
-  // Entity Resolver
-  const entityResolver = drawNodeML({
-    id: 'ing-entity-resolver', x: 600, y: 1205, w: 320, h: 80,
-    color: C.ingestion, dim: C.ingestion_dim,
-    lines: ['Entity Resolver', '4-stage: exact → fuzzy → embedding → create'],
-    filePath: 'src/memory/entities/resolver.js',
-    badge: 'LLM',
-    details: {
-      title: 'Entity Resolver', badge: 'INGESTION+LLM', color: C.ingestion,
-      description: '4-stage deduplication cascade for entities. First tries exact name match, then Levenshtein fuzzy match with LLM verification, then embedding similarity with LLM verification, finally creates new entity if no match found.',
-      file: 'src/memory/entities/resolver.js',
-      props: {
-        'Stage 1': 'Exact name match',
-        'Stage 2': 'Levenshtein fuzzy (src/memory/entities/fuzzy-matcher.js)',
-        'Stage 3': 'Embedding similarity (src/memory/entities/embedding-matcher.js)',
-        'Stage 4': 'Create new entity',
-        'LLM verify': 'Stages 2 and 3',
-      },
-    }
-  });
-  g.appendChild(entityResolver);
-
-  // Store Entities
-  const storeEntities = drawNodeML({
-    id: 'ing-store-entities', x: 600, y: 1340, w: 320, h: 55,
-    color: C.storage, dim: C.storage_dim,
-    lines: ['Store Entities + Relations → PGlite', 'entity, relation, fact_entity tables'],
-    filePath: 'src/memory/entities/store.js',
-    details: {
-      title: 'Store Entities + Relations', badge: 'STORAGE', color: C.storage,
-      description: 'Persists resolved entities, relations between them, and fact-entity junction records.',
-      file: 'src/memory/entities/store.js',
-      props: { Tables: 'entity, relation, fact_entity' },
-    }
-  });
-  g.appendChild(storeEntities);
-
-  // Context Snapshot
-  const ctxSnapshot = drawNodeML({
-    id: 'ing-ctx-snapshot', x: 600, y: 1450, w: 320, h: 55,
-    color: C.cognitive, dim: C.cognitive_dim,
-    lines: ['updateContextSnapshot()', 'writes hot facts + entities to context file'],
-    details: {
-      title: 'updateContextSnapshot()', badge: 'COGNITIVE', color: C.cognitive,
-      description: 'After ingestion completes, updates the ~/.cortex/CLAUDE.md context snapshot with the current hot facts (high importance, frequently accessed) and prominent entities.',
-      props: { Output: '~/.cortex/CLAUDE.md', Content: 'Hot facts, top entities, instructions', Trigger: 'After every successful ingestion' },
-    }
-  });
-  g.appendChild(ctxSnapshot);
-
-  const cortexMdOut = drawNode({
-    id: 'ing-cortexmd-out', x: 650, y: 1560, w: 220, h: 45,
-    color: C.fs, dim: C.fs_dim,
-    label: '~/.cortex/CLAUDE.md updated',
-    details: { title: '~/.cortex/CLAUDE.md', badge: 'FILE', color: C.fs, description: 'Context file updated with latest hot facts and entities.' }
-  });
-  g.appendChild(cortexMdOut);
-
-  // ── Ingestion edges ──
-  // Input → Classifier
-  g.appendChild(arrow(760, 115, 760, 155, C.cognitive, true, 'arrow-ing-cyan'));
-  // Classifier → noise
-  g.appendChild(curvedArrow(600, 190, 230, 210, 420, 180, C.red, 'arrow-ing-red', true));
-  g.appendChild(edgeLabel(410, 196, 'noise', C.red));
-  // Classifier → thought AUDM
-  g.appendChild(curvedArrow(600, 205, 500, 280, 555, 240, C.cognitive, 'arrow-ing-cyan', true));
-  g.appendChild(edgeLabel(528, 238, 'thought', C.cognitive));
-  // Classifier → knowledge pipeline
-  g.appendChild(arrow(760, 225, 760, 280, C.ingestion, true, 'arrow-ing-orange'));
-  g.appendChild(edgeLabel(775, 255, 'knowledge', C.ingestion));
-
-  // AUDM Direct → storage (line goes to PGlite)
-  g.appendChild(curvedArrow(400, 335, 760, 735, 700, 560, C.storage, 'arrow-ing-pink', true));
-
-  // Pipeline flow
-  g.appendChild(arrow(760, 345, 760, 390, C.ingestion, true, 'arrow-ing-orange'));
-  g.appendChild(arrow(760, 455, 760, 505, C.ingestion, true, 'arrow-ing-orange'));
-  g.appendChild(arrow(760, 570, 760, 620, C.ingestion, true, 'arrow-ing-orange'));
-  g.appendChild(arrow(760, 685, 760, 735, C.storage, true, 'arrow-ing-pink'));
-  g.appendChild(arrow(760, 790, 760, 840, C.ingestion, true, 'arrow-ing-orange'));
-  g.appendChild(arrow(760, 905, 760, 960, C.cognitive, true, 'arrow-ing-cyan'));
-  g.appendChild(arrow(760, 1040, 760, 1095, C.storage, true, 'arrow-ing-pink'));
-  g.appendChild(arrow(760, 1150, 760, 1205, C.ingestion, true, 'arrow-ing-orange'));
-  g.appendChild(arrow(760, 1285, 760, 1340, C.storage, true, 'arrow-ing-pink'));
-  g.appendChild(arrow(760, 1395, 760, 1450, C.cognitive, true, 'arrow-ing-cyan'));
-  g.appendChild(arrow(760, 1505, 760, 1560, C.fs, true, 'arrow-ing-cyan'));
-
-  // LLM dashed side arrows
-  const llmX = 1380;
-  [
-    [920, 540, 'contextualizer'],
-    [920, 875, 'fact extractor'],
-    [940, 1000, 'AUDM decision'],
-    [920, 1245, 'entity verify'],
-  ].forEach(([y, ly, label]) => {
-    const p = el('path', {
-      d: `M${920},${y} L${llmX},${ly}`,
-      fill: 'none', stroke: C.llm, 'stroke-width': 1.2,
-      'stroke-dasharray': '4 4', opacity: 0.5,
-    });
-    g.appendChild(p);
-    g.appendChild(edgeLabel((920 + llmX) / 2, (y + ly) / 2, label, C.llm));
-  });
-}
-
-// ── SEARCH ────────────────────────────────────────────────────────────────
-function buildSearch() {
-  const g = document.getElementById('dg-search');
-
-  const defs = document.querySelector('#svg-search defs');
-  const gridPat = el('pattern', { id: 'grid-srch', width: 40, height: 40, patternUnits: 'userSpaceOnUse' });
-  gridPat.appendChild(el('path', { d: 'M40 0 L0 0 0 40', fill: 'none', stroke: '#1e2d40', 'stroke-width': 0.5, opacity: 0.4 }));
-  defs.appendChild(gridPat);
-  g.appendChild(el('rect', { width: 1800, height: 1450, fill: 'url(#grid-srch)', opacity: 0.5 }));
-
-  // Query
-  const query = drawNode({
-    id: 'srch-query', x: 700, y: 50, w: 200, h: 55,
-    color: C.fs, dim: C.fs_dim,
-    label: 'Query', sublabel: 'natural language input',
-    details: { title: 'Search Query', badge: 'INPUT', color: C.fs, description: 'Natural language search query from user, CLI, REST API, or MCP tool.' }
-  });
-  g.appendChild(query);
-
-  // Query Router
-  const router = drawNodeML({
-    id: 'srch-router', x: 580, y: 145, w: 440, h: 80,
-    color: C.cognitive, dim: C.cognitive_dim,
-    lines: ['Query Router', 'intent classification — LRU cache 200 entries / 10min TTL'],
-    filePath: 'src/memory/cognitive/query-router.js',
-    details: {
-      title: 'Query Router', badge: 'COGNITIVE', color: C.cognitive,
-      description: 'Classifies queries into 5 intent types using LLM classification (with caching). Routes to the optimal search strategy for each intent.',
-      file: 'src/memory/cognitive/query-router.js',
-      props: {
-        Intents: 'entity_lookup, fact_lookup, temporal, comparison, exploratory',
-        Cache: 'LRU — 200 entries, 10min TTL',
-        'Cache key': 'query string (normalized)',
-      },
-    }
-  });
-  g.appendChild(router);
-
-  // Intent branches — 5 columns
-  const intents = [
-    { id: 'entity_lookup', x: 90, label: 'entity_lookup', color: C.search },
-    { id: 'fact_lookup', x: 390, label: 'fact_lookup', color: C.search },
-    { id: 'temporal', x: 680, label: 'temporal', color: C.search },
-    { id: 'comparison', x: 970, label: 'comparison', color: C.search },
-    { id: 'exploratory', x: 1260, label: 'exploratory', color: C.search },
-  ];
-
-  const intentY = 300;
-  intents.forEach(intent => {
-    const iw = 180;
-    g.appendChild(drawNode({
-      id: `srch-intent-${intent.id}`, x: intent.x, y: intentY, w: iw, h: 42,
-      color: intent.color, dim: C.search_dim,
-      label: intent.label,
-      details: {
-        title: `Intent: ${intent.label}`, badge: 'INTENT', color: intent.color,
-        description: {
-          entity_lookup: 'Queries asking about specific named entities (people, organizations, technologies). Routes to entity store for direct lookup.',
-          fact_lookup: 'Direct fact retrieval queries. Runs parallel vector + keyword search and merges with RRF.',
-          temporal: 'Time-sensitive queries (what happened when, current status). Runs vector + keyword search with temporal validity filtering.',
-          comparison: 'Queries comparing multiple things. Parallel vector + keyword search.',
-          exploratory: 'Open-ended discovery queries. Expands query with LLM, runs all search types, adds graph enhancement.',
-        }[intent.id] || '',
-      }
-    }));
-
-    // Route arrow from router
-    const routerCx = 800;
-    const branchX = intent.x + iw / 2;
-    g.appendChild(curvedArrow(routerCx, 225, branchX, intentY, (routerCx + branchX) / 2, 275, C.cognitive, 'arrow-srch-cyan', true));
-  });
-
-  // Entity lookup path
-  const entityLookup = drawNodeML({
-    id: 'srch-entity-lookup', x: 50, y: 400, w: 260, h: 65,
-    color: C.search, dim: C.search_dim,
-    lines: ['Entity Store Lookup', 'entityFirstSearch — facts by entity'],
-    filePath: 'src/memory/entities/store.js',
-    details: {
-      title: 'Entity First Search', badge: 'SEARCH', color: C.search,
-      description: 'For entity_lookup intent: finds the entity directly by name/type, then fetches associated facts via fact_entity junction table.',
-      file: 'src/memory/entities/store.js',
-      props: { Strategy: 'Direct entity lookup + related facts', 'Join': 'entity → fact_entity → fact' },
-    }
-  });
-  g.appendChild(entityLookup);
-  g.appendChild(arrow(180, 342, 180, 400, C.search, true, 'arrow-srch-emerald'));
-
-  // Parallel search pair (for fact_lookup, temporal, comparison)
-  const parallelIntents = [
-    { x: 390, id: 'fact_lookup' },
-    { x: 680, id: 'temporal' },
-    { x: 970, id: 'comparison' },
-  ];
-
-  parallelIntents.forEach(pi => {
-    const cx = pi.x + 90;
-    // Vector + Keyword parallel
-    const vx = pi.x;
-    const kx = pi.x + 100;
-    g.appendChild(drawNode({
-      id: `srch-vec-${pi.id}`, x: vx, y: 405, w: 170, h: 55,
-      color: C.search, dim: C.search_dim,
-      label: 'Vector Search', sublabel: 'pgvector cosine + HNSW',
-      details: {
-        title: 'Vector Search', badge: 'SEARCH', color: C.search,
-        description: 'Embeds the query, then uses pgvector cosine similarity with HNSW index for ANN retrieval.',
-        file: 'src/memory/search/vector.js',
-        props: { Index: 'HNSW (cosine)', 'Query embed': 'Ollama nomic-embed-text', K: '20', Table: 'chunk + fact' },
-      }
-    }));
-
-    g.appendChild(arrow(cx, 342, cx, 405, C.search, true, 'arrow-srch-emerald'));
-  });
-
-  // Keyword search boxes
-  parallelIntents.forEach(pi => {
-    const cx = pi.x + 90;
-    g.appendChild(drawNode({
-      id: `srch-kw-${pi.id}`, x: pi.x + 180, y: 405, w: 170, h: 55,
-      color: C.search, dim: C.search_dim,
-      label: 'Keyword Search', sublabel: 'tsvector + GIN',
-      details: {
-        title: 'Keyword Search', badge: 'SEARCH', color: C.search,
-        description: 'Uses PostgreSQL tsvector full-text search with GIN index and ts_rank for relevance scoring.',
-        file: 'src/memory/search/keyword.js',
-        props: { Index: 'GIN (tsvector)', Ranking: 'ts_rank', Tables: 'chunk + fact' },
-      }
-    }));
-  });
-
-  // RRF merge boxes
-  parallelIntents.forEach(pi => {
-    const mx = pi.x + 90;
-    g.appendChild(drawNode({
-      id: `srch-rrf-${pi.id}`, x: pi.x + 60, y: 520, w: 230, h: 55,
-      color: C.search, dim: C.search_dim,
-      label: 'RRF Merge', sublabel: 'vector 1.0× + keyword 0.7× / K=20',
-      details: {
-        title: 'RRF Merge', badge: 'SEARCH', color: C.search,
-        description: 'Reciprocal Rank Fusion merges vector and keyword results. Vector results weighted 1.0×, keyword 0.7×. Returns top K=20.',
-        file: 'src/memory/search/hybrid.js',
-        props: { 'Vector weight': '1.0×', 'Keyword weight': '0.7×', K: '20', Algorithm: 'RRF (Reciprocal Rank Fusion)' },
-      }
-    }));
-    g.appendChild(arrow(pi.x + 85, 460, pi.x + 175, 520, C.search, true, 'arrow-srch-emerald'));
-    g.appendChild(arrow(pi.x + 265, 460, pi.x + 225, 520, C.search, true, 'arrow-srch-emerald'));
-  });
-
-  // Exploratory path (special)
-  const explX = 1260;
-  g.appendChild(drawNode({
-    id: 'srch-query-expand', x: explX, y: 405, w: 200, h: 55,
-    color: C.llm, dim: C.llm_dim,
-    label: 'Query Expansion', sublabel: 'LLM — generate variants',
-    details: {
-      title: 'Query Expansion (LLM)', badge: 'LLM', color: C.llm,
-      description: 'For exploratory intent: uses LLM to expand the query into multiple search variants and related terms for broader coverage.',
-      props: { Model: 'LLM_EXTRACTION_MODEL', Output: 'Expanded query terms' },
-    }
-  }));
-  g.appendChild(arrow(1350, 342, 1360, 405, C.llm, true, 'arrow-srch-violet'));
-
-  g.appendChild(drawNode({
-    id: 'srch-vec-expl', x: explX, y: 510, w: 170, h: 50,
-    color: C.search, dim: C.search_dim,
-    label: 'Vector Search',
-    details: { title: 'Vector Search', badge: 'SEARCH', color: C.search, description: 'Vector similarity search using expanded query.', file: 'src/memory/search/vector.js' }
-  }));
-  g.appendChild(drawNode({
-    id: 'srch-kw-expl', x: explX + 190, y: 510, w: 160, h: 50,
-    color: C.search, dim: C.search_dim,
-    label: 'Keyword Search',
-    details: { title: 'Keyword Search', badge: 'SEARCH', color: C.search, description: 'Full-text search using expanded query.', file: 'src/memory/search/keyword.js' }
-  }));
-  g.appendChild(drawNode({
-    id: 'srch-graph-enh', x: explX + 95, y: 615, w: 250, h: 55,
-    color: C.llm, dim: C.llm_dim,
-    label: 'Graph Enhancement', sublabel: 'LLM — entity graph traversal',
-    details: {
-      title: 'Graph Enhancement', badge: 'LLM', color: C.llm,
-      description: 'Uses entity graph traversal and LLM reasoning to enrich exploratory results with related entities and their facts.',
-      file: 'src/memory/search/graph-enhancement.js',
-      props: { 'Traversal': 'BFS from matched entities', 'LLM': 'Ranks + enriches results' },
-    }
-  }));
-  g.appendChild(drawNode({
-    id: 'srch-rrf-expl', x: explX + 60, y: 730, w: 230, h: 55,
-    color: C.search, dim: C.search_dim,
-    label: 'RRF Merge', sublabel: 'vector 1.0× + keyword 0.7× / K=20',
-    details: { title: 'RRF Merge', badge: 'SEARCH', color: C.search, description: 'RRF merge for exploratory results.', file: 'src/memory/search/hybrid.js' }
-  }));
-
-  g.appendChild(arrow(1360, 460, 1340, 510, C.ingestion, true, 'arrow-srch-emerald'));
-  g.appendChild(arrow(1360, 460, 1450, 510, C.ingestion, true, 'arrow-srch-emerald'));
-  g.appendChild(arrow(1340, 560, 1280, 615, C.llm, true, 'arrow-srch-violet'));
-  g.appendChild(arrow(1450, 560, 1440, 615, C.llm, true, 'arrow-srch-violet'));
-  g.appendChild(arrow(1300, 670, 1280, 730, C.search, true, 'arrow-srch-emerald'));
-
-  // Record Access + Results
-  const recordAccess = drawNodeML({
-    id: 'srch-record-access', x: 560, y: 870, w: 480, h: 60,
-    color: C.storage, dim: C.storage_dim,
-    lines: ['Record Access (fire-and-forget)', 'fact.access_count++, fact.last_accessed_at = now()'],
-    filePath: 'src/memory/facts/store.js',
-    details: {
-      title: 'Record Access', badge: 'STORAGE', color: C.storage,
-      description: 'Fire-and-forget side effect after search. Updates fact access counters and timestamps. Used to identify hot facts for context snapshot.',
-      file: 'src/memory/facts/store.js',
-      props: { Async: 'Fire-and-forget (does not block results)', Updates: 'access_count++, last_accessed_at' },
-    }
-  });
-  g.appendChild(recordAccess);
-
-  const results = drawNode({
-    id: 'srch-results', x: 690, y: 985, w: 220, h: 55,
-    color: C.fs, dim: C.fs_dim,
-    label: 'Results', sublabel: 'ranked facts + chunks',
-    details: { title: 'Search Results', badge: 'OUTPUT', color: C.fs, description: 'Ranked list of facts and chunks with relevance scores, confidence, and provenance.' }
-  });
-  g.appendChild(results);
-
-  // Arrows converging to record access
-  const mergeTargetY = 870;
-  g.appendChild(curvedArrow(180, 465, 700, mergeTargetY, 440, 780, C.search, 'arrow-srch-emerald', true));  // entity
-  [[480, 575], [770, 575], [1060, 575], [1380, 730]].forEach(([fx, fy]) => {
-    g.appendChild(curvedArrow(fx, fy, 800, mergeTargetY, (fx + 800) / 2, (fy + mergeTargetY) / 2 + 40, C.search, 'arrow-srch-emerald', true));
-  });
-
-  g.appendChild(arrow(800, 930, 800, 985, C.search, true, 'arrow-srch-emerald'));
-}
-
-// ── STORAGE ────────────────────────────────────────────────────────────────
-function buildStorage() {
-  const g = document.getElementById('dg-storage');
-
-  const defs = document.querySelector('#svg-storage defs');
-  const gridPat = el('pattern', { id: 'grid-stor', width: 40, height: 40, patternUnits: 'userSpaceOnUse' });
-  gridPat.appendChild(el('path', { d: 'M40 0 L0 0 0 40', fill: 'none', stroke: '#1e2d40', 'stroke-width': 0.5, opacity: 0.4 }));
-  defs.appendChild(gridPat);
-  g.appendChild(el('rect', { width: 1900, height: 1500, fill: 'url(#grid-stor)', opacity: 0.5 }));
-
-  // Title
-  g.appendChild(txt('PostgreSQL Schema — PGlite + pgvector', {
-    x: 950, y: 40, 'text-anchor': 'middle',
-    fill: C.textMuted, 'font-size': 13, 'font-weight': '600', 'letter-spacing': 0.5,
-  }));
-
-  function table(id, x, y, name, columns, details) {
-    const rowH = 20;
-    const headerH = 36;
-    const w = 260;
-    const h = headerH + columns.length * rowH + 8;
-    const gr = el('g', {
-      class: 'node',
-      'data-node-id': id,
-      'data-details': JSON.stringify(details || {}),
-      style: 'cursor:pointer',
-      transform: `translate(${x},${y})`,
-    });
-
-    const bg = el('rect', { width: w, height: h, rx: 7, fill: C.storage_dim, stroke: C.storage, 'stroke-width': 1.5, class: 'node-rect' });
-    const hdr = el('rect', { width: w, height: headerH, rx: 7, fill: `rgba(236,72,153,0.2)` });
-    const hdr2 = el('rect', { y: headerH - 7, width: w, height: 7, fill: `rgba(236,72,153,0.2)` });
-    gr.appendChild(bg);
-    gr.appendChild(hdr);
-    gr.appendChild(hdr2);
-
-    gr.appendChild(monoTxt(name, { x: 12, y: 22, fill: C.storage, 'font-size': 12, 'font-weight': '700' }));
-
-    columns.forEach((col, i) => {
-      const cy = headerH + 8 + i * rowH + 13;
-      const [cname, ctype, ...flags] = col.split(' ');
-      const isPK = flags.includes('PK') || cname === 'id';
-      const isFK = flags.includes('FK') || ctype?.includes('→');
-      const isIdx = flags.includes('IDX');
-      const color = isPK ? C.amber : isFK ? '#f97316' : isIdx ? C.llm : C.textMuted;
-      gr.appendChild(monoTxt(cname, { x: 12, y: cy, fill: color, 'font-size': 10 }));
-      if (ctype) {
-        gr.appendChild(monoTxt(ctype.replace('→', ' →'), { x: w - 8, y: cy, 'text-anchor': 'end', fill: isFK ? '#f97316' : C.textDim, 'font-size': 9, opacity: 0.8 }));
-      }
-      if (isPK || isIdx) {
-        gr.appendChild(el('rect', { x: w - 28, y: cy - 11, width: 20, height: 12, rx: 3, fill: isPK ? 'rgba(245,158,11,0.12)' : 'rgba(139,92,246,0.12)' }));
-        gr.appendChild(monoTxt(isPK ? 'PK' : 'IDX', { x: w - 18, y: cy, 'text-anchor': 'middle', fill: isPK ? C.amber : C.llm, 'font-size': 8 }));
-      }
-    });
-
-    bg.addEventListener('mouseenter', () => { bg.setAttribute('filter', `drop-shadow(0 0 8px ${C.storage})`); bg.setAttribute('stroke-width', 2); });
-    bg.addEventListener('mouseleave', () => { bg.removeAttribute('filter'); bg.setAttribute('stroke-width', 1.5); });
-
-    return gr;
-  }
-
-  function fkArrow(x1, y1, x2, y2) {
-    const p = el('path', {
-      d: `M${x1},${y1} L${x2},${y2}`,
-      fill: 'none', stroke: '#f97316', 'stroke-width': 1, 'stroke-opacity': 0.4,
-      'stroke-dasharray': '3 3', 'marker-end': 'url(#arrow-stor)',
-    });
-    return p;
-  }
-
-  // document table
-  g.appendChild(table('stor-document', 60, 70, 'document', [
-    'id PK',
-    'uid text',
-    'source_path text',
-    'source_type text',
-    'title text',
-    'content_hash text',
-    'namespace text',
-    'chunk_count int',
-    'fact_count int',
-    'last_ingested_at timestamptz',
-  ], {
-    title: 'document', badge: 'TABLE', color: C.storage,
-    description: 'Registry of all ingested documents. Tracks source path, content hash for dedup, and counts of derived chunks and facts.',
-    props: { Purpose: 'Document registry', 'Hash dedup': 'content_hash prevents re-ingestion', Namespace: 'Multi-tenant isolation' },
-  }));
-
-  // chunk table
-  g.appendChild(table('stor-chunk', 380, 70, 'chunk', [
-    'id PK',
-    'document_id →document FK',
-    'chunk_index int',
-    'content text',
-    'section_heading text',
-    'namespace text',
-    'contextual_prefix text',
-    'embedding vector(768) IDX',
-    'search_vector tsvector IDX',
-  ], {
-    title: 'chunk', badge: 'TABLE', color: C.storage,
-    description: 'Stores document chunks with embeddings and full-text search vectors. HNSW index on embedding for fast ANN search. GIN index on search_vector for full-text.',
-    props: { Purpose: 'Chunk storage + search', 'Vector index': 'HNSW (cosine) on embedding', 'Text index': 'GIN on search_vector', Dimensions: '768' },
-  }));
-
-  // fact table
-  g.appendChild(table('stor-fact', 700, 70, 'fact', [
-    'id PK',
-    'uid text',
-    'content text',
-    'category text',
-    'namespace text',
-    'status text',
-    'importance float',
-    'access_count int',
-    'last_accessed_at timestamptz',
-    'valid_from date',
-    'valid_until date',
-    'embedding vector(768) IDX',
-    'search_vector tsvector IDX',
-  ], {
-    title: 'fact', badge: 'TABLE', color: C.storage,
-    description: 'Atomic facts extracted from documents. Includes importance scoring, temporal validity, and access tracking. Dual-indexed for vector and keyword search.',
-    props: {
-      Purpose: 'Fact storage + dedup',
-      Status: 'active | updated | contradicted',
-      'Vector index': 'HNSW on embedding',
-      'Text index': 'GIN on search_vector',
-      'Importance': '0.0–1.0 float',
-      Temporal: 'valid_from / valid_until dates',
-    },
-  }));
-
-  // entity table
-  g.appendChild(table('stor-entity', 1030, 70, 'entity', [
-    'id PK',
-    'uid text',
-    'name text',
-    'entity_type text',
-    'namespace text',
-    'canonical_id →entity FK',
-    'embedding vector(768)',
-  ], {
-    title: 'entity', badge: 'TABLE', color: C.storage,
-    description: 'Named entities extracted from documents. Self-referential canonical_id for entity merging (redirects to canonical entity).',
-    props: { Purpose: 'Entity graph nodes', 'Self-FK': 'canonical_id for entity merge', Types: 'person, org, technology, concept, ...' },
-  }));
-
-  // relation table
-  g.appendChild(table('stor-relation', 1360, 70, 'relation', [
-    'id PK',
-    'source_id →entity FK',
-    'target_id →entity FK',
-    'relation_type text',
-    'namespace text',
-    'valid_from date',
-    'invalid_at date',
-  ], {
-    title: 'relation', badge: 'TABLE', color: C.storage,
-    description: 'Directed relations between entities with temporal tracking. Supports time-bounded relationships.',
-    props: { Purpose: 'Entity graph edges', Direction: 'Directed (source → target)', Temporal: 'valid_from / invalid_at' },
-  }));
-
-  // fact_entity junction
-  g.appendChild(table('stor-fact-entity', 60, 580, 'fact_entity', [
-    'fact_id →fact FK',
-    'entity_id →entity FK',
-    'mention_type text',
-  ], {
-    title: 'fact_entity', badge: 'JUNCTION', color: C.storage,
-    description: 'Junction table linking facts to entities. Enables finding all facts about an entity and all entities mentioned in a fact.',
-    props: { Purpose: 'fact ↔ entity many-to-many', mention_type: 'primary | secondary | context' },
-  }));
-
-  // history table
-  g.appendChild(table('stor-history', 380, 580, 'history', [
-    'id PK',
-    'fact_id →fact FK',
-    'operation text',
-    'old_content text',
-    'new_content text',
-    'changed_at timestamptz',
-  ], {
-    title: 'history', badge: 'TABLE', color: C.storage,
-    description: 'Audit log of fact changes. Records every ADD, UPDATE, CONTRADICT operation with before/after content.',
-    props: { Purpose: 'Fact audit trail', Operations: 'ADD, UPDATE, CONTRADICT, SKIP', 'Retention': 'Permanent' },
-  }));
-
-  // llm_log table
-  g.appendChild(table('stor-llm-log', 700, 580, 'llm_log', [
-    'id PK',
-    'provider text',
-    'model text',
-    'caller text',
-    'prompt_tokens int',
-    'completion_tokens int',
-    'cost_usd float',
-    'duration_ms int',
-    'created_at timestamptz',
-  ], {
-    title: 'llm_log', badge: 'TABLE', color: C.storage,
-    description: 'Logs every LLM API call with token counts, cost, and duration. Used for usage tracking and budget monitoring.',
-    props: { Purpose: 'LLM usage + cost tracking', 'Providers': 'OpenAI, Anthropic, Ollama' },
-  }));
-
-  // api_key table
-  g.appendChild(table('stor-api-key', 1030, 580, 'api_key', [
-    'id PK',
-    'name text',
-    'key_hash text',
-    'prefix text',
-    'created_at timestamptz',
-    'last_used_at timestamptz',
-    'revoked_at timestamptz',
-  ], {
-    title: 'api_key', badge: 'TABLE', color: C.storage,
-    description: 'API key storage. Keys are stored as HMAC-SHA256 hashes. Prefix stored for display (e.g., cx_abc123...).',
-    props: { Purpose: 'REST API authentication', Storage: 'HMAC-SHA256 hash only', 'Revocation': 'Soft delete via revoked_at' },
-  }));
-
-  // FK Arrows
-  // document ← chunk
-  g.appendChild(fkArrow(380, 100, 320, 100));
-  // fact ← chunk (conceptual via document)
-  g.appendChild(fkArrow(700, 110, 660, 110));
-  // entity ← relation (source)
-  g.appendChild(fkArrow(1360, 100, 1290, 100));
-  // entity ← relation (target)
-  g.appendChild(fkArrow(1360, 120, 1290, 120));
-  // entity ← entity (canonical)
-  g.appendChild(fkArrow(1180, 135, 1180, 200)); // self-ref loop
-  // fact ← fact_entity
-  g.appendChild(fkArrow(200, 580, 200, 390));
-  // entity ← fact_entity
-  g.appendChild(fkArrow(320, 590, 1100, 200));
-  // fact ← history
-  g.appendChild(fkArrow(540, 580, 900, 390));
-
-  // Legend for table column colors
-  const legY = 1400;
-  [
-    [C.amber, 'Primary Key'],
-    ['#f97316', 'Foreign Key'],
-    [C.llm, 'Indexed Column'],
-    [C.textMuted, 'Regular Column'],
-  ].forEach(([color, label], i) => {
-    const lx = 200 + i * 200;
-    g.appendChild(el('rect', { x: lx, y: legY - 8, width: 10, height: 10, rx: 2, fill: color }));
-    g.appendChild(txt(label, { x: lx + 14, y: legY, fill: C.textMuted, 'font-size': 11 }));
-  });
-}
-
-// ── BUILD ALL + FIT ────────────────────────────────────────────────────────
-buildOverview();
-buildIngestion();
-buildSearch();
-buildStorage();
-
-// Initial fit for the active view (overview)
-setTimeout(() => {
-  zoomFit('overview');
-}, 50);
-</script>
 </body>
 </html>

@@ -8,6 +8,7 @@ import { recordAccess } from '../facts/store.js';
 import { listRelationsForEntity } from '../entities/relations.js';
 import * as vectorSearch from './vector.js';
 import * as keywordSearch from './keyword.js';
+import { hybridSearchFacts } from './hybrid-sql.js';
 import { extractEntitiesFromFacts, findRelatedFacts, rerank } from './graph-enhancement.js';
 import { expandQuery } from './query-expander.js';
 import { routeQuery } from '../cognitive/query-router.js';
@@ -28,7 +29,8 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
   let routing = null;
   if (route) {
     routing = await routeQuery(query);
-    console.log(`[query-router] Intent: ${routing.intent} — ${routing.reasoning}`);
+    // Route decision is logged to llm_log via the router's promptJson call.
+    // No console output here — search is called from MCP/hooks where stdout is protocol.
 
     useGraph = useGraph || routing.useGraph;
     expand = expand || routing.expand;
@@ -172,31 +174,28 @@ function multiQueryMerge(resultSets, limit) {
     }));
 }
 
-// Core vector+keyword hybrid with RRF merge — skips chunk queries when not needed
+// Core vector+keyword hybrid with RRF merge.
+// Facts use single-SQL-query RRF (see hybrid-sql.js). Chunks stay on the
+// two-query + JS-merge path since they have no category/confidence filters.
 async function coreHybridSearch(query, { queryEmbedding: precomputed, namespaces, limit, minConfidence, includeChunks = false, pointInTime, categories }) {
   const queryEmbedding = precomputed || await embed(query);
 
-  const queries = [
-    vectorSearch.searchFacts(queryEmbedding, { namespaces, limit, minConfidence, pointInTime, categories }),
-    keywordSearch.searchFacts(query, { namespaces, limit, minConfidence, pointInTime, categories }),
-  ];
+  const factsPromise = hybridSearchFacts(query, queryEmbedding, {
+    namespaces, limit, minConfidence, pointInTime, categories,
+  });
 
-  if (includeChunks) {
-    queries.push(
-      vectorSearch.searchChunks(queryEmbedding, { namespaces, limit }),
-      keywordSearch.searchChunks(query, { namespaces, limit }),
-    );
-  }
+  const chunkPromises = includeChunks
+    ? [
+        vectorSearch.searchChunks(queryEmbedding, { namespaces, limit }),
+        keywordSearch.searchChunks(query, { namespaces, limit }),
+      ]
+    : [];
 
-  const results = await Promise.all(queries);
-  const [vectorFacts, kwFacts] = results;
+  const [facts, ...chunkResults] = await Promise.all([factsPromise, ...chunkPromises]);
 
-  const facts = rrfMerge(vectorFacts, kwFacts, limit);
-  let chunks = [];
-
-  if (includeChunks && results.length === 4) {
-    chunks = rrfMerge(results[2], results[3], limit);
-  }
+  const chunks = includeChunks && chunkResults.length === 2
+    ? rrfMerge(chunkResults[0], chunkResults[1], limit)
+    : [];
 
   return { facts, chunks };
 }

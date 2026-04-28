@@ -1,10 +1,10 @@
 {
   "name": "@anmol-srv/cortex",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "type": "module",
-  "description": "Persistent memory for Claude Code — zero-install setup, embedded database, semantic search over your knowledge",
+  "description": "Persistent memory for Claude Code — local-first, zero-cloud, auto-integrated via hooks and MCP",
   "bin": {
-    "cortex": "src/cli.js"
+    "cortex": "dist/cli.js"
   },
   "scripts": {
     "dev": "node --watch src/server.js",
@@ -12,6 +12,8 @@
     "test": "vitest",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
+    "build": "node build.js",
+    "prepublishOnly": "npm run build",
     "migrate": "knex migrate:latest",
     "migrate:rollback": "knex migrate:rollback",
     "migrate:make": "knex migrate:make"
@@ -20,41 +22,52 @@
     "node": ">=18.0.0"
   },
   "files": [
-    "src/**/*.js",
-    "src/db/migrations/",
-    "!src/**/*.test.js",
-    "!src/scripts/",
+    "dist/",
     "prompts/",
-    "public/",
+    "skills/",
+    "src/db/migrations/",
     "knexfile.js"
   ],
   "keywords": [
-    "rag",
-    "knowledge-base",
-    "mcp",
-    "llm",
     "memory",
+    "mcp",
     "claude",
     "claude-code",
-    "context-layer",
-    "pgvector"
+    "rag",
+    "knowledge-base",
+    "llm",
+    "context",
+    "pgvector",
+    "local-first"
   ],
-  "author": "",
+  "author": "Anmol Srivastava",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Anmol-Srv/cortex.git"
+  },
+  "homepage": "https://github.com/Anmol-Srv/cortex#readme",
+  "bugs": {
+    "url": "https://github.com/Anmol-Srv/cortex/issues"
+  },
   "dependencies": {
-    "@clack/prompts": "^1.2.0",
     "@electric-sql/pglite": "^0.4.4",
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "dayjs": "^1.11.19",
     "dotenv": "^17.3.1",
     "knex": "^3.1.0",
-    "lodash-es": "^4.17.23",
-    "nanoid": "^5.1.7",
-    "pg": "^8.20.0",
-    "zod": "^3.24.0"
+    "pg": "^8.20.0"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "^0.30.0"
   },
   "devDependencies": {
+    "@clack/prompts": "^1.2.0",
+    "dayjs": "^1.11.19",
+    "esbuild": "^0.28.0",
     "eslint": "^10.0.3",
-    "vitest": "^4.0.18"
+    "lodash-es": "^4.17.23",
+    "nanoid": "^5.1.7",
+    "vitest": "^4.0.18",
+    "zod": "^3.24.0"
   }
 }

@@ -49,25 +49,19 @@ async function ingestDocument({
   // Step 0: Classify input (cognitive layer)
   let classification = null;
   if (classify) {
-    console.log('[0/6] Classifying input...');
+    process.stderr.write('[0/6] Classifying input...' + "\n");
     classification = await classifyInput(content, { title: finalTitle });
-    console.log(`  Route: ${classification.route} — ${classification.reasoning}`);
+    process.stderr.write(`  Route: ${classification.route} — ${classification.reasoning}` + "\n");
 
     if (classification.route === 'noise') {
-      console.log('  Skipped — classified as noise.');
+      process.stderr.write('  Skipped — classified as noise.' + "\n");
       return { documentId: null, title: finalTitle, skipped: true, route: 'noise' };
     }
   }
 
-  // Step 1: Parse content into text + sections
-  console.log('[1/6] Parsing content...');
-  const parsed = parse(content, { format: metadata.format, filePath: sourcePath, contentType });
-  finalTitle = title || parsed.metadata?.title || sourcePath;
-
-  // Step 2: Hash for change detection + upsert document
-  console.log('[2/6] Checking for changes...');
+  // Step 1: Hash for change detection (before parsing — skip early if unchanged)
+  process.stderr.write('[1/6] Checking for changes...' + "\n");
   const contentHash = createHash('sha256').update(content).digest('hex');
-  // Thoughts have no file path — use a content-hash-based synthetic path so ON CONFLICT works
   const effectiveSourcePath = sourcePath || `thought:${contentHash}`;
   const { doc, changed } = await documentStore.upsert({
     sourcePath: effectiveSourcePath,
@@ -78,13 +72,18 @@ async function ingestDocument({
   });
 
   if (!changed) {
-    console.log('  Skipped — content unchanged.');
+    process.stderr.write('  Skipped — content unchanged.' + "\n");
     return { documentId: doc.id, title: finalTitle, skipped: true };
   }
 
+  // Step 2: Parse content into text + sections
+  process.stderr.write('[2/6] Parsing content...' + "\n");
+  const parsed = parse(content, { format: metadata.format, filePath: sourcePath, contentType });
+  finalTitle = title || parsed.metadata?.title || sourcePath;
+
   // Thought fast-path: store facts directly, skip chunking/extraction
   if (classification?.route === 'thought' && classification.facts.length) {
-    console.log(`[thought] Storing ${classification.facts.length} facts directly...`);
+    process.stderr.write(`[thought] Storing ${classification.facts.length} facts directly...` + "\n");
     const thoughtResult = await storeDirectFacts(classification.facts, {
       documentId: doc.id,
       namespace: ns,
@@ -102,7 +101,7 @@ async function ingestDocument({
 
     await documentStore.updateCounts(doc.id, { chunkCount: 0, factCount: thoughtResult.counts.added });
 
-    console.log(`Done. Route: thought, ${thoughtResult.counts.total} facts (${thoughtResult.counts.added} new)`);
+    process.stderr.write(`Done. Route: thought, ${thoughtResult.counts.total} facts (${thoughtResult.counts.added} new)` + "\n");
     return {
       documentId: doc.id,
       documentUid: doc.uid,
@@ -121,9 +120,9 @@ async function ingestDocument({
 
   try {
     // Step 3: Chunk + contextualize + embed
-    console.log('[3/6] Chunking and embedding...');
+    process.stderr.write('[3/6] Chunking and embedding...' + "\n");
     chunks = chunkSections(parsed.sections);
-    console.log(`  ${chunks.length} chunks created`);
+    process.stderr.write(`  ${chunks.length} chunks created` + "\n");
 
     if (!skipContextualization && chunks.length) {
       chunks = await contextualizeChunks(chunks, parsed.text, { title: finalTitle });
@@ -144,7 +143,7 @@ async function ingestDocument({
 
     // Step 4: Extract facts per chunk
     if (!skipFacts) {
-      console.log('[4/6] Extracting facts...');
+      process.stderr.write('[4/6] Extracting facts...' + "\n");
       factResult = await extractAndStoreFacts(chunks, {
         documentId: doc.id,
         namespace: ns,
@@ -160,13 +159,13 @@ async function ingestDocument({
 
     // Step 5: Link entities
     if (!skipEntities && factResult.results.length) {
-      console.log('[5/6] Linking entities...');
+      process.stderr.write('[5/6] Linking entities...' + "\n");
       entityResult = await linkDocumentEntities({
         title: finalTitle,
         sourceType,
         metadata,
       }, factResult.results, ns, entities);
-      console.log(`  ${entityResult.entityCount} entities, ${entityResult.relationCount} relations`);
+      process.stderr.write(`  ${entityResult.entityCount} entities, ${entityResult.relationCount} relations` + "\n");
     }
 
   } catch (err) {
@@ -176,7 +175,7 @@ async function ingestDocument({
     throw err;
   }
 
-  console.log(`Done. ${chunks.length} chunks, ${factResult.counts.total} facts, ${entityResult.entityCount} entities`);
+  process.stderr.write(`Done. ${chunks.length} chunks, ${factResult.counts.total} facts, ${entityResult.entityCount} entities` + "\n");
 
   return {
     documentId: doc.id,
@@ -227,7 +226,7 @@ async function storeDirectFacts(facts, { documentId, namespace }) {
 
 async function extractAndStoreFacts(chunks, { documentId, namespace, promptPath, categories }) {
   const rawFacts = await extractFactsFromChunks(chunks, { promptPath, categories });
-  console.log(`  ${rawFacts.length} facts extracted from ${chunks.length} chunks`);
+  process.stderr.write(`  ${rawFacts.length} facts extracted from ${chunks.length} chunks` + "\n");
 
   if (!rawFacts.length) {
     return { counts: { total: 0, added: 0, skipped: 0, updated: 0, contradicted: 0 }, results: [] };

@@ -45,14 +45,14 @@ async function findSimilar(embedding, { entityType, namespace, threshold = 0.85,
   const { rows } = await cortexDb.raw(`
     SELECT id, uid, name, entity_type AS "entityType", description,
            mention_count AS "mentionCount",
-           1 - (embedding <=> ?) AS similarity
+           1 - (embedding::halfvec(768) <=> ?::halfvec(768)) AS similarity
     FROM entity
     WHERE entity_type = ?
       AND namespace = COALESCE(?, ?)
       AND embedding IS NOT NULL
       AND merged_with IS NULL
-      AND 1 - (embedding <=> ?) >= ?
-    ORDER BY embedding <=> ?
+      AND 1 - (embedding::halfvec(768) <=> ?::halfvec(768)) >= ?
+    ORDER BY embedding::halfvec(768) <=> ?::halfvec(768)
     LIMIT ?
   `, [vec, entityType, namespace, config.defaults.namespace, vec, threshold, vec, limit]);
 

@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { config as dotenvConfig } from 'dotenv';
 
+import { maskSecrets } from './secret-mask.js';
+
 // Load env before anything else
 const home = process.env.HOME || process.env.USERPROFILE;
 const globalEnv = join(home, '.cortex', '.env');
@@ -52,10 +54,10 @@ async function main() {
       return respond();
     }
 
-    const context = [
+    const context = maskSecrets([
       `Cortex memory (${facts.length} relevant facts):`,
       ...facts.map((f) => `- ${f.content}`),
-    ].join('\n');
+    ].join('\n'));
 
     const cortexDb = (await import('../db/cortex.js')).default;
     await cortexDb.destroy();

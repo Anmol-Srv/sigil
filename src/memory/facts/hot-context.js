@@ -27,20 +27,19 @@ export async function getHotFacts({ namespace, limit = CONTEXT_LIMIT } = {}) {
   const half = Math.ceil(limit / 2);
 
   const [vital, recent] = await Promise.all([
-    cortexDb('fact')
-      .where({ status: 'active', namespace: ns, importance: 'vital' })
-      .orderBy([
-        { column: 'access_count', order: 'desc' },
-        { column: 'created_at', order: 'desc' },
-      ])
+    cortexDb('fact as f')
+      .leftJoin('fact_lifecycle as fl', 'fl.fact_id', 'f.id')
+      .where({ 'f.status': 'active', 'f.namespace': ns, 'f.importance': 'vital' })
+      .orderByRaw('COALESCE(fl.access_count, 0) DESC, f.created_at DESC')
       .limit(half)
-      .pluck('content'),
+      .pluck('f.content'),
 
-    cortexDb('fact')
-      .where({ status: 'active', namespace: ns })
-      .orderByRaw("COALESCE(last_accessed_at, created_at) DESC")
+    cortexDb('fact as f')
+      .leftJoin('fact_lifecycle as fl', 'fl.fact_id', 'f.id')
+      .where({ 'f.status': 'active', 'f.namespace': ns })
+      .orderByRaw('COALESCE(fl.last_accessed_at, f.created_at) DESC')
       .limit(limit)
-      .pluck('content'),
+      .pluck('f.content'),
   ]);
 
   const seen = new Set();

@@ -29,10 +29,15 @@ Usage:
   cortex <command> [options]
 
 Commands:
-  init                     Set up Cortex (DB, env, migrations, Claude integration)
+  init                     Set up Cortex (DB, env, hooks, Claude integration)
+  doctor                   Diagnose Cortex setup (DB, LLM, embeddings, hooks)
   remember "text"          Save a fact or note to memory
   ingest <file|url|glob>   Ingest documents into the knowledge base
   search "query"           Search the knowledge base
+  facts                    List stored facts with IDs
+  forget <id>              Delete a specific fact by ID
+  namespace <sub>          Manage namespaces (list | delete <ns>)
+  export [--format=json]   Export knowledge base as JSON or Markdown
   context                  Refresh the hot-context snapshot in ~/.claude/CLAUDE.md
   status                   Show knowledge base statistics
   migrate                  Run database migrations
@@ -51,11 +56,16 @@ if (!command || command === '--help' || command === '-h') {
 
 const commands = {
   init: runInit,
+  doctor: runDoctor,
   remember: runRemember,
   ingest: runIngest,
   search: runSearch,
   context: runContext,
   status: runStatus,
+  facts: runFacts,
+  forget: runForget,
+  namespace: runNamespace,
+  export: runExport,
   migrate: runMigrate,
   reset: runReset,
   register: runRegister,
@@ -239,12 +249,13 @@ async function runInit(args) {
   // ── ~/.cortex/CLAUDE.md + @import in ~/.claude/CLAUDE.md ─────────────────
 
   const claudeSpinner = spinner();
-  claudeSpinner.start('Configuring Claude Code memory...');
+  claudeSpinner.start('Configuring Claude Code integration...');
   await writeCortexMd();
   await writeClaudeMd();
+  await registerHooks();
   const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
   await updateContextSnapshot({ namespace: namespace.toString() }).catch(() => {});
-  claudeSpinner.stop('Claude memory configured');
+  claudeSpinner.stop('Claude Code integration configured (memory + hooks)');
 
   // ── Done ──────────────────────────────────────────────────────────────────
 
@@ -266,6 +277,329 @@ async function runInit(args) {
   );
 
   outro('Open a new Claude Code session to start using Cortex.');
+}
+
+// ─── Doctor ─────────────────────────────────────────────────────────────────
+
+async function runDoctor(args) {
+  if (args.includes('--help')) {
+    console.log(`cortex doctor — Diagnose Cortex setup
+
+Usage:
+  cortex doctor
+
+Checks: database, LLM provider, embedding provider, hook registration, disk paths.`);
+    process.exit(0);
+  }
+
+  const checks = [];
+  const log = (status, label, detail = '') => {
+    const icon = status === 'ok' ? '✓' : status === 'warn' ? '⚠' : '✗';
+    checks.push({ status, label });
+    console.log(`  ${icon} ${label}${detail ? ` — ${detail}` : ''}`);
+  };
+
+  console.log('\nCortex diagnostic\n');
+
+  // Config location
+  const globalEnv = join(homedir(), '.cortex', '.env');
+  if (existsSync(globalEnv)) log('ok', 'Config file', globalEnv);
+  else log('warn', 'Config file', `${globalEnv} not found — run 'cortex init'`);
+
+  // Database
+  try {
+    const cortexDb = (await import('./db/cortex.js')).default;
+    const config = (await import('./config.js')).default;
+    await cortexDb.raw('SELECT 1');
+    log('ok', 'Database', config.db.type === 'postgres' ? 'external Postgres' : `PGlite (${join(homedir(), '.cortex', 'db')})`);
+
+    const { getFactCount } = await import('./memory/facts/store.js');
+    const { getStats } = await import('./memory/documents/store.js');
+    const [facts, stats] = await Promise.all([getFactCount(), getStats()]);
+    log('ok', 'Stored data', `${stats.documentCount} docs, ${stats.totalChunks} chunks, ${facts} facts`);
+    await cortexDb.destroy();
+  } catch (err) {
+    log('fail', 'Database', err.message);
+  }
+
+  // LLM provider
+  try {
+    const { detectProvider, isOllamaReachable, isClaudeCliAvailable } = await import('./lib/llm/registry.js');
+    const config = (await import('./config.js')).default;
+    const provider = await detectProvider();
+
+    if (provider === 'anthropic') log('ok', 'LLM provider', `anthropic (API key set)`);
+    else if (provider === 'openai') log('ok', 'LLM provider', `openai (API key set)`);
+    else if (provider === 'ollama') log('ok', 'LLM provider', `ollama @ ${config.llm.ollamaHost}`);
+    else if (provider === 'claude-cli') log('ok', 'LLM provider', 'claude-cli (Claude Code subscription)');
+    else log('warn', 'LLM provider', provider);
+  } catch (err) {
+    log('fail', 'LLM provider', err.message.split('\n')[0]);
+  }
+
+  // Embedding provider
+  try {
+    const { detectEmbeddingProvider } = await import('./lib/llm/registry.js');
+    const config = (await import('./config.js')).default;
+    const provider = await detectEmbeddingProvider();
+    log('ok', 'Embedding provider', `${provider} / ${config.embedding.model}`);
+  } catch (err) {
+    log('fail', 'Embedding provider', err.message.split('\n')[0]);
+  }
+
+  // Claude Code integration
+  const claudeSettingsPath = join(homedir(), '.claude', 'settings.json');
+  if (existsSync(claudeSettingsPath)) {
+    try {
+      const fs = await import('node:fs/promises');
+      const settings = JSON.parse(await fs.readFile(claudeSettingsPath, 'utf8'));
+      const hooks = settings.hooks || {};
+      const hasUPS = hooks.UserPromptSubmit?.some((h) => h.hooks?.some((i) => i.command?.includes('cortex') || i.command?.includes('user-prompt-submit')));
+      const hasPTU = hooks.PostToolUse?.some((h) => h.hooks?.some((i) => i.command?.includes('cortex') || i.command?.includes('post-tool-use')));
+      if (hasUPS) log('ok', 'UserPromptSubmit hook', 'registered');
+      else log('warn', 'UserPromptSubmit hook', `not registered — run 'cortex init' to enable auto-context injection`);
+      if (hasPTU) log('ok', 'PostToolUse hook', 'registered');
+      else log('warn', 'PostToolUse hook', `not registered — run 'cortex init' to enable auto-capture`);
+    } catch (err) {
+      log('warn', 'Claude Code hooks', `could not parse settings.json: ${err.message}`);
+    }
+  } else {
+    log('warn', 'Claude Code settings', `${claudeSettingsPath} not found`);
+  }
+
+  const cortexMd = join(homedir(), '.cortex', 'CLAUDE.md');
+  if (existsSync(cortexMd)) log('ok', 'Cortex CLAUDE.md', cortexMd);
+  else log('warn', 'Cortex CLAUDE.md', `not found — run 'cortex init'`);
+
+  console.log();
+  const failed = checks.filter((c) => c.status === 'fail').length;
+  const warned = checks.filter((c) => c.status === 'warn').length;
+  if (failed) {
+    console.log(`${failed} error${failed > 1 ? 's' : ''}, ${warned} warning${warned !== 1 ? 's' : ''}`);
+    process.exit(1);
+  } else if (warned) {
+    console.log(`All critical checks passed. ${warned} warning${warned > 1 ? 's' : ''}.`);
+  } else {
+    console.log('All checks passed.');
+  }
+}
+
+// ─── Export ──────────────────────────────────────────────────────────────────
+
+async function runExport(args) {
+  if (args.includes('--help')) {
+    console.log(`cortex export — Export knowledge base to stdout or a file
+
+Usage:
+  cortex export [options] [> file]
+
+Options:
+  --namespace=<ns>    Filter by namespace
+  --format=<fmt>      Output format: json (default) or markdown
+  --output=<path>     Write to file instead of stdout`);
+    process.exit(0);
+  }
+
+  const fs = await import('node:fs/promises');
+  const { listFacts } = await import('./memory/facts/store.js');
+  const config = (await import('./config.js')).default;
+  const cortexDb = (await import('./db/cortex.js')).default;
+
+  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1] || config.defaults.namespace;
+  const format = args.find((a) => a.startsWith('--format='))?.split('=')[1] || 'json';
+  const outputPath = args.find((a) => a.startsWith('--output='))?.split('=')[1];
+
+  const facts = await listFacts({ namespace, limit: 10000 });
+  const entities = await cortexDb('entity').where({ namespace });
+  const documents = await cortexDb('document').where({ namespace });
+
+  let output;
+  if (format === 'markdown') {
+    const lines = [`# Cortex export — namespace: ${namespace}`, `Generated: ${new Date().toISOString()}`, ''];
+    lines.push(`## Facts (${facts.length})`, '');
+    for (const f of facts) {
+      const importance = f.importance === 'vital' ? ' **[VITAL]**' : '';
+      lines.push(`- **[${f.category}]**${importance} ${f.content} *(${f.confidence})*`);
+    }
+    lines.push('', `## Entities (${entities.length})`, '');
+    for (const e of entities) {
+      lines.push(`- **${e.name}** (${e.entityType})${e.description ? ` — ${e.description}` : ''}`);
+    }
+    lines.push('', `## Documents (${documents.length})`, '');
+    for (const d of documents) {
+      lines.push(`- ${d.title} (${d.sourcePath})`);
+    }
+    output = lines.join('\n');
+  } else {
+    output = JSON.stringify({
+      namespace,
+      exportedAt: new Date().toISOString(),
+      facts: facts.map((f) => ({
+        uid: f.uid,
+        content: f.content,
+        category: f.category,
+        confidence: f.confidence,
+        importance: f.importance,
+        createdAt: f.createdAt,
+      })),
+      entities: entities.map((e) => ({
+        uid: e.uid,
+        name: e.name,
+        type: e.entityType,
+        description: e.description,
+        mentionCount: e.mentionCount,
+      })),
+      documents: documents.map((d) => ({
+        sourcePath: d.sourcePath,
+        title: d.title,
+        sourceType: d.sourceType,
+        chunkCount: d.chunkCount,
+        factCount: d.factCount,
+      })),
+    }, null, 2);
+  }
+
+  if (outputPath) {
+    await fs.writeFile(outputPath, output, 'utf8');
+    console.log(`Exported ${facts.length} facts, ${entities.length} entities, ${documents.length} documents to ${outputPath}`);
+  } else {
+    process.stdout.write(output + '\n');
+  }
+
+  await cortexDb.destroy();
+}
+
+// ─── Namespace ───────────────────────────────────────────────────────────────
+
+async function runNamespace(args) {
+  const sub = args[0];
+
+  if (!sub || args.includes('--help')) {
+    console.log(`cortex namespace — Manage namespaces
+
+Usage:
+  cortex namespace list
+  cortex namespace delete <ns> [--confirm]
+
+Namespaces isolate facts. A project, team, or context each gets its own.`);
+    process.exit(sub ? 0 : 1);
+  }
+
+  const { listNamespaces, deleteNamespace } = await import('./memory/facts/store.js');
+  const cortexDb = (await import('./db/cortex.js')).default;
+
+  if (sub === 'list') {
+    const namespaces = await listNamespaces();
+    if (!namespaces.length) {
+      console.log('No namespaces with facts.');
+    } else {
+      console.log('Namespaces:');
+      for (const { namespace, factCount } of namespaces) {
+        console.log(`  ${namespace.padEnd(30)} ${factCount} fact${factCount === 1 ? '' : 's'}`);
+      }
+    }
+  } else if (sub === 'delete') {
+    const ns = args[1];
+    if (!ns || ns.startsWith('--')) {
+      console.error(`Provide a namespace: cortex namespace delete <ns> --confirm`);
+      await cortexDb.destroy();
+      process.exit(1);
+    }
+    if (!args.includes('--confirm')) {
+      console.error(`This will delete ALL data in namespace "${ns}". Run with --confirm to proceed.`);
+      await cortexDb.destroy();
+      process.exit(1);
+    }
+    const result = await deleteNamespace(ns);
+    console.log(`Deleted namespace "${ns}":`);
+    console.log(`  ${result.factsDeleted} facts, ${result.chunksDeleted} chunks, ${result.docsDeleted} documents, ${result.entitiesDeleted} entities`);
+  } else {
+    console.error(`Unknown subcommand: ${sub}`);
+    await cortexDb.destroy();
+    process.exit(1);
+  }
+
+  await cortexDb.destroy();
+}
+
+// ─── Facts (list) ────────────────────────────────────────────────────────────
+
+async function runFacts(args) {
+  if (args.includes('--help')) {
+    console.log(`cortex facts — List stored facts
+
+Usage:
+  cortex facts [options]
+
+Options:
+  --namespace=<ns>   Filter by namespace
+  --category=<c>     Filter by category
+  --limit=<n>        Max facts to show (default: 20)`);
+    process.exit(0);
+  }
+
+  const { listFacts } = await import('./memory/facts/store.js');
+  const config = (await import('./config.js')).default;
+  const cortexDb = (await import('./db/cortex.js')).default;
+
+  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1] || config.defaults.namespace;
+  const category = args.find((a) => a.startsWith('--category='))?.split('=')[1];
+  const limit = Number(args.find((a) => a.startsWith('--limit='))?.split('=')[1] || 20);
+
+  const facts = await listFacts({ namespace, category, limit });
+
+  if (!facts.length) {
+    console.log('No facts found.');
+  } else {
+    for (const fact of facts) {
+      const importance = fact.importance === 'vital' ? ' [VITAL]' : '';
+      console.log(`${fact.uid.slice(0, 8)} [${fact.category}]${importance} ${fact.content}`);
+    }
+    console.log(`\n${facts.length} fact${facts.length > 1 ? 's' : ''} shown. Use 'cortex forget <id>' to delete.`);
+  }
+
+  await cortexDb.destroy();
+}
+
+// ─── Forget ──────────────────────────────────────────────────────────────────
+
+async function runForget(args) {
+  if (args.includes('--help') || !args[0] || args[0].startsWith('--')) {
+    console.log(`cortex forget — Delete a fact by ID
+
+Usage:
+  cortex forget <id>
+
+Get IDs from 'cortex facts' or 'cortex search'. IDs can be the short prefix or full UID.`);
+    process.exit(args[0] ? 0 : 1);
+  }
+
+  const { deleteFact } = await import('./memory/facts/store.js');
+  const cortexDb = (await import('./db/cortex.js')).default;
+
+  const idArg = args[0];
+  // Support short prefix by matching UID prefix
+  let deleted;
+  if (idArg.length < 20) {
+    const [match] = await cortexDb('fact').where('uid', 'like', `${idArg}%`).limit(1);
+    if (!match) {
+      console.error(`No fact matches: ${idArg}`);
+      await cortexDb.destroy();
+      process.exit(1);
+    }
+    deleted = await deleteFact(match.uid);
+  } else {
+    deleted = await deleteFact(idArg);
+  }
+
+  if (!deleted) {
+    console.error(`No fact matches: ${idArg}`);
+    await cortexDb.destroy();
+    process.exit(1);
+  }
+
+  console.log(`Forgotten: ${deleted.content}`);
+  await cortexDb.destroy();
 }
 
 // ─── Remember ────────────────────────────────────────────────────────────────
@@ -382,6 +716,58 @@ async function writeClaudeMd() {
     const separator = existing.trim() ? '\n' : '';
     await fs.writeFile(claudeMdPath, `${existing}${separator}${importLine}\n`, 'utf8');
   }
+}
+
+// Step 3: register Cortex hooks in ~/.claude/settings.json — idempotent merge.
+// Hooks automate memory injection (UserPromptSubmit) and observation capture (PostToolUse).
+async function registerHooks() {
+  const fs = await import('node:fs/promises');
+  const settingsPath = join(homedir(), '.claude', 'settings.json');
+
+  let settings = {};
+  try {
+    const raw = await fs.readFile(settingsPath, 'utf8');
+    settings = JSON.parse(raw);
+  } catch { /* file doesn't exist or invalid — start fresh */ }
+
+  // Resolve hook paths — works for both source dev and bundled distribution
+  const srcHooks = join(PKG_DIR, 'src', 'hooks');
+  const distHooks = join(PKG_DIR, 'dist', 'hooks');
+  const hookDir = existsSync(distHooks) ? distHooks : srcHooks;
+
+  const cortexHooks = {
+    UserPromptSubmit: {
+      hooks: [{
+        type: 'command',
+        command: `node ${join(hookDir, 'user-prompt-submit.js')}`,
+        timeout: 10,
+        statusMessage: 'Searching memory...',
+      }],
+    },
+    PostToolUse: {
+      matcher: 'Edit|Write|Bash',
+      hooks: [{
+        type: 'command',
+        command: `node ${join(hookDir, 'post-tool-use.js')}`,
+        timeout: 10,
+        async: true,
+      }],
+    },
+  };
+
+  settings.hooks = settings.hooks || {};
+
+  for (const [event, cortexEntry] of Object.entries(cortexHooks)) {
+    const existing = settings.hooks[event] || [];
+    // Remove any previous Cortex hooks to keep this idempotent
+    const filtered = existing.filter(
+      (h) => !h.hooks?.some((inner) => inner.command?.includes('cortex') && inner.command?.includes('hooks')),
+    );
+    settings.hooks[event] = [...filtered, cortexEntry];
+  }
+
+  await fs.mkdir(join(homedir(), '.claude'), { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
 }
 
 // Step 2: write Cortex instructions to ~/.cortex/CLAUDE.md — Cortex owns this file entirely.
@@ -588,7 +974,8 @@ Examples:
       } else if (input.includes('*')) {
         sources = await readSources(input);
         if (!sources.length) {
-          console.log(`No files matched: ${input}`);
+          console.error(`Error: No files matched pattern: ${input}`);
+          results.failed.push({ input, error: 'no files matched' });
           continue;
         }
       } else {
@@ -633,6 +1020,8 @@ Examples:
   }
 
   await cortexDb.destroy();
+
+  if (results.failed.length && !results.success.length) process.exit(1);
 }
 
 // ─── Search ──────────────────────────────────────────────────────────────────

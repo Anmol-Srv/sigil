@@ -45,23 +45,27 @@ vi.mock('../cognitive/query-router.js', () => ({
   }),
 }));
 
+// vector + keyword are only used for chunk search now (facts go through hybrid-sql)
 vi.mock('./vector.js', () => ({
-  searchFacts: vi.fn(),
   searchChunks: vi.fn().mockResolvedValue([]),
+  searchFacts: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock('./keyword.js', () => ({
-  searchFacts: vi.fn(),
   searchChunks: vi.fn().mockResolvedValue([]),
+  searchFacts: vi.fn().mockResolvedValue([]),
 }));
 
-import * as vectorSearch from './vector.js';
-import * as keywordSearch from './keyword.js';
+vi.mock('./hybrid-sql.js', () => ({
+  hybridSearchFacts: vi.fn(),
+}));
+
+import { hybridSearchFacts } from './hybrid-sql.js';
 import { routeQuery } from '../cognitive/query-router.js';
 import { search } from './hybrid.js';
 
 const makeFactList = (ids) =>
-  ids.map((id) => ({
+  ids.map((id, i) => ({
     id,
     uid: `fact-${id}`,
     content: `Fact number ${id}`,
@@ -70,11 +74,11 @@ const makeFactList = (ids) =>
     importance: 'supplementary',
     namespace: 'default',
     status: 'active',
+    rrfScore: 1 - i * 0.1, // SQL-side RRF already produced these
   }));
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Restore defaults
   routeQuery.mockResolvedValue({
     intent: 'factual',
     categories: [],
@@ -86,81 +90,44 @@ beforeEach(() => {
   });
 });
 
-describe('RRF merge — result deduplication and ranking', () => {
-  it('deduplicates facts that appear in both vector and keyword results', async () => {
-    const sharedFact = makeFactList([1])[0];
-    vectorSearch.searchFacts.mockResolvedValue([sharedFact, ...makeFactList([2, 3])]);
-    keywordSearch.searchFacts.mockResolvedValue([sharedFact, ...makeFactList([4, 5])]);
+describe('search — facade behavior', () => {
+  it('returns facts from hybrid-sql layer', async () => {
+    const facts = makeFactList([1, 2, 3]);
+    hybridSearchFacts.mockResolvedValue(facts);
 
     const result = await search('test query', { namespaces: ['default'], limit: 10 });
-    const ids = result.facts.map((f) => f.id);
-    const unique = new Set(ids);
-    expect(ids.length).toBe(unique.size);  // no duplicates
-    expect(ids).toContain(1);               // shared fact is present
+
+    expect(result.facts).toHaveLength(3);
+    expect(result.facts.map((f) => f.id)).toEqual([1, 2, 3]);
   });
 
-  it('fact appearing in both vector and keyword ranks higher than one appearing in only one', async () => {
-    const overlap = { ...makeFactList([1])[0], content: 'overlap fact' };
-    const vectorOnly = { ...makeFactList([2])[0], content: 'vector only' };
-    const keywordOnly = { ...makeFactList([3])[0], content: 'keyword only' };
-
-    vectorSearch.searchFacts.mockResolvedValue([overlap, vectorOnly]);
-    keywordSearch.searchFacts.mockResolvedValue([overlap, keywordOnly]);
-
-    const result = await search('some query', { namespaces: ['default'], limit: 5 });
-    const ids = result.facts.map((f) => f.id);
-    // overlap (id=1) should rank first because it appears in both lists
-    expect(ids[0]).toBe(1);
-  });
-
-  it('returns empty facts when both searches return nothing', async () => {
-    vectorSearch.searchFacts.mockResolvedValue([]);
-    keywordSearch.searchFacts.mockResolvedValue([]);
+  it('returns empty when hybrid-sql returns nothing', async () => {
+    hybridSearchFacts.mockResolvedValue([]);
 
     const result = await search('no results query', { namespaces: ['default'] });
+
     expect(result.facts).toHaveLength(0);
   });
 
-  it('respects limit parameter', async () => {
-    vectorSearch.searchFacts.mockResolvedValue(makeFactList([1, 2, 3, 4, 5, 6, 7, 8]));
-    keywordSearch.searchFacts.mockResolvedValue(makeFactList([1, 2, 3]));
+  it('passes namespace, limit, minConfidence to hybrid-sql', async () => {
+    hybridSearchFacts.mockResolvedValue([]);
 
-    const result = await search('test', { namespaces: ['default'], limit: 3 });
-    expect(result.facts.length).toBeLessThanOrEqual(3);
-  });
-});
+    await search('test', {
+      namespaces: ['work'],
+      limit: 5,
+      minConfidence: 'high',
+    });
 
-describe('RRF merge — result field preservation', () => {
-  it('importance field is preserved on merged results', async () => {
-    const vitalFact = { ...makeFactList([10])[0], importance: 'vital' };
-    const suppFact = { ...makeFactList([11])[0], importance: 'supplementary' };
-
-    vectorSearch.searchFacts.mockResolvedValue([vitalFact, suppFact]);
-    keywordSearch.searchFacts.mockResolvedValue([]);
-
-    const result = await search('test', { namespaces: ['default'], limit: 5 });
-    const byId = Object.fromEntries(result.facts.map((f) => [f.id, f]));
-    expect(byId[10].importance).toBe('vital');
-    expect(byId[11].importance).toBe('supplementary');
+    const call = hybridSearchFacts.mock.calls[0];
+    expect(call[0]).toBe('test');              // query
+    expect(call[2]).toMatchObject({            // options
+      namespaces: ['work'],
+      limit: 5,
+      minConfidence: 'high',
+    });
   });
 
-  it('higher-ranked fact in vector list has higher RRF score than lower-ranked', async () => {
-    const top = makeFactList([20])[0];
-    const bottom = makeFactList([21])[0];
-
-    // top is rank 0, bottom is rank 5 — significant score difference
-    vectorSearch.searchFacts.mockResolvedValue([top, ...makeFactList([99, 98, 97, 96]), bottom]);
-    keywordSearch.searchFacts.mockResolvedValue([]);
-
-    const result = await search('test', { namespaces: ['default'], limit: 10 });
-    const topFact = result.facts.find((f) => f.id === 20);
-    const bottomFact = result.facts.find((f) => f.id === 21);
-    expect(topFact.rrfScore).toBeGreaterThan(bottomFact.rrfScore);
-  });
-});
-
-describe('search — routing integration', () => {
-  it('preference route filters by personal categories', async () => {
+  it('passes category filter from query router', async () => {
     routeQuery.mockResolvedValue({
       intent: 'preference',
       categories: ['preference', 'opinion', 'personal'],
@@ -170,24 +137,59 @@ describe('search — routing integration', () => {
       pointInTime: null,
       reasoning: '',
     });
-
-    vectorSearch.searchFacts.mockResolvedValue([]);
-    keywordSearch.searchFacts.mockResolvedValue([]);
+    hybridSearchFacts.mockResolvedValue([]);
 
     await search('what fruit do I like?', { namespaces: ['default'] });
 
-    // Verify category filter was passed to vector search
-    const vectorCall = vectorSearch.searchFacts.mock.calls[0][1];
-    expect(vectorCall.categories).toEqual(['preference', 'opinion', 'personal']);
+    const call = hybridSearchFacts.mock.calls[0];
+    expect(call[2].categories).toEqual(['preference', 'opinion', 'personal']);
   });
 
-  it('result includes rrfScore field', async () => {
-    const fact = makeFactList([42])[0];
-    vectorSearch.searchFacts.mockResolvedValue([fact]);
-    keywordSearch.searchFacts.mockResolvedValue([]);
+  it('preserves rrfScore field from hybrid-sql', async () => {
+    hybridSearchFacts.mockResolvedValue(makeFactList([42]));
 
     const result = await search('test', { namespaces: ['default'], limit: 5 });
+
     expect(result.facts[0]).toHaveProperty('rrfScore');
     expect(typeof result.facts[0].rrfScore).toBe('number');
+  });
+
+  it('preserves importance field', async () => {
+    const vitalFact = { ...makeFactList([10])[0], importance: 'vital' };
+    const suppFact = { ...makeFactList([11])[0], importance: 'supplementary' };
+    hybridSearchFacts.mockResolvedValue([vitalFact, suppFact]);
+
+    const result = await search('test', { namespaces: ['default'], limit: 5 });
+    const byId = Object.fromEntries(result.facts.map((f) => [f.id, f]));
+
+    expect(byId[10].importance).toBe('vital');
+    expect(byId[11].importance).toBe('supplementary');
+  });
+
+  it('respects limit parameter from router override', async () => {
+    routeQuery.mockResolvedValue({
+      intent: 'exploratory',
+      categories: [],
+      useGraph: false,
+      expand: false,
+      limit: 15,
+      pointInTime: null,
+      reasoning: '',
+    });
+    hybridSearchFacts.mockResolvedValue([]);
+
+    await search('test', { namespaces: ['default'], limit: 5 });
+
+    const call = hybridSearchFacts.mock.calls[0];
+    // Router's limit should win
+    expect(call[2].limit).toBe(15);
+  });
+
+  it('empty chunks when includeChunks is false (default)', async () => {
+    hybridSearchFacts.mockResolvedValue(makeFactList([1]));
+
+    const result = await search('test', { namespaces: ['default'], limit: 5 });
+
+    expect(result.chunks).toEqual([]);
   });
 });
