@@ -1,13 +1,12 @@
 import { readFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import { promptJson } from '../../lib/llm.js';
 import { TtlCache } from '../../lib/cache.js';
 import config from '../../config.js';
+import { PROMPTS_DIR } from '../../lib/paths.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPT_PATH = join(__dirname, '../../../prompts/query-router.md');
+const PROMPT_PATH = join(PROMPTS_DIR, 'query-router.md');
 
 const cache = new TtlCache({ maxSize: 200, ttlMs: 10 * 60 * 1000 });
 

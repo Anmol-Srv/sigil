@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
 import { nanoid } from 'nanoid';
 import path from 'node:path';
 
@@ -8,9 +7,9 @@ import { embed } from '../../ingestion/embedder.js';
 import { prompt as llmPrompt } from '../../lib/llm.js';
 import { pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
+import { PROMPTS_DIR } from '../../lib/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const AUDM_PROMPT_PATH = path.join(__dirname, '../../../prompts/audm-decision.md');
+const AUDM_PROMPT_PATH = path.join(PROMPTS_DIR, 'audm-decision.md');
 
 // Paraphrased content with nomic-embed-text typically lands 0.75-0.88.
 const SKIP_THRESHOLD = config.memory.skipThreshold;
@@ -159,13 +158,13 @@ async function findSimilar(embedding, { namespace, threshold = AMBIGUOUS_THRESHO
 
   const { rows } = await cortexDb.raw(`
     SELECT id, uid, content, category, status,
-           1 - (embedding::halfvec(768) <=> ?::halfvec(768)) as similarity
+           1 - (embedding <=> ?) as similarity
     FROM fact
     WHERE namespace = ?
       AND status = 'active'
       AND embedding IS NOT NULL
-      AND 1 - (embedding::halfvec(768) <=> ?::halfvec(768)) >= ?
-    ORDER BY embedding::halfvec(768) <=> ?::halfvec(768)
+      AND 1 - (embedding <=> ?) >= ?
+    ORDER BY embedding <=> ?
     LIMIT ?
   `, [vec, namespace, vec, threshold, vec, limit]);
 

@@ -233,7 +233,7 @@ async function runInit(args) {
   const dbSpinner = spinner();
   dbSpinner.start('Initialising memory database...');
   try {
-    const migrationDir = join(PKG_DIR, 'src', 'db', 'migrations');
+    const { MIGRATIONS_DIR: migrationDir } = await import('./lib/paths.js');
     const cortexDb = (await import('./db/cortex.js')).default;
     const [, migrations] = await cortexDb.migrate.latest({ directory: migrationDir });
     await cortexDb.destroy();
@@ -1170,7 +1170,7 @@ Usage:
   }
 
   const cortexDb = (await import('./db/cortex.js')).default;
-  const migrationDir = join(PKG_DIR, 'src', 'db', 'migrations');
+  const { MIGRATIONS_DIR: migrationDir } = await import('./lib/paths.js');
 
   if (args.includes('--rollback')) {
     const [batch, migrations] = await cortexDb.migrate.rollback({ directory: migrationDir });
@@ -1208,7 +1208,7 @@ Requires --confirm flag to prevent accidental data loss.`);
   }
 
   const cortexDb = (await import('./db/cortex.js')).default;
-  const migrationDir = join(PKG_DIR, 'src', 'db', 'migrations');
+  const { MIGRATIONS_DIR: migrationDir } = await import('./lib/paths.js');
 
   await cortexDb.migrate.rollback({ directory: migrationDir }, true);
   await cortexDb.migrate.latest({ directory: migrationDir });

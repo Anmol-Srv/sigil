@@ -1,13 +1,12 @@
 import { readFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import { promptJson } from '../../lib/llm.js';
 import config from '../../config.js';
 import { ALL_CATEGORIES } from '../facts/categories.js';
+import { PROMPTS_DIR } from '../../lib/paths.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPT_PATH = join(__dirname, '../../../prompts/input-classifier.md');
+const PROMPT_PATH = join(PROMPTS_DIR, 'input-classifier.md');
 
 const NOISE_MIN_LENGTH = 3;
 const DOCUMENT_MIN_LENGTH = 2000;

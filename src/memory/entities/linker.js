@@ -1,12 +1,11 @@
-import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 import { resolveEntity, resolveTopicsFromFacts } from './resolver.js';
 import { createRelation } from './relations.js';
 import { linkEntitiesToFact } from '../facts/entity-linker.js';
+import { PROMPTS_DIR } from '../../lib/paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ENTITY_PROMPT = path.join(__dirname, '../../../prompts/entity-extraction.md');
+const ENTITY_PROMPT = path.join(PROMPTS_DIR, 'entity-extraction.md');
 
 /**
  * Orchestrates entity linking for a document ingestion.

@@ -42,8 +42,7 @@ src/
 │   │   └── categories.js        # Default category definitions
 │   ├── entities/                # Entity graph
 │   │   ├── store.js             # Entity CRUD + canonical entity tracking
-│   │   ├── resolver.js          # 4-stage dedup cascade (exact → fuzzy → embedding → create)
-│   │   ├── fuzzy-matcher.js     # Levenshtein-based name matching + LLM verify
+│   │   ├── resolver.js          # 3-stage dedup cascade (exact → embedding → create)
 │   │   ├── embedding-matcher.js # pgvector similarity matching + LLM verify
 │   │   ├── merger.js            # Non-lossy entity merge (redirect relations, merge types)
 │   │   ├── linker.js            # Document entity linking orchestrator

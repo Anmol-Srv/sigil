@@ -9,7 +9,6 @@
  *   - Over-fetch 3x from each stage for RRF headroom
  *   - FULL OUTER JOIN preserves items appearing in only one list
  *   - Position-based RRF (scale-invariant)
- *   - Halfvec cast for index usage
  *   - Vital-importance tiebreak
  */
 
@@ -61,8 +60,8 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
              content, category, confidence, importance, namespace, status,
              source_document_ids AS "sourceDocumentIds",
              source_section AS "sourceSection",
-             1 - (embedding::halfvec(768) <=> ?::halfvec(768)) AS similarity,
-             ROW_NUMBER() OVER (ORDER BY embedding::halfvec(768) <=> ?::halfvec(768)) AS rank_ix
+             1 - (embedding <=> ?) AS similarity,
+             ROW_NUMBER() OVER (ORDER BY embedding <=> ?) AS rank_ix
       FROM fact
       WHERE namespace = ANY(?)
         AND status = 'active'
@@ -70,7 +69,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
         AND ${CONFIDENCE_CASE} >= ?
         ${temporalClause}
         ${categoryClause}
-      ORDER BY embedding::halfvec(768) <=> ?::halfvec(768)
+      ORDER BY embedding <=> ?
       LIMIT ?
     ),
     keyword AS (

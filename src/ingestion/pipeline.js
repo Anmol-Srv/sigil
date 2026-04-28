@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import { parse } from './parsers/index.js';
 import { chunkSections } from './chunker.js';
@@ -15,9 +14,9 @@ import { DEFAULT_CATEGORIES } from '../memory/facts/categories.js';
 import { classifyInput } from '../memory/cognitive/input-classifier.js';
 import { linkDocumentEntities } from '../memory/entities/linker.js';
 import config from '../config.js';
+import { PROMPTS_DIR } from '../lib/paths.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PROMPT_PATH = join(__dirname, '../../prompts/default-extraction.md');
+const DEFAULT_PROMPT_PATH = join(PROMPTS_DIR, 'default-extraction.md');
 
 /**
  * Ingest a document into the Cortex knowledge base.

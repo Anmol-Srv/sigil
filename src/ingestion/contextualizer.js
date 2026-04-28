@@ -1,12 +1,11 @@
 import { readFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import { promptJson } from '../lib/llm.js';
 import config from '../config.js';
+import { PROMPTS_DIR } from '../lib/paths.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPT_PATH = join(__dirname, '../../prompts/chunk-context.md');
+const PROMPT_PATH = join(PROMPTS_DIR, 'chunk-context.md');
 
 async function contextualizeChunks(chunks, documentText, { title }) {
   if (!chunks.length) return chunks;
