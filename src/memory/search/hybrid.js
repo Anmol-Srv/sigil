@@ -12,6 +12,7 @@ import { hybridSearchFacts } from './hybrid-sql.js';
 import { extractEntitiesFromFacts, findRelatedFacts, rerank } from './graph-enhancement.js';
 import { expandQuery } from './query-expander.js';
 import { routeQuery } from '../cognitive/query-router.js';
+import { prompt as llmPrompt } from '../../lib/llm.js';
 
 // K=20 gives good score spread for our result set sizes (5-50).
 // K=60 (original paper) compresses scores into a ~0.001 band with small sets.
@@ -24,7 +25,11 @@ const KEYWORD_WEIGHT = 0.7;
 // Entity detection only for short, name-like queries — not full sentences
 const MAX_ENTITY_QUERY_LENGTH = 60;
 
-async function search(query, { namespaces, limit = 5, minConfidence = 'medium', useGraph = false, includeChunks = false, pointInTime, expand = false, route = true, categories } = {}) {
+async function search(query, { namespaces, limit = 5, minConfidence = 'medium', useGraph = false, includeChunks = false, pointInTime, expand = false, route = true, categories, synthesize = config.search.synthesize } = {}) {
+  // When synthesis is on, force include chunks so the synthesizer has raw material
+  // (especially important in lazy/Ogham mode where no facts are stored).
+  if (synthesize) includeChunks = true;
+
   // Cognitive routing — classify query intent and adjust search params
   let routing = null;
   if (route) {
@@ -52,7 +57,53 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
   const factIds = result.facts.map((f) => f.id).filter(Boolean);
   recordAccess(factIds).catch((err) => console.error('[access-tracking]', err.message));
 
+  // Read-time synthesis — LLM pass over retrieved evidence to compose a coherent answer.
+  // The synthesizer is also the must-miss signal: it returns "Not in retrieved memory."
+  // when the top-K doesn't actually contain the answer, which is more reliable than any
+  // similarity threshold.
+  if (synthesize) {
+    try {
+      result.synthesized = await synthesizeAnswer(query, result);
+    } catch (err) {
+      console.error('[synthesizer] failed:', err.message);
+      result.synthesized = null;
+    }
+  }
+
   return result;
+}
+
+async function synthesizeAnswer(query, { facts, chunks }) {
+  const evidence = [];
+
+  facts.slice(0, 8).forEach((f, i) => {
+    evidence.push(`[F${i + 1}] (${f.category}) ${f.content}`);
+  });
+
+  if (chunks.length) {
+    chunks.slice(0, 5).forEach((c, i) => {
+      const text = (c.content || '').replace(/\s+/g, ' ').trim();
+      if (text) evidence.push(`[C${i + 1}] ${text.slice(0, 600)}`);
+    });
+  }
+
+  if (!evidence.length) return 'No retrieved evidence — nothing to synthesize.';
+
+  const synthPrompt = `You answer questions using ONLY the retrieved memory items below. Each item is labeled [F#] (a stored fact) or [C#] (a raw text chunk).
+
+Question: ${query}
+
+Retrieved memory items:
+${evidence.join('\n')}
+
+Instructions:
+- Answer the question directly and concisely.
+- Cite items in square brackets where relevant, e.g. [F1] [C2].
+- If the items don't contain enough information to answer, say "Not in retrieved memory" — do NOT invent details.
+- Plain text only. No headers. 1-3 sentences for simple questions; up to 6 sentences for compositional questions.`;
+
+  const model = config.search.synthesizeModel || config.llm.extractionModel || undefined;
+  return llmPrompt(synthPrompt, { model, caller: 'synthesizer' });
 }
 
 // Check if the query matches a known entity by name (DB lookup, no LLM call)

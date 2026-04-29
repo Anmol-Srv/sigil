@@ -253,7 +253,22 @@ async function listNamespaces() {
 }
 
 async function deleteNamespace(namespace) {
-  // Cascade: facts, chunks, documents, entities, relations scoped to this namespace
+  // Foreign-key dependency order: relations and fact_entity rows reference fact ids,
+  // so they must go before fact rows. Same for entity/document descendants.
+  await cortexDb.raw(
+    'DELETE FROM relation WHERE source_fact_id IN (SELECT id FROM fact WHERE namespace = ?)',
+    [namespace],
+  );
+  await cortexDb.raw(
+    'DELETE FROM fact_entity WHERE fact_id IN (SELECT id FROM fact WHERE namespace = ?)',
+    [namespace],
+  );
+  // Relations may also reference entities in this namespace (column is source_id / target_id, not *_entity_id)
+  await cortexDb.raw(
+    'DELETE FROM relation WHERE source_id IN (SELECT id FROM entity WHERE namespace = ?) OR target_id IN (SELECT id FROM entity WHERE namespace = ?)',
+    [namespace, namespace],
+  );
+
   const factsDeleted = await cortexDb('fact').where({ namespace }).del();
   const chunksDeleted = await cortexDb('chunk').where({ namespace }).del();
   const docsDeleted = await cortexDb('document').where({ namespace }).del();

@@ -74,6 +74,23 @@ const config = {
     // Search: discard results below this cosine similarity floor
     minFactSimilarity: Number(process.env.MEMORY_MIN_FACT_SIMILARITY) || 0.45,
   },
+
+  search: {
+    // After hybrid retrieval, run an LLM pass over the top-K results to synthesize a coherent
+    // answer that cites which items it used. Lifts hit@1 by ~9 points and gives the system a
+    // natural way to refuse out-of-corpus queries ("Not in retrieved memory.") instead of
+    // producing confidently-wrong answers from tangentially related facts.
+    // Trade: +~$0.00015 and +~2.2s per search. Set CORTEX_SYNTHESIZE=false to disable.
+    synthesize: process.env.CORTEX_SYNTHESIZE !== 'false',
+    // Model for the synthesis pass — defaults to LLM_EXTRACTION_MODEL.
+    synthesizeModel: process.env.CORTEX_SYNTH_MODEL || '',
+  },
+
+  ingest: {
+    // false → skip per-chunk fact extraction during ingest (Ogham-style lazy mode).
+    // Trades ~17× cheaper writes for ~4 points of hit@1 on narrow queries.
+    eagerExtract: process.env.CORTEX_EAGER_EXTRACT !== 'false',
+  },
 };
 
 export default config;

@@ -140,8 +140,9 @@ async function ingestDocument({
 
     await chunkStore.insertChunks(doc.id, chunksWithEmbeddings, ns);
 
-    // Step 4: Extract facts per chunk
-    if (!skipFacts) {
+    // Step 4: Extract facts per chunk — skipped in lazy mode (Ogham approach: store raw,
+    // let read-time synthesis compose answers from chunks instead).
+    if (!skipFacts && config.ingest.eagerExtract) {
       process.stderr.write('[4/6] Extracting facts...' + "\n");
       factResult = await extractAndStoreFacts(chunks, {
         documentId: doc.id,
@@ -149,6 +150,8 @@ async function ingestDocument({
         promptPath: prompt,
         categories: cats,
       });
+    } else if (!config.ingest.eagerExtract) {
+      process.stderr.write('[4/6] Skipping fact extraction (CORTEX_EAGER_EXTRACT=false)' + "\n");
     }
 
     await documentStore.updateCounts(doc.id, {

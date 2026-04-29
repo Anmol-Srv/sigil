@@ -1,9 +1,16 @@
+import { uniqBy } from 'lodash-es';
+
 import cortexDb from '../../db/cortex.js';
 
 async function linkEntitiesToFact(factId, entities) {
   if (!entities.length) return;
 
-  const rows = entities.map((e) => ({
+  // Dedupe by entity id — same fact-entity pair appearing twice in one INSERT trips ON CONFLICT DO UPDATE
+  // ("cannot affect row a second time"). This happens when entity resolution maps multiple raw mentions
+  // to the same canonical entity within a single fact.
+  const uniqueEntities = uniqBy(entities, 'id');
+
+  const rows = uniqueEntities.map((e) => ({
     factId,
     entityId: e.id,
     mentionType: 'content',

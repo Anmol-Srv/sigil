@@ -32,7 +32,17 @@ async function getCached(keys) {
   const rows = await cortexDb('embedding_cache')
     .whereIn('key', keys)
     .select('key', 'embedding');
-  return new Map(rows.map((r) => [r.key, r.embedding]));
+  // pgvector columns deserialize as the literal string "[1,2,3]" — parse back to a number[]
+  // so callers can treat embeddings uniformly as arrays regardless of cache hit/miss.
+  return new Map(rows.map((r) => [r.key, parseVector(r.embedding)]));
+}
+
+function parseVector(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v !== 'string') return v;
+  // Format is "[1.23,4.56,...]"
+  const inner = v.startsWith('[') ? v.slice(1, -1) : v;
+  return inner.split(',').map(Number);
 }
 
 async function recordHits(keys) {
