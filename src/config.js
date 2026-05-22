@@ -27,6 +27,13 @@ const config = {
     ollamaHost: process.env.OLLAMA_HOST || 'http://localhost:11434',
     openaiApiKey: process.env.OPENAI_API_KEY || '',
     voyageApiKey: process.env.VOYAGE_API_KEY || '',
+    // OpenRouter as an embedding gateway. Models are namespaced (e.g.
+    // "openai/text-embedding-3-large", "voyageai/voyage-3-large").
+    // Reuses the chat-side referer/title for app attribution.
+    openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
+    openrouterBaseUrl: process.env.EMBEDDING_OPENROUTER_BASE_URL || process.env.LLM_OPENROUTER_BASE_URL || '',
+    openrouterReferer: process.env.EMBEDDING_OPENROUTER_REFERER || process.env.LLM_OPENROUTER_REFERER || 'https://github.com/Anmol-Srv/sigil',
+    openrouterTitle: process.env.EMBEDDING_OPENROUTER_TITLE || process.env.LLM_OPENROUTER_TITLE || 'Sigil',
   },
 
   llm: {

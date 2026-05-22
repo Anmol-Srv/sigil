@@ -48,6 +48,7 @@ const LLM_KEY_BY_PROVIDER = {
 const EMBEDDING_KEY_BY_PROVIDER = {
   openai: 'openaiApiKey',
   voyage: 'voyageApiKey',
+  openrouter: 'openrouterApiKey',
   // ollama doesn't need a key
 };
 

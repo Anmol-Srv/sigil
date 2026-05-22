@@ -158,8 +158,9 @@ async function setup({ existing, clack }) {
   }
 
   clack.note(
-    'OpenRouter handles LLM calls only — embeddings still route through Ollama / OpenAI / Voyage.\n'
-    + 'You will pick an embedding provider in the next step.',
+    'OpenRouter can drive both LLM calls and embeddings.\n'
+    + 'You will pick an embedding provider in the next step — "openrouter" is an option,\n'
+    + 'or you can use a direct provider (Ollama / OpenAI / Voyage) for embeddings.',
     'OpenRouter scope',
   );
 
