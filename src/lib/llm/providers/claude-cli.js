@@ -89,4 +89,18 @@ async function chat(input, { model, jsonMode = false } = {}) {
   };
 }
 
-export { chat };
+// ─── Init metadata + setup ──────────────────────────────────────────────────
+// `meta` drives the LLM-provider picker in `sigil init`; `setup` collects
+// the env keys this provider needs. Claude CLI piggybacks on the user's
+// existing `claude` binary + subscription — no key, no extra config.
+const meta = {
+  id: 'claude-cli',
+  label: 'Claude Code',
+  hint: 'uses your existing subscription — no extra API key',
+};
+
+async function setup() {
+  return { env: {} };
+}
+
+export { chat, meta, setup };

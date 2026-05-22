@@ -139,6 +139,26 @@ function resetDetection() {
   detectedEmbedder = null;
 }
 
+// --- Init flow ---------------------------------------------------------
+// Load every provider module so `sigil init` can render a single picker
+// over all of them and dispatch to the chosen provider's `setup()`.
+// Adding a provider = drop one file under `providers/` exporting
+// `{ chat, meta, setup }`; this list discovers it automatically.
+async function listProvidersForSetup() {
+  const entries = await Promise.all(
+    Object.entries(PROVIDERS).map(async ([id, load]) => {
+      const mod = await load();
+      if (!mod.meta || typeof mod.setup !== 'function') {
+        throw new Error(
+          `Provider "${id}" is missing the init contract — expected exports: meta, setup`,
+        );
+      }
+      return { ...mod.meta, setup: mod.setup };
+    }),
+  );
+  return entries;
+}
+
 export {
   getProvider,
   getEmbedder,
@@ -148,4 +168,5 @@ export {
   resetDetection,
   isOllamaReachable,
   isClaudeCliAvailable,
+  listProvidersForSetup,
 };

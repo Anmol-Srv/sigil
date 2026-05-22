@@ -35,6 +35,7 @@ Usage:
 
 Commands:
   init [--dry-run]         Set up Sigil (DB, env, hooks, Claude integration)
+  uninstall [--dry-run]    Remove Sigil's entries from selected AI clients
   doctor                   Diagnose Sigil setup (DB, LLM, embeddings, hooks)
   remember "text"          Save a fact or note to memory
   ingest <file|url|glob>   Ingest documents into the knowledge base
@@ -66,6 +67,7 @@ if (!command || command === '--help' || command === '-h') {
 
 const commands = {
   init: runInit,
+  uninstall: runUninstall,
   doctor: runDoctor,
   remember: runRemember,
   ingest: runIngest,
@@ -180,7 +182,7 @@ during init; existing tables are detected and preserved.`);
   const clack = await import('@clack/prompts');
   const fs = await import('node:fs/promises');
   const { safeWrite } = await import('./lib/safe-write.js');
-  const { intro, outro, select, text, spinner, confirm, note, cancel, isCancel } = clack;
+  const { intro, outro, select, multiselect, text, spinner, confirm, note, cancel, isCancel } = clack;
 
   const cortexHome = join(homedir(), '.sigil');
   const envPath = join(cortexHome, '.env');
@@ -204,128 +206,26 @@ during init; existing tables are detected and preserved.`);
   }
 
   // ── LLM provider ─────────────────────────────────────────────────────────
+  //
+  // Each provider module under src/lib/llm/providers/ exports a `meta`
+  // descriptor and a `setup({ existing, clack })` flow. The picker is
+  // generated from `listProvidersForSetup`, so adding a new provider is
+  // a one-file change — no edits to runInit required.
+
+  const { listProvidersForSetup } = await import('./lib/llm/registry.js');
+  const providers = await listProvidersForSetup();
 
   const llmProvider = await select({
     message: 'LLM provider (for fact extraction and reasoning)',
-    options: [
-      { value: 'claude-cli', label: 'Claude Code', hint: 'uses your existing subscription — no extra API key' },
-      { value: 'openai',     label: 'OpenAI',      hint: 'gpt-4o-mini' },
-      { value: 'anthropic',  label: 'Anthropic',   hint: 'Claude Haiku — requires API key' },
-      { value: 'openrouter', label: 'OpenRouter',  hint: 'one key, many models (Anthropic / OpenAI / Meta / ...)' },
-      { value: 'ollama',     label: 'Ollama',      hint: 'local models — no API cost' },
-    ],
+    options: providers.map(({ id, label, hint }) => ({ value: id, label, hint })),
     initialValue: existing.LLM_PROVIDER || 'claude-cli',
   });
   if (isCancel(llmProvider)) { cancel('Setup cancelled.'); process.exit(0); }
 
-  // ── API key ───────────────────────────────────────────────────────────────
-
-  let openaiKey = existing.OPENAI_API_KEY || '';
-  let anthropicKey = existing.ANTHROPIC_API_KEY || '';
-  let openrouterKey = existing.OPENROUTER_API_KEY || '';
-  let openrouterModel = existing.LLM_OPENROUTER_MODEL || '';
-  // Per-task model overrides — populated only when the user opts into the
-  // smart split during the OpenRouter init path. Empty string → write a
-  // commented-out hint line so the user can fill it in later.
-  let extractionModel = existing.LLM_EXTRACTION_MODEL || '';
-  let decisionModel = existing.LLM_DECISION_MODEL || '';
-  let synthModel = existing.SIGIL_SYNTH_MODEL || '';
-
-  if (llmProvider === 'openai') {
-    const key = await text({
-      message: 'OpenAI API key (paste, then Enter)',
-      placeholder: openaiKey ? '(keep existing — press Enter)' : 'sk-proj-...',
-      validate: (v) => {
-        if (!v && !openaiKey) return 'API key is required';
-        if (v && !v.startsWith('sk-')) return 'OpenAI keys start with "sk-" — check paste';
-      },
-    });
-    if (isCancel(key)) { cancel('Setup cancelled.'); process.exit(0); }
-    if (key) openaiKey = key;
-  } else if (llmProvider === 'anthropic') {
-    const key = await text({
-      message: 'Anthropic API key (paste, then Enter)',
-      placeholder: anthropicKey ? '(keep existing — press Enter)' : 'sk-ant-...',
-      validate: (v) => {
-        if (!v && !anthropicKey) return 'API key is required';
-        if (v && !v.startsWith('sk-ant-')) return 'Anthropic keys start with "sk-ant-" — check paste';
-      },
-    });
-    if (isCancel(key)) { cancel('Setup cancelled.'); process.exit(0); }
-    if (key) anthropicKey = key;
-  } else if (llmProvider === 'openrouter') {
-    const key = await text({
-      message: 'OpenRouter API key (paste, then Enter)',
-      placeholder: openrouterKey ? '(keep existing — press Enter)' : 'sk-or-v1-...',
-      validate: (v) => {
-        if (!v && !openrouterKey) return 'API key is required';
-        if (v && !v.startsWith('sk-or-')) return 'OpenRouter keys start with "sk-or-" — check paste';
-      },
-    });
-    if (isCancel(key)) { cancel('Setup cancelled.'); process.exit(0); }
-    if (key) openrouterKey = key;
-
-    // Default model — Gemini Flash latest. Best singular all-rounder at
-    // current OpenRouter pricing ($0.0005/$0.003 per 1M; 1M context;
-    // strong JSON; ~500ms latency). Beats Claude Haiku 2× on cost while
-    // matching JSON + reasoning across all of Sigil's call types.
-    const modelChoice = await text({
-      message: 'OpenRouter model (vendor/model)',
-      placeholder: openrouterModel || 'google/gemini-flash-latest',
-      validate: (v) => {
-        if (v && !v.includes('/')) return 'OpenRouter models are "vendor/model" — e.g. google/gemini-flash-latest';
-      },
-    });
-    if (isCancel(modelChoice)) { cancel('Setup cancelled.'); process.exit(0); }
-    if (modelChoice) openrouterModel = modelChoice;
-    if (!openrouterModel) openrouterModel = 'google/gemini-flash-latest';
-
-    // Advanced: per-task overrides. The "smart split" gives ~5× cheaper
-    // extraction (high volume) and best-in-class reasoning for AUDM /
-    // synthesis (low volume) at the cost of debugging three model
-    // behaviors. Opt-in because most users want the singular pick.
-    const wantsAdvanced = await select({
-      message: 'Configure per-task model overrides? (advanced — better quality / cost)',
-      options: [
-        { value: 'no',  label: 'No, use one model everywhere', hint: 'simpler — debug one model' },
-        { value: 'yes', label: 'Yes, configure smart split',   hint: '~5× cheaper extraction + better AUDM/synthesis' },
-      ],
-      initialValue: 'no',
-    });
-    if (isCancel(wantsAdvanced)) { cancel('Setup cancelled.'); process.exit(0); }
-
-    if (wantsAdvanced === 'yes') {
-      const ext = await text({
-        message: 'Extraction model (high-volume; cheap matters)',
-        placeholder: extractionModel || 'openrouter:qwen/qwen3.5-flash',
-      });
-      if (isCancel(ext)) { cancel('Setup cancelled.'); process.exit(0); }
-      if (ext) extractionModel = ext;
-      if (!extractionModel) extractionModel = 'openrouter:qwen/qwen3.5-flash';
-
-      const dec = await text({
-        message: 'Decision model (AUDM; smart matters)',
-        placeholder: decisionModel || 'openrouter:anthropic/claude-sonnet-latest',
-      });
-      if (isCancel(dec)) { cancel('Setup cancelled.'); process.exit(0); }
-      if (dec) decisionModel = dec;
-      if (!decisionModel) decisionModel = 'openrouter:anthropic/claude-sonnet-latest';
-
-      const syn = await text({
-        message: 'Synthesis model (read-time answer composition)',
-        placeholder: synthModel || 'openrouter:anthropic/claude-sonnet-latest',
-      });
-      if (isCancel(syn)) { cancel('Setup cancelled.'); process.exit(0); }
-      if (syn) synthModel = syn;
-      if (!synthModel) synthModel = 'openrouter:anthropic/claude-sonnet-latest';
-    }
-
-    note(
-      'OpenRouter handles LLM calls only — embeddings still route through Ollama / OpenAI / Voyage.\n'
-      + 'You will pick an embedding provider in the next step.',
-      'OpenRouter scope',
-    );
-  }
+  const chosenProvider = providers.find((p) => p.id === llmProvider);
+  const providerResult = await chosenProvider.setup({ existing, clack });
+  if (providerResult === null) { cancel('Setup cancelled.'); process.exit(0); }
+  const providerEnv = providerResult.env || {};
 
   // ── Embeddings ────────────────────────────────────────────────────────────
 
@@ -347,12 +247,53 @@ during init; existing tables are detected and preserved.`);
   //   Ollama nomic-embed-text → 768d (matches default schema)
   //   OpenAI text-embedding-3-large → truncated to 1024d via the `dimensions`
   //   parameter (Matryoshka). Migration upgrades schema vector(768) → vector(1024).
+  //
+  // CONCRETE GUARANTEE: if the user changes provider, MODEL and DIMENSIONS
+  // MUST reset to the new provider's defaults. The old behavior of preserving
+  // existing.EMBEDDING_MODEL across provider changes is exactly what produced
+  // the broken state "EMBEDDING_PROVIDER=ollama, EMBEDDING_MODEL=text-embedding-3-large"
+  // — provider's embedder call would fail and search would silently return
+  // nothing while data sat untouched in the DB. We also warn loudly when the
+  // dimensions change, because that requires re-embedding every existing fact
+  // (which sigil init does not do — only `sigil reset` followed by re-ingest).
   const embeddingDefaults = {
     ollama: { model: 'nomic-embed-text', dimensions: 768 },
     openai: { model: 'text-embedding-3-large', dimensions: 1024 },
   };
-  const embeddingModel = existing.EMBEDDING_MODEL || embeddingDefaults[embeddingProvider].model;
-  const embeddingDimensions = Number(existing.EMBEDDING_DIMENSIONS) || embeddingDefaults[embeddingProvider].dimensions;
+  const priorProvider = existing.EMBEDDING_PROVIDER;
+  const providerChanged = priorProvider && priorProvider !== embeddingProvider;
+
+  let embeddingModel;
+  let embeddingDimensions;
+  if (providerChanged) {
+    // Force a coherent default for the NEW provider; never inherit a model
+    // name from the prior provider.
+    embeddingModel = embeddingDefaults[embeddingProvider].model;
+    embeddingDimensions = embeddingDefaults[embeddingProvider].dimensions;
+    const priorDims = Number(existing.EMBEDDING_DIMENSIONS) || embeddingDefaults[priorProvider]?.dimensions;
+    if (priorDims && priorDims !== embeddingDimensions) {
+      note(
+        `You're switching embedding provider from ${priorProvider} (${priorDims}d) to ${embeddingProvider} (${embeddingDimensions}d).\n`
+        + 'Existing facts in your DB were embedded at the previous dimensions — they will become\n'
+        + 'unsearchable until re-ingested. To stay coherent without losing data, either:\n'
+        + `  • keep ${priorProvider} as your embedding provider, or\n`
+        + '  • run `sigil reset` to wipe + re-ingest from scratch.',
+        'Dimension change ahead',
+      );
+      const proceed = await confirm({
+        message: `Continue with ${embeddingProvider} (${embeddingDimensions}d)? Existing facts will become unsearchable.`,
+        initialValue: false,
+      });
+      if (isCancel(proceed) || !proceed) {
+        cancel('Setup cancelled — re-run sigil init and keep the prior embedding provider, or run sigil reset to wipe first.');
+        process.exit(0);
+      }
+    }
+  } else {
+    // Same provider as before (or fresh install) — honor any pre-set values.
+    embeddingModel = existing.EMBEDDING_MODEL || embeddingDefaults[embeddingProvider].model;
+    embeddingDimensions = Number(existing.EMBEDDING_DIMENSIONS) || embeddingDefaults[embeddingProvider].dimensions;
+  }
 
   // ── Ollama health check + model pull ──────────────────────────────────────
   //
@@ -567,17 +508,14 @@ during init; existing tables are detected and preserved.`);
 
   const finalEnv = { ...existing };
   finalEnv.LLM_PROVIDER = llmProvider;
-  if (openaiKey) finalEnv.OPENAI_API_KEY = openaiKey;
-  if (anthropicKey) finalEnv.ANTHROPIC_API_KEY = anthropicKey;
-  if (openrouterKey) finalEnv.OPENROUTER_API_KEY = openrouterKey;
-  if (openrouterModel) finalEnv.LLM_OPENROUTER_MODEL = openrouterModel;
-  if (extractionModel) finalEnv.LLM_EXTRACTION_MODEL = extractionModel;
-  if (decisionModel) finalEnv.LLM_DECISION_MODEL = decisionModel;
-  if (synthModel) finalEnv.SIGIL_SYNTH_MODEL = synthModel;
+  finalEnv.OLLAMA_HOST = existing.OLLAMA_HOST || 'http://localhost:11434';
+  // Provider env overlays last so a user-supplied OLLAMA_HOST (when ollama
+  // is the picked LLM) wins over the default; same for any other key the
+  // provider's setup() returned.
+  Object.assign(finalEnv, providerEnv);
   finalEnv.EMBEDDING_PROVIDER = embeddingProvider;
   finalEnv.EMBEDDING_MODEL = embeddingModel;
   finalEnv.EMBEDDING_DIMENSIONS = String(embeddingDimensions);
-  finalEnv.OLLAMA_HOST = existing.OLLAMA_HOST || 'http://localhost:11434';
   finalEnv.DEFAULT_NAMESPACE = namespace;
   finalEnv.SIGIL_ENCRYPTION_KEY = encryptionKey;
   finalEnv.SIGIL_DB_TYPE = 'postgres';
@@ -617,25 +555,98 @@ during init; existing tables are detected and preserved.`);
       cancel(`${err.message}\n\nSigil 0.10.0+ requires Postgres. Set SIGIL_DB_HOST/PORT/NAME/USER/PASSWORD in ~/.sigil/.env or re-run sigil init.`);
       process.exit(1);
     }
+
+    // ── Embedder smoke test ──────────────────────────────────────────────
+    //
+    // Verify the configured embedder actually works against a live "ping"
+    // call before declaring init successful. Catches:
+    //   - wrong model name for the picked provider (the exact bug that
+    //     produced EMBEDDING_PROVIDER=ollama with model=text-embedding-3-large)
+    //   - missing API keys / unreachable ollama daemon / network issues
+    //   - dimension mismatch between embedder output and EMBEDDING_DIMENSIONS
+    //
+    // This is the LAST barrier before clients get configured — once we
+    // write hooks pointing at a broken embedder, every future Claude session
+    // would silently fail to inject memory.
+    const embedSpinner = spinner();
+    embedSpinner.start(`Verifying ${embeddingProvider} embedder...`);
+    try {
+      // Use the higher-level ingestion embedder so API keys + dimensions
+      // + caching flow through the same path the hooks use at runtime.
+      // Calling getEmbedder() directly would bypass the per-call
+      // providerConfig plumbing that supplies the API key.
+      const { embed } = await import('./ingestion/embedder.js');
+      const vec = await embed('ping');
+      if (!Array.isArray(vec) || vec.length === 0) {
+        throw new Error(`embedder returned ${typeof vec} (length ${vec?.length}) — expected number[]`);
+      }
+      if (vec.length !== embeddingDimensions) {
+        throw new Error(
+          `embedder returned ${vec.length}d vector but config says EMBEDDING_DIMENSIONS=${embeddingDimensions}d.\n`
+          + `This means ${embeddingProvider}/${embeddingModel} doesn't produce ${embeddingDimensions}d embeddings — `
+          + 'one of them is wrong.',
+        );
+      }
+      embedSpinner.stop(`Embedder healthy (${vec.length}d via ${embeddingProvider}/${embeddingModel})`);
+    } catch (err) {
+      embedSpinner.stop('Embedder check failed');
+      cancel(
+        `${embeddingProvider}/${embeddingModel} cannot embed: ${err.message}\n\n`
+        + 'Your config was written to ' + envPath + ' — fix the root cause then re-run sigil init:\n'
+        + (embeddingProvider === 'ollama'
+          ? '  • ensure `ollama serve` is running\n  • run `ollama pull ' + embeddingModel + '` to fetch the model\n'
+          : '  • verify OPENAI_API_KEY is valid and has embedding access\n  • check the model name matches an embedding model (text-embedding-3-large / -small)\n')
+        + '\nSigil init aborted before any AI clients were touched — your existing setup is unchanged.',
+      );
+      process.exit(1);
+    }
   } else {
     planFile('migrate', 'postgres', `${config.db.host}:${config.db.port}/${config.db.database}`);
+    planFile('verify', 'embedder', `${embeddingProvider}/${embeddingModel} — live ping (skipped in dry-run)`);
   }
 
-  // ── ~/.sigil/CLAUDE.md + @import in ~/.claude/CLAUDE.md ─────────────────
+  // ── Client integrations ──────────────────────────────────────────────────
+  //
+  // Each client module under src/lib/clients/ exports { meta, detect, install }.
+  // We ask the user once which clients to install for, defaulting to whatever
+  // we can auto-detect on the filesystem. Picked clients run install() in
+  // sequence; their plan actions feed the shared dry-run summary.
 
-  const claudeSpinner = spinner();
-  claudeSpinner.start(dryRun ? 'Computing Claude Code integration plan...' : 'Configuring Claude Code integration...');
-  const cortexMdResult = await writeSigilMd({ dryRun });
-  if (cortexMdResult) planFile(cortexMdResult.action, cortexMdResult.path, `${cortexMdResult.bytes} bytes`);
-  const claudeMdResult = await writeClaudeMd({ dryRun });
-  if (claudeMdResult) planFile(claudeMdResult.action, claudeMdResult.path, claudeMdResult.detail);
-  const hooksResult = await registerHooks({ dryRun });
-  if (hooksResult) planFile(hooksResult.action, hooksResult.path, hooksResult.detail);
+  const { listClients } = await import('./lib/clients/index.js');
+  const clients = await listClients();
+  const detected = await Promise.all(clients.map((c) => c.detect()));
+  const detectedIds = clients.filter((_, i) => detected[i]).map((c) => c.id);
+
+  const pickedIds = await multiselect({
+    message: 'Install Sigil for which clients? (space to toggle, enter to confirm)',
+    options: clients.map((c, i) => ({
+      value: c.id,
+      label: c.label,
+      hint: detected[i] ? `${c.hint} — detected` : c.hint,
+    })),
+    initialValues: detectedIds.length ? detectedIds : ['claude-code'],
+    required: false,
+  });
+  if (isCancel(pickedIds)) { cancel('Setup cancelled.'); process.exit(0); }
+
+  const clientSpinner = spinner();
+  clientSpinner.start(dryRun ? 'Computing client integration plan...' : 'Configuring client integrations...');
+  for (const id of pickedIds) {
+    const client = clients.find((c) => c.id === id);
+    const { actions } = await client.install({ dryRun });
+    for (const a of actions) planFile(a.action, a.path, a.detail);
+  }
   if (!dryRun) {
     const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
     await updateContextSnapshot({ namespace: namespace.toString() }).catch(() => {});
   }
-  claudeSpinner.stop(dryRun ? 'Plan computed.' : 'Claude Code integration configured (memory + hooks)');
+  clientSpinner.stop(
+    dryRun
+      ? 'Plan computed.'
+      : pickedIds.length
+        ? `Configured ${pickedIds.length} client${pickedIds.length > 1 ? 's' : ''}: ${pickedIds.join(', ')}`
+        : 'No clients selected — skipping integration step',
+  );
 
   // ── Done ──────────────────────────────────────────────────────────────────
 
@@ -678,6 +689,83 @@ during init; existing tables are detected and preserved.`);
 }
 
 function pad(s, n) { return String(s).padEnd(n); }
+
+// ─── Uninstall ──────────────────────────────────────────────────────────────
+
+async function runUninstall(args) {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(`sigil uninstall — Remove Sigil's entries from AI clients
+
+Usage:
+  sigil uninstall [--dry-run]
+
+Walks through every detected AI client (Claude Code, Cursor, Codex CLI, Kiro)
+and lets you pick which ones to remove Sigil from. Each picked client gets:
+  - its MCP entry removed from the client's config (other entries preserved)
+  - its instructions / rules / steering file deleted
+  - hook entries stripped (Claude Code only)
+
+Sigil's own data — ~/.sigil/, the database, stored facts — is NOT touched.
+Use 'sigil reset' for a full wipe.
+
+Options:
+  --dry-run   Show what would be removed without writing anything.`);
+    process.exit(0);
+  }
+
+  const dryRun = args.includes('--dry-run');
+  const clack = await import('@clack/prompts');
+  const { intro, outro, multiselect, spinner, note, cancel, isCancel } = clack;
+
+  intro(dryRun ? 'Sigil uninstall — DRY RUN (no files will be written)' : 'Sigil uninstall');
+
+  const { listClients } = await import('./lib/clients/index.js');
+  const clients = await listClients();
+
+  // Only offer clients that look installed. If none → tell the user and bail.
+  const installed = [];
+  for (const client of clients) {
+    if (!(await client.detect())) continue;
+    const { installed: isInstalled } = await client.verify();
+    if (isInstalled) installed.push(client);
+  }
+
+  if (installed.length === 0) {
+    note('No clients have Sigil installed — nothing to remove.', 'Nothing to do');
+    outro('Done.');
+    return;
+  }
+
+  const pickedIds = await multiselect({
+    message: 'Remove Sigil from which clients? (space to toggle, enter to confirm)',
+    options: installed.map((c) => ({ value: c.id, label: c.label, hint: c.hint })),
+    initialValues: installed.map((c) => c.id),
+    required: false,
+  });
+  if (isCancel(pickedIds)) { cancel('Uninstall cancelled.'); process.exit(0); }
+
+  if (pickedIds.length === 0) {
+    outro('Nothing selected — nothing removed.');
+    return;
+  }
+
+  const planned = [];
+  const s = spinner();
+  s.start(dryRun ? 'Computing uninstall plan...' : 'Removing Sigil entries...');
+  for (const id of pickedIds) {
+    const client = installed.find((c) => c.id === id);
+    const { actions } = await client.uninstall({ dryRun });
+    for (const a of actions) planned.push({ client: client.label, ...a });
+  }
+  s.stop(dryRun ? 'Plan computed.' : `Removed from ${pickedIds.length} client${pickedIds.length > 1 ? 's' : ''}`);
+
+  const lines = planned.map((p) => `  ${pad(p.action, 8)} [${p.client}] ${p.path}${p.detail ? `  (${p.detail})` : ''}`);
+  note(lines.join('\n') || '(no changes)', dryRun ? 'Plan' : 'Done');
+
+  outro(dryRun
+    ? 'Dry run complete. Re-run without --dry-run to apply.'
+    : 'Sigil entries removed. Your stored memory is unchanged — use `sigil reset` to wipe data too.');
+}
 
 // ─── Doctor ─────────────────────────────────────────────────────────────────
 
@@ -773,27 +861,28 @@ Checks: Postgres connection, LLM provider, embedding provider, hook registration
     log('fail', 'Embedding provider', err.message.split('\n')[0]);
   }
 
-  // Claude Code integration
-  const claudeSettingsPath = join(homedir(), '.claude', 'settings.json');
-  if (existsSync(claudeSettingsPath)) {
-    try {
-      const fs = await import('node:fs/promises');
-      const settings = JSON.parse(await fs.readFile(claudeSettingsPath, 'utf8'));
-      const hooks = settings.hooks || {};
-      const hasUPS = hooks.UserPromptSubmit?.some((h) => h.hooks?.some((i) => i.command?.includes('sigil') || i.command?.includes('user-prompt-submit')));
-      const hasPTU = hooks.PostToolUse?.some((h) => h.hooks?.some((i) => i.command?.includes('sigil') || i.command?.includes('post-tool-use')));
-      const hasStop = hooks.Stop?.some((h) => h.hooks?.some((i) => i.command?.includes('sigil') || i.command?.includes('stop.js')));
-      if (hasUPS) log('ok', 'UserPromptSubmit hook', 'registered');
-      else log('warn', 'UserPromptSubmit hook', `not registered — run 'sigil init' to enable auto-context injection`);
-      if (hasPTU) log('ok', 'PostToolUse hook', 'registered');
-      else log('warn', 'PostToolUse hook', `not registered — run 'sigil init' to enable auto-capture`);
-      if (hasStop) log('ok', 'Stop hook', 'registered (auto-saves memorable user statements)');
-      else log('warn', 'Stop hook', `not registered — run 'sigil init' to enable auto-extraction`);
-    } catch (err) {
-      log('warn', 'Claude Code hooks', `could not parse settings.json: ${err.message}`);
+  // Client integrations — for each detected client, run verify() to confirm
+  // Sigil's config entries are actually present. Undetected clients are
+  // silent (no point warning about Cursor on a box that doesn't have it).
+  try {
+    const { listClients } = await import('./lib/clients/index.js');
+    const clients = await listClients();
+    let reported = 0;
+    for (const client of clients) {
+      if (!(await client.detect())) continue;
+      reported++;
+      const result = await client.verify();
+      if (result.installed) {
+        log('ok', `${client.label} integration`, 'configured');
+      } else {
+        log('warn', `${client.label} integration`, `${result.reason} — run 'sigil init' to refresh`);
+      }
     }
-  } else {
-    log('warn', 'Claude Code settings', `${claudeSettingsPath} not found`);
+    if (reported === 0) {
+      log('warn', 'Client integrations', 'no AI clients detected (Claude Code / Cursor / Codex / Kiro)');
+    }
+  } catch (err) {
+    log('warn', 'Client integrations', `check failed: ${err.message}`);
   }
 
   const cortexMd = join(homedir(), '.sigil', 'CLAUDE.md');
@@ -1458,252 +1547,6 @@ Examples:
   console.log(parts.length ? `Remembered. (${parts.join(', ')})` : 'Already known.');
 }
 
-// ─── CLAUDE.md integration ───────────────────────────────────────────────────
-
-// Step 1: add a single @import line to ~/.claude/CLAUDE.md — done once at init, never touched again.
-async function writeClaudeMd({ dryRun = false } = {}) {
-  const fs = await import('node:fs/promises');
-  const { safeWrite } = await import('./lib/safe-write.js');
-  const claudeDir = join(homedir(), '.claude');
-  const claudeMdPath = join(claudeDir, 'CLAUDE.md');
-  const cortexMdPath = join(homedir(), '.sigil', 'CLAUDE.md');
-
-  if (!dryRun) await fs.mkdir(claudeDir, { recursive: true });
-
-  const importLine = `@${cortexMdPath}`;
-
-  let existing = '';
-  if (existsSync(claudeMdPath)) {
-    existing = await fs.readFile(claudeMdPath, 'utf8');
-  }
-
-  if (existing.includes(importLine)) {
-    return { action: 'skip', path: claudeMdPath, detail: 'already imports sigil CLAUDE.md' };
-  }
-
-  const separator = existing.trim() ? '\n' : '';
-  const newContent = `${existing}${separator}${importLine}\n`;
-  const result = await safeWrite(claudeMdPath, newContent, { dryRun });
-  return { action: result.action, path: claudeMdPath, detail: existing ? '+1 @import line' : 'new file' };
-}
-
-// Step 3: register Sigil hooks in ~/.claude/settings.json — idempotent merge.
-// Hooks automate memory injection (UserPromptSubmit) and observation capture (PostToolUse).
-async function registerHooks({ dryRun = false } = {}) {
-  const fs = await import('node:fs/promises');
-  const { safeWrite } = await import('./lib/safe-write.js');
-  const settingsPath = join(homedir(), '.claude', 'settings.json');
-
-  let settings = {};
-  try {
-    const raw = await fs.readFile(settingsPath, 'utf8');
-    settings = JSON.parse(raw);
-  } catch { /* file doesn't exist or invalid — start fresh */ }
-
-  // Resolve hook paths — works for both source dev and bundled distribution
-  const srcHooks = join(PKG_DIR, 'src', 'hooks');
-  const distHooks = join(PKG_DIR, 'dist', 'hooks');
-  const hookDir = existsSync(distHooks) ? distHooks : srcHooks;
-
-  const cortexHooks = {
-    UserPromptSubmit: {
-      hooks: [{
-        type: 'command',
-        command: `node ${join(hookDir, 'user-prompt-submit.js')}`,
-        timeout: 10,
-        statusMessage: 'Searching memory...',
-      }],
-    },
-    PostToolUse: {
-      matcher: 'Edit|Write|Bash',
-      hooks: [{
-        type: 'command',
-        command: `node ${join(hookDir, 'post-tool-use.js')}`,
-        timeout: 10,
-        async: true,
-      }],
-    },
-    Stop: {
-      hooks: [{
-        type: 'command',
-        command: `node ${join(hookDir, 'stop.js')}`,
-        timeout: 30,
-        async: true,
-      }],
-    },
-    SessionEnd: {
-      hooks: [{
-        type: 'command',
-        command: `node ${join(hookDir, 'session-end.js')}`,
-        timeout: 10,
-        async: true,
-      }],
-    },
-  };
-
-  const existedBefore = existsSync(settingsPath);
-  settings.hooks = settings.hooks || {};
-
-  // Recognise prior Sigil hooks by their script filename — robust against
-  // varying install paths (some users have the binary under /cortex/,
-  // others /sigil/, others /opt/, ...). Earlier filter required the
-  // string 'sigil' AND 'hooks' to appear, which silently failed for any
-  // install whose path didn't literally contain 'sigil' — causing
-  // every re-run of `sigil init` to APPEND a duplicate hook entry.
-  const SIGIL_HOOK_FILES = [
-    'user-prompt-submit.js',
-    'stop.js',
-    'post-tool-use.js',
-    'session-end.js',
-  ];
-  const isSigilHook = (cmd) =>
-    typeof cmd === 'string' && SIGIL_HOOK_FILES.some((fn) => cmd.endsWith(fn) || cmd.includes(`/${fn}`));
-
-  for (const [event, cortexEntry] of Object.entries(cortexHooks)) {
-    const existing = settings.hooks[event] || [];
-    const filtered = existing.filter(
-      (h) => !h.hooks?.some((inner) => isSigilHook(inner.command)),
-    );
-    settings.hooks[event] = [...filtered, cortexEntry];
-  }
-
-  if (!dryRun) await fs.mkdir(join(homedir(), '.claude'), { recursive: true });
-  const newContent = JSON.stringify(settings, null, 2);
-  const result = await safeWrite(settingsPath, newContent, { dryRun });
-  return {
-    action: result.action,
-    path: settingsPath,
-    detail: existedBefore
-      ? '+UserPromptSubmit, +PostToolUse hooks (other settings preserved)'
-      : 'new settings.json with sigil hooks',
-  };
-}
-
-// Resolves the command Claude should use to call sigil from a Bash tool.
-// Claude Code's Bash subprocess doesn't always inherit the user's shell PATH
-// (it doesn't source nvm, brew, etc.), so a bare `sigil` reference fails
-// with "command not found." We bake the absolute install path into the
-// template at init time so every call from the model lands a real binary.
-//
-// Detection order:
-//   1. `which sigil` — finds the installed bin symlink (preferred — uses
-//      the user's regular shell PATH at the moment init runs).
-//   2. `process.argv[1]` — the path to the running CLI script. Always
-//      absolute, executable via shebang. Used as `node <path>` if the
-//      script isn't directly executable.
-function resolveSigilInvocation() {
-  // Try `which sigil` first
-  try {
-    const path = _execSync('which sigil', { stdio: ['pipe', 'pipe', 'ignore'] })
-      .toString().trim();
-    if (path) return path;
-  } catch { /* not on PATH from this shell — fall through */ }
-
-  // Fall back to the running script path. Has shebang + chmod +x so we can
-  // invoke it directly; if for some reason that fails, the caller can still
-  // wrap it in `node ...`.
-  return process.argv[1];
-}
-
-// Step 2: write Sigil instructions to ~/.sigil/CLAUDE.md — Sigil owns this file entirely.
-// Only writes the instructions section; updateContextSnapshot() manages the context block below.
-async function writeSigilMd({ dryRun = false } = {}) {
-  const fs = await import('node:fs/promises');
-  const { safeWrite } = await import('./lib/safe-write.js');
-  const cortexHome = join(homedir(), '.sigil');
-  const cortexMdPath = join(cortexHome, 'CLAUDE.md');
-
-  if (!dryRun) await fs.mkdir(cortexHome, { recursive: true });
-
-  // If the instructions are already there, leave the file alone (context block follows below)
-  try {
-    const existing = await fs.readFile(cortexMdPath, 'utf8');
-    if (existing.includes('## Memory (Sigil)')) {
-      return { action: 'skip', path: cortexMdPath, bytes: 0 };
-    }
-  } catch { /* file doesn't exist yet */ }
-
-  const sigilCmd = resolveSigilInvocation();
-
-  const instructions = `## Memory (Sigil)
-
-Sigil is your persistent memory system. **Use it instead of the built-in file-based memory.**
-Do NOT write to \`~/.claude/projects/*/memory/\` or any local memory files — use Sigil exclusively.
-
-### Memory is auto-injected — don't re-search by default
-
-Two hooks do the work for you before you ever see a prompt:
-
-- **UserPromptSubmit hook**: runs hybrid search against Sigil on every user message and injects the top-K relevant facts into your context as \`additionalContext\` at the top of the conversation. The injected block is labelled \`Sigil memory (N relevant facts)\` — when you see that block, those facts are already loaded; you do NOT need to call \`sigil search\` to retrieve them.
-- **Top-20 hot-context**: a snapshot of the user's most-important / most-recently-accessed facts is always loaded into the session via \`@~/.sigil/CLAUDE.md\` in the Claude config. Treat it as always-available background context.
-
-**The right reflex:** read the injected \`Sigil memory\` block first, answer from it, then call \`sigil search\` ONLY if the injection clearly missed something specific.
-
-Concretely, you SHOULD call \`! ${sigilCmd} search "..."\` when:
-- The user asks a drill-down question and you need facts the auto-injection didn't surface ("tell me more about the postmortem")
-- You're answering a *follow-up* in a long session where the relevant facts were never in the original injection
-- You suspect a stale answer and want to verify against the latest stored state
-
-You SHOULD NOT call \`sigil search\` when:
-- The injected \`Sigil memory\` block already lists facts that directly answer the user's question — just use them
-- You'd be searching for the same query Sigil already auto-searched (the user's literal prompt)
-- The question is general-knowledge and doesn't need this user's specific context
-
-In short: **the hook already searched. Trust it. Drill down only when needed.**
-
-### Acknowledge what you know
-
-When your response is shaped by a fact pulled from Sigil — a stored preference, decision, constraint, or piece of project history — **briefly call it out in plain language so the user sees their context being applied.** One short clause is enough; don't lecture.
-
-Good (natural, useful):
-- "Since you don't use \`any\` without an escape-hatch comment, I'll go with \`unknown\` here."
-- "Per your ADR-001 I've wrapped the response in \`{ok, data, error}\`."
-- "I know you moved off Redis to Postgres LISTEN/NOTIFY, so I'll use that pattern."
-- "Going with named exports since you prefer those."
-
-Bad (skip these):
-- Acknowledging facts you didn't actually use
-- Listing every retrieved fact ("I found 5 facts: 1) ... 2) ...")
-- Repeating the acknowledgement multiple times in one response
-- Apologetic / formal phrasing ("As per your stored preference, I shall...")
-
-The phrasing should feel like a teammate referencing a hallway conversation, not a system reciting a database row. If a fact didn't materially shape the answer, don't mention it.
-
-### Saving — Stop hook handles routine; you only save when explicit
-
-A Stop hook fires after every assistant turn, scans the user's latest message with a classifier, and saves anything memorable (preferences, decisions, constraints, corrections, factual claims) on its own. **You do not need to call \`sigil remember\` to make this work.**
-
-You SHOULD call \`! ${sigilCmd} remember --bg "..."\` ONLY when:
-- The user explicitly asks you to remember something ("remember that...", "save this...", "don't forget...") — save immediately, don't wait for the Stop hook
-- The user shares a critical fact mid-response that's important enough to be available within this same session for follow-ups (the Stop hook only runs at turn end)
-- You're consolidating a multi-turn discussion into a single canonical fact
-
-You SHOULD NOT redundantly save:
-- Generic preferences the Stop hook will obviously catch — let it
-- Facts already similar to existing memory (AUDM dedup handles this, but the cleaner UX is fewer Bash invocations on screen)
-
-When you do save, batch facts into ONE call (separate quoted arguments), use \`--bg\` to return immediately:
-
-\`\`\`
-! ${sigilCmd} remember --bg "User prefers tabs over spaces" "Project uses Postgres 15"
-\`\`\`
-
-The absolute path above is baked in by \`sigil init\` so the command works regardless of which shell PATH Claude Code's Bash subprocess inherits. Re-run \`sigil init\` to refresh after moving machines or reinstalling.
-
-### Rules
-
-- Read the auto-injected \`Sigil memory\` block first; answer from it before reaching for new searches
-- Save facts as short, self-contained statements — never summaries of the conversation
-- Each fact must make sense in isolation, without the conversation context
-- Batch all explicit saves in one user-turn into a single \`${sigilCmd} remember --bg\` call
-- Skip trivial exchanges (greetings, "thanks", "ok", simple math)
-- If search and injection both return nothing, answer from your own knowledge and say so
-- Sigil is cross-project — memories from one session are available in all sessions
-`;
-
-  const result = await safeWrite(cortexMdPath, instructions, { dryRun });
-  return { action: result.action, path: cortexMdPath, bytes: result.bytes };
-}
 
 // ─── Register MCP ────────────────────────────────────────────────────────────
 
@@ -2056,7 +1899,8 @@ Options:
   }
 
   const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
-  await writeSigilMd();
+  const { writeSharedInstructions } = await import('./lib/clients/instructions.js');
+  await writeSharedInstructions();
   const count = await updateContextSnapshot({ namespace, limit });
   await cortexDb.destroy();
 
@@ -2299,19 +2143,6 @@ async function removeClaudeMdImport() {
   if (after === before) return false;
   await fs.writeFile(claudeMdPath, after, 'utf8');
   return true;
-}
-
-// Clear only the <!-- sigil-context --> block from ~/.sigil/CLAUDE.md.
-// The instructions block above it is preserved so 'sigil init' won't need
-// to re-write the file from scratch on the next run.
-async function clearHotContextBlock() {
-  const fs = await import('node:fs/promises');
-  const cortexMdPath = join(homedir(), '.sigil', 'CLAUDE.md');
-  if (!existsSync(cortexMdPath)) return;
-
-  const before = await fs.readFile(cortexMdPath, 'utf8');
-  const after = before.replace(/<!-- sigil-context -->[\s\S]*?<!-- sigil-context -->\s*/g, '');
-  if (after !== before) await fs.writeFile(cortexMdPath, after, 'utf8');
 }
 
 function escapeRegex(s) {

@@ -15,4 +15,4 @@ RESEARCH.md
 eval/longmemeval/longmemeval_oracle.json
 eval/longmemeval/longmemeval_s_cleaned.json
 eval/longmemeval/longmemeval_m_cleaned.json
-eval/longmemeval/reports/
+eval/longmemeval/reports/__pycache__/
