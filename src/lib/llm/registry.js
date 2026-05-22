@@ -16,6 +16,7 @@ const EMBEDDERS = {
   ollama: () => import('./embedders/ollama.js'),
   openai: () => import('./embedders/openai.js'),
   voyage: () => import('./embedders/voyage.js'),
+  openrouter: () => import('./embedders/openrouter.js'),
 };
 
 const providerCache = {};
@@ -123,13 +124,18 @@ async function detectEmbeddingProvider() {
   if (config.embedding.voyageApiKey) { detectedEmbedder = 'voyage'; return detectedEmbedder; }
   if (await isOllamaReachable()) { detectedEmbedder = 'ollama'; return detectedEmbedder; }
   if (config.embedding.openaiApiKey) { detectedEmbedder = 'openai'; return detectedEmbedder; }
+  // OpenRouter is auto-picked only as a last resort because it's a gateway:
+  // if the user has a direct provider key, that route is cheaper and more
+  // reliable. They can still force it via EMBEDDING_PROVIDER=openrouter.
+  if (config.embedding.openrouterApiKey) { detectedEmbedder = 'openrouter'; return detectedEmbedder; }
 
   throw new Error(
     'No embedding provider available. Either:\n'
-    + '  - Set EMBEDDING_PROVIDER (voyage, ollama, openai)\n'
+    + '  - Set EMBEDDING_PROVIDER (voyage, ollama, openai, openrouter)\n'
     + '  - Set VOYAGE_API_KEY (recommended — best quality)\n'
     + '  - Start Ollama locally\n'
-    + '  - Set OPENAI_API_KEY',
+    + '  - Set OPENAI_API_KEY\n'
+    + '  - Set OPENROUTER_API_KEY (and EMBEDDING_MODEL like "openai/text-embedding-3-large")',
   );
 }
 

@@ -321,8 +321,9 @@ during init; existing tables are detected and preserved.`);
     }
 
     note(
-      'OpenRouter handles LLM calls only — embeddings still route through Ollama / OpenAI / Voyage.\n'
-      + 'You will pick an embedding provider in the next step.',
+      'OpenRouter can drive both LLM calls and embeddings.\n'
+      + 'You will pick an embedding provider in the next step — "openrouter" is an option,\n'
+      + 'or you can use a direct provider (Ollama / OpenAI / Voyage) for embeddings.',
       'OpenRouter scope',
     );
   }
@@ -332,10 +333,11 @@ during init; existing tables are detected and preserved.`);
   const embeddingProvider = await select({
     message: 'Embedding provider (for semantic search)',
     options: [
-      { value: 'ollama', label: 'Ollama', hint: 'nomic-embed-text — free, runs locally' },
-      { value: 'openai', label: 'OpenAI', hint: 'text-embedding-3-large — requires API key' },
+      { value: 'ollama',     label: 'Ollama',     hint: 'nomic-embed-text — free, runs locally' },
+      { value: 'openai',     label: 'OpenAI',     hint: 'text-embedding-3-large — requires API key' },
+      { value: 'openrouter', label: 'OpenRouter', hint: 'gateway — one key for LLM + embeddings; uses vendor/model names' },
     ],
-    initialValue: existing.EMBEDDING_PROVIDER || (hasOllama ? 'ollama' : 'openai'),
+    initialValue: existing.EMBEDDING_PROVIDER || (hasOllama ? 'ollama' : (openrouterKey ? 'openrouter' : 'openai')),
   });
   if (isCancel(embeddingProvider)) { cancel('Setup cancelled.'); process.exit(0); }
 
@@ -350,9 +352,30 @@ during init; existing tables are detected and preserved.`);
   const embeddingDefaults = {
     ollama: { model: 'nomic-embed-text', dimensions: 768 },
     openai: { model: 'text-embedding-3-large', dimensions: 1024 },
+    // OpenRouter proxies the same OpenAI text-embedding-3-large under a
+    // namespaced model id. 1024d via Matryoshka truncation, same as the
+    // direct-OpenAI path so the DB schema lines up.
+    openrouter: { model: 'openai/text-embedding-3-large', dimensions: 1024 },
   };
   const embeddingModel = existing.EMBEDDING_MODEL || embeddingDefaults[embeddingProvider].model;
   const embeddingDimensions = Number(existing.EMBEDDING_DIMENSIONS) || embeddingDefaults[embeddingProvider].dimensions;
+
+  // If the user picked OpenRouter for embeddings but we haven't collected an
+  // OpenRouter key yet (e.g. they chose Anthropic / OpenAI for the LLM),
+  // prompt for it now. Skipping this would write EMBEDDING_PROVIDER=openrouter
+  // with no key, which only blows up later at first hook call.
+  if (embeddingProvider === 'openrouter' && !openrouterKey) {
+    const key = await text({
+      message: 'OpenRouter API key (for embeddings) — get one at openrouter.ai/keys',
+      placeholder: existing.OPENROUTER_API_KEY ? '(unchanged)' : 'sk-or-...',
+      validate: (v) => {
+        if (!v && !existing.OPENROUTER_API_KEY) return 'API key is required';
+        if (v && !v.startsWith('sk-or-')) return 'OpenRouter keys start with "sk-or-" — check paste';
+      },
+    });
+    if (isCancel(key)) { cancel('Setup cancelled.'); process.exit(0); }
+    if (key) openrouterKey = key;
+  }
 
   // ── Ollama health check + model pull ──────────────────────────────────────
   //
