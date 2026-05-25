@@ -1,6 +1,6 @@
 {
   "name": "@anmolsrv/sigil",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "type": "module",
   "description": "Persistent memory for AI coding agents. Local-first knowledge engine with atomic facts, entity graph, and hybrid retrieval. Auto-integrated with Claude Code via hooks; MCP-native for Cursor, Continue, Cline, Windsurf, and any other MCP client.",
   "bin": {
