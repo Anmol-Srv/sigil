@@ -17,7 +17,7 @@
  */
 
 import cortexDb from '../../db/cortex.js';
-import { pgVector } from '../../lib/vectors.js';
+import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
 import { CONFIDENCE_CASE, buildFactFilters } from './filters.js';
 
@@ -35,6 +35,7 @@ const CONFIDENCE_LOW_MULT = 0.7;
 
 async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5, minConfidence = 'medium', pointInTime, categories, podIds = null }) {
   const vec = pgVector(queryEmbedding);
+  const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
   const { temporalClause, categoryClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories });
   const overfetchLimit = limit * OVERFETCH;
 
@@ -96,8 +97,8 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
              source_document_ids AS "sourceDocumentIds",
              source_section AS "sourceSection",
              created_at,
-             1 - (embedding <=> ?) AS similarity,
-             ROW_NUMBER() OVER (ORDER BY embedding <=> ?) AS rank_ix
+             1 - (${embeddingDistance}) AS similarity,
+             ROW_NUMBER() OVER (ORDER BY ${embeddingDistance}) AS rank_ix
       FROM fact
       WHERE namespace = ANY(?)
         AND status = 'active'
@@ -106,7 +107,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
         ${temporalClause}
         ${categoryClause}
         ${podScopeClause}
-      ORDER BY embedding <=> ?
+      ORDER BY ${embeddingDistance}
       LIMIT ?
     ),
     keyword AS (
@@ -116,13 +117,13 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
              source_document_ids AS "sourceDocumentIds",
              source_section AS "sourceSection",
              created_at,
-             ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', ?)) AS keyword_rank,
-             ROW_NUMBER() OVER (ORDER BY ts_rank_cd(to_tsvector('english', content), plainto_tsquery('english', ?)) DESC) AS rank_ix
+             ts_rank_cd(search_vector, plainto_tsquery('english', ?)) AS keyword_rank,
+             ROW_NUMBER() OVER (ORDER BY ts_rank_cd(search_vector, plainto_tsquery('english', ?)) DESC) AS rank_ix
       FROM fact
       WHERE namespace = ANY(?)
         AND status = 'active'
         AND ${CONFIDENCE_CASE} >= ?
-        AND to_tsvector('english', content) @@ plainto_tsquery('english', ?)
+        AND search_vector @@ plainto_tsquery('english', ?)
         ${temporalClause}
         ${categoryClause}
         ${podScopeClause}

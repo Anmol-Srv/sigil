@@ -24,7 +24,7 @@ Restart Hermes. Verify with `hermes memory status` (or whatever Hermes' status c
 |---|---|---|
 | `is_available()` | `which sigil` | Avoid network calls; just check the binary exists. |
 | `initialize(session_id, platform, ...)` | sets namespace = `hermes-<platform>` | Per-platform classification — see plugin/README.md. |
-| `prefetch(query)` | `sigil search <q> --namespace=hermes-<platform>,default --limit=10` | Cross-namespace recall = the shared brain. |
+| `prefetch(query)` | `sigil search <q> --namespace=hermes-<platform>,default --limit=5 --no-graph` | Fast cross-namespace recall = the shared brain. |
 | `sync_turn(user, assistant)` | `sigil remember --bg "<user>"` in a daemon thread | Non-blocking. Sigil's classifier decides what's worth keeping. |
 | `get_tool_schemas()` | `sigil_search`, `sigil_remember` | Lets the model explicitly drill down or save mid-turn. |
 
@@ -38,4 +38,4 @@ A `src/lib/clients/hermes.js` module (5th client alongside Claude Code / Cursor 
 
 - **Sigil CLI must be on `PATH`** on whichever machine runs Hermes. If `which sigil` returns nothing, `is_available()` returns false and Hermes silently falls back to its built-in memory.
 - **`~/.sigil/.env` must be configured** — run `sigil init` on the Hermes host before activating the plugin.
-- **The plugin shells out for every prefetch.** Latency is `sigil search` latency (~200ms typical). If Hermes' per-turn budget is tighter, we could move to in-process via a Python<>Node bridge — out of scope for v0.1.
+- **The plugin shells out for every prefetch.** Latency is `sigil search` latency. The plugin keeps this path retrieval-only; if Hermes' per-turn budget is tighter, we could move to in-process via a Python<>Node bridge — out of scope for v0.1.

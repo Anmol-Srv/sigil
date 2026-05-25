@@ -32,6 +32,10 @@ const KEYWORD_WEIGHT = 0.7;
 const MAX_ENTITY_QUERY_LENGTH = 60;
 
 async function search(query, { namespaces, limit = 5, minConfidence = 'medium', useGraph = false, includeChunks = false, pointInTime, expand = false, route = true, categories, synthesize = config.search.synthesize, podScope = null, ctx = {} } = {}) {
+  if (!isSearchableQuery(query)) {
+    return emptySearchResult();
+  }
+
   // When synthesis is on, force include chunks so the synthesizer has raw material
   // (especially important in lazy/Ogham mode where no facts are stored).
   if (synthesize) includeChunks = true;
@@ -88,6 +92,21 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
   }
 
   return result;
+}
+
+function isSearchableQuery(query) {
+  const q = String(query || '').trim();
+  if (!q) return false;
+  return !/^[*%_?\s]+$/.test(q);
+}
+
+function emptySearchResult() {
+  return {
+    facts: [],
+    chunks: [],
+    matchedEntity: null,
+    relatedEntities: [],
+  };
 }
 
 async function synthesizeAnswer(query, { facts, chunks }) {
@@ -548,4 +567,4 @@ function rrfMerge(vectorResults, keywordResults, limit) {
     }));
 }
 
-export { search };
+export { search, isSearchableQuery };

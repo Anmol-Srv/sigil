@@ -41,6 +41,8 @@ Set format="compact" for token-efficient output (one line per category, no IDs/m
         useGraph,
         pointInTime: pit,
         podScope: podScope ?? null,
+        route: false,
+        synthesize: false,
       });
 
       if (format === 'compact') {

@@ -56,11 +56,30 @@ logger = logging.getLogger(__name__)
 # Remember is fire-and-forget via --bg, but we still cap the spawn-and-detach.
 _SEARCH_TIMEOUT_S = 5
 _REMEMBER_TIMEOUT_S = 10
+_PREFETCH_LIMIT = 5
 
 # Cap the prefetched context block — Hermes already has a memory_char_limit
 # in config.yaml, but we trim early to avoid wasting characters on results
 # the agent will never use.
 _PREFETCH_CHAR_LIMIT = 2000
+
+
+def _clean_text(value: Any) -> str:
+    """Strip subprocess noise that can break Hermes' tool/result framing."""
+    if value is None:
+        return ""
+    return str(value).replace("\x00", "").strip()
+
+
+def _sigil_search_args(query: str, namespaces: str, limit: int) -> List[str]:
+    return [
+        "sigil", "search", query,
+        f"--namespace={namespaces}",
+        f"--limit={limit}",
+        "--no-graph",
+        "--no-route",
+        "--no-synthesize",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -134,11 +153,7 @@ class SigilProvider(MemoryProvider):
 
         try:
             result = subprocess.run(
-                [
-                    "sigil", "search", query,
-                    f"--namespace={self._search_namespaces}",
-                    "--limit=10",
-                ],
+                _sigil_search_args(query, self._search_namespaces, _PREFETCH_LIMIT),
                 timeout=_SEARCH_TIMEOUT_S,
                 capture_output=True,
                 text=True,
@@ -152,10 +167,10 @@ class SigilProvider(MemoryProvider):
             return ""
 
         if result.returncode != 0:
-            logger.warning("sigil search exit %s: %s", result.returncode, result.stderr.strip())
+            logger.warning("sigil search exit %s: %s", result.returncode, _clean_text(result.stderr))
             return ""
 
-        out = (result.stdout or "").strip()
+        out = _clean_text(result.stdout)
         if not out or out == "No results found.":
             return ""
 
@@ -226,8 +241,8 @@ class SigilProvider(MemoryProvider):
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "Max results (default 10).",
-                            "default": 10,
+                            "description": "Max results (default 5).",
+                            "default": _PREFETCH_LIMIT,
                         },
                     },
                     "required": ["query"],
@@ -268,26 +283,22 @@ class SigilProvider(MemoryProvider):
         query = (args.get("query") or "").strip()
         if not query:
             return {"error": "query is required"}
-        limit = int(args.get("limit", 10))
+        limit = int(args.get("limit", _PREFETCH_LIMIT))
 
         try:
             result = subprocess.run(
-                [
-                    "sigil", "search", query,
-                    f"--namespace={self._search_namespaces}",
-                    f"--limit={limit}",
-                ],
+                _sigil_search_args(query, self._search_namespaces, limit),
                 timeout=_SEARCH_TIMEOUT_S,
                 capture_output=True,
                 text=True,
                 check=False,
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": f"sigil search failed: {exc}"}
+            return {"error": _clean_text(f"sigil search failed: {exc}")}
 
         if result.returncode != 0:
-            return {"error": (result.stderr or "search exited non-zero").strip()}
-        return {"results": (result.stdout or "").strip()}
+            return {"error": _clean_text(result.stderr or "search exited non-zero")}
+        return {"results": _clean_text(result.stdout)}
 
     def _tool_remember(self, args: Dict[str, Any]) -> Dict[str, Any]:
         fact = (args.get("fact") or "").strip()
@@ -304,10 +315,10 @@ class SigilProvider(MemoryProvider):
                 check=False,
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": f"sigil remember failed: {exc}"}
+            return {"error": _clean_text(f"sigil remember failed: {exc}")}
 
         if result.returncode != 0:
-            return {"error": (result.stderr or "remember exited non-zero").strip()}
+            return {"error": _clean_text(result.stderr or "remember exited non-zero")}
         return {"ok": True, "namespace": self._namespace}
 
     # -- Config --------------------------------------------------------------

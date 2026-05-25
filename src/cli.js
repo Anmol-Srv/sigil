@@ -230,7 +230,7 @@ during init; existing tables are detected and preserved.`);
   // the embedding picker below can default to OpenRouter when it makes
   // sense. With the registry pattern, providers return their env in
   // providerEnv; we fall back to `existing` for keys the user already had.
-  const openrouterKey = providerEnv.OPENROUTER_API_KEY || existing.OPENROUTER_API_KEY || '';
+  let openrouterKey = providerEnv.OPENROUTER_API_KEY || existing.OPENROUTER_API_KEY || '';
 
   // ── Embeddings ────────────────────────────────────────────────────────────
 
@@ -1798,6 +1798,10 @@ Usage:
 Options:
   --namespace=<ns>    Filter by namespace (comma-separated for multiple)
   --limit=<n>         Max results (default: 10)
+  --graph             Enable graph enhancement
+  --route             Enable LLM query routing
+  --synthesize        Enable LLM answer synthesis
+  --chunks            Include raw chunk matches
   --no-graph          Disable graph enhancement
 
 Examples:
@@ -1814,9 +1818,23 @@ Examples:
   const nsFlag = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1];
   const namespaces = nsFlag ? nsFlag.split(',') : [config.defaults.namespace];
   const limit = Number(flags.find((f) => f.startsWith('--limit='))?.split('=')[1] || 10);
-  const useGraph = !flags.includes('--no-graph');
+  const useGraph = flags.includes('--graph') && !flags.includes('--no-graph');
+  const route = flags.includes('--route');
+  const synthesize = flags.includes('--synthesize');
+  const includeChunks = flags.includes('--chunks') || synthesize;
 
-  const { facts, chunks } = await search(query, { namespaces, limit, useGraph });
+  const { facts, chunks, synthesized } = await search(query, {
+    namespaces,
+    limit,
+    useGraph,
+    route,
+    synthesize,
+    includeChunks,
+  });
+
+  if (synthesized) {
+    console.log(synthesized);
+  }
 
   if (facts.length) {
     console.log(`\nFacts (${facts.length}):`);

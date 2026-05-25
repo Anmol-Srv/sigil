@@ -128,6 +128,19 @@ describe('search — facade behavior', () => {
     expect(result.facts).toHaveLength(0);
   });
 
+  it('short-circuits wildcard-only queries before routing or retrieval', async () => {
+    const result = await search('*', { namespaces: ['default'] });
+
+    expect(result).toMatchObject({
+      facts: [],
+      chunks: [],
+      matchedEntity: null,
+      relatedEntities: [],
+    });
+    expect(routeQuery).not.toHaveBeenCalled();
+    expect(hybridSearchFacts).not.toHaveBeenCalled();
+  });
+
   it('passes namespace, limit, minConfidence to hybrid-sql', async () => {
     hybridSearchFacts.mockResolvedValue([]);
 

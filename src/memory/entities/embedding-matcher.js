@@ -1,6 +1,6 @@
 import cortexDb from '../../db/cortex.js';
 import { prompt as llmPrompt } from '../../lib/llm.js';
-import { pgVector } from '../../lib/vectors.js';
+import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
 
 const EMBEDDING_THRESHOLD = 0.85;
@@ -9,17 +9,18 @@ async function findEmbeddingMatch(name, embedding, { namespace, threshold = EMBE
   if (!embedding) return [];
 
   const vec = pgVector(embedding);
+  const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
 
   const { rows } = await cortexDb.raw(`
     SELECT id, name, entity_type AS "entityType", entity_types AS "entityTypes",
-           1 - (embedding <=> ?) AS similarity
+           1 - (${embeddingDistance}) AS similarity
     FROM entity
     WHERE namespace = ?
       AND embedding IS NOT NULL
       AND LOWER(name) != LOWER(?)
       AND merged_with IS NULL
-      AND 1 - (embedding <=> ?) >= ?
-    ORDER BY embedding <=> ?
+      AND 1 - (${embeddingDistance}) >= ?
+    ORDER BY ${embeddingDistance}
     LIMIT ?
   `, [vec, namespace, name, vec, threshold, vec, limit]);
 

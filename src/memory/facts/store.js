@@ -5,7 +5,7 @@ import path from 'node:path';
 import cortexDb from '../../db/cortex.js';
 import { embed } from '../../ingestion/embedder.js';
 import { prompt as llmPrompt } from '../../lib/llm.js';
-import { pgVector } from '../../lib/vectors.js';
+import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
 import { PROMPTS_DIR } from '../../lib/paths.js';
 
@@ -155,6 +155,7 @@ async function markSuperseded(factId, supersededById) {
 
 async function findSimilar(embedding, { namespace, threshold = AMBIGUOUS_THRESHOLD, limit = 5 }) {
   const vec = pgVector(embedding);
+  const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
 
   // AUDM dedup only needs "is there any close match" — high recall is wasted here.
   // Lower hnsw.ef_search trades recall for ANN scan speed, dropping per-fact dedup
@@ -164,13 +165,13 @@ async function findSimilar(embedding, { namespace, threshold = AMBIGUOUS_THRESHO
     await trx.raw(`SET LOCAL hnsw.ef_search = 40`);
     const { rows } = await trx.raw(`
       SELECT id, uid, content, category, status,
-             1 - (embedding <=> ?) as similarity
+             1 - (${embeddingDistance}) as similarity
       FROM fact
       WHERE namespace = ?
         AND status = 'active'
         AND embedding IS NOT NULL
-        AND 1 - (embedding <=> ?) >= ?
-      ORDER BY embedding <=> ?
+        AND 1 - (${embeddingDistance}) >= ?
+      ORDER BY ${embeddingDistance}
       LIMIT ?
     `, [vec, namespace, vec, threshold, vec, limit]);
     return rows;

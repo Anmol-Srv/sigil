@@ -1,7 +1,7 @@
 import { nanoid } from 'nanoid';
 
 import cortexDb from '../../db/cortex.js';
-import { pgVector } from '../../lib/vectors.js';
+import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
 
 async function insertEntity({ name, entityType, description, namespace, externalId, embedding }) {
@@ -73,18 +73,19 @@ async function findById(id) {
 
 async function findSimilar(embedding, { entityType, namespace, threshold = 0.85, limit = 3 }) {
   const vec = pgVector(embedding);
+  const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
 
   const { rows } = await cortexDb.raw(`
     SELECT id, uid, name, entity_type AS "entityType", description,
            mention_count AS "mentionCount",
-           1 - (embedding <=> ?) AS similarity
+           1 - (${embeddingDistance}) AS similarity
     FROM entity
     WHERE entity_type = ?
       AND namespace = COALESCE(?, ?)
       AND embedding IS NOT NULL
       AND merged_with IS NULL
-      AND 1 - (embedding <=> ?) >= ?
-    ORDER BY embedding <=> ?
+      AND 1 - (${embeddingDistance}) >= ?
+    ORDER BY ${embeddingDistance}
     LIMIT ?
   `, [vec, entityType, namespace, config.defaults.namespace, vec, threshold, vec, limit]);
 
