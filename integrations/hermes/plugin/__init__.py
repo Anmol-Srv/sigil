@@ -71,6 +71,14 @@ def _clean_text(value: Any) -> str:
     return str(value).replace("\x00", "").strip()
 
 
+def _ok(payload: Dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _err(message: str) -> str:
+    return json.dumps({"error": message}, ensure_ascii=False)
+
+
 def _sigil_search_args(query: str, namespaces: str, limit: int) -> List[str]:
     return [
         "sigil", "search", query,
@@ -277,12 +285,12 @@ class SigilProvider(MemoryProvider):
             return self._tool_search(args)
         if tool_name == "sigil_remember":
             return self._tool_remember(args)
-        return {"error": f"unknown tool: {tool_name}"}
+        return _err(f"unknown tool: {tool_name}")
 
-    def _tool_search(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _tool_search(self, args: Dict[str, Any]) -> str:
         query = (args.get("query") or "").strip()
         if not query:
-            return {"error": "query is required"}
+            return _err("query is required")
         limit = int(args.get("limit", _PREFETCH_LIMIT))
 
         try:
@@ -294,16 +302,16 @@ class SigilProvider(MemoryProvider):
                 check=False,
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": _clean_text(f"sigil search failed: {exc}")}
+            return _err(_clean_text(f"sigil search failed: {exc}"))
 
         if result.returncode != 0:
-            return {"error": _clean_text(result.stderr or "search exited non-zero")}
-        return {"results": _clean_text(result.stdout)}
+            return _err(_clean_text(result.stderr or "search exited non-zero"))
+        return _ok({"results": _clean_text(result.stdout)})
 
-    def _tool_remember(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _tool_remember(self, args: Dict[str, Any]) -> str:
         fact = (args.get("fact") or "").strip()
         if not fact:
-            return {"error": "fact is required"}
+            return _err("fact is required")
 
         try:
             result = subprocess.run(
@@ -315,11 +323,11 @@ class SigilProvider(MemoryProvider):
                 check=False,
             )
         except Exception as exc:  # noqa: BLE001
-            return {"error": _clean_text(f"sigil remember failed: {exc}")}
+            return _err(_clean_text(f"sigil remember failed: {exc}"))
 
         if result.returncode != 0:
-            return {"error": _clean_text(result.stderr or "remember exited non-zero")}
-        return {"ok": True, "namespace": self._namespace}
+            return _err(_clean_text(result.stderr or "remember exited non-zero"))
+        return _ok({"ok": True, "namespace": self._namespace})
 
     # -- Config --------------------------------------------------------------
     #
