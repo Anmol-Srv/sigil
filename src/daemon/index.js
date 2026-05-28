@@ -30,6 +30,7 @@ import { registerRefreshContext } from './handlers/refresh-context.js';
 import { registerTestDbConnection } from './handlers/test-db-connection.js';
 import { registerRunMigrations } from './handlers/run-migrations.js';
 import { registerEnv } from './handlers/env.js';
+import { registerNodeInfo } from './handlers/node-info.js';
 
 const STARTED_AT = Date.now();
 
@@ -68,6 +69,7 @@ export async function startDaemon({ foreground = false } = {}) {
   registerTestDbConnection(registry);
   registerRunMigrations(registry);
   registerEnv(registry);
+  registerNodeInfo(registry);
 
   const socket = await startSocketServer({ registry, log });
 
@@ -81,6 +83,24 @@ export async function startDaemon({ foreground = false } = {}) {
     }
   }
 
+  // Iroh: warm up the endpoint when network is enabled so the NodeID
+  // is registered with relays + discoverable before the first pair
+  // request arrives. Failure is non-fatal — solo mode keeps working.
+  let netEnabled = false;
+  if (config.network.enabled) {
+    try {
+      const { getNodeInfo } = await import('../net/endpoint.js');
+      const info = await getNodeInfo();
+      netEnabled = true;
+      log(`iroh node up: ${info.nodeId}`);
+      if (info.relayUrl) log(`iroh relay: ${info.relayUrl}`);
+    } catch (err) {
+      log(`iroh failed to start: ${err.message}`);
+    }
+  } else {
+    log(`iroh disabled (SIGIL_MODE=${config.network.mode})`);
+  }
+
   // Lazy-init guard: handlers that touch the DB open the connection on
   // first use (see handlers/*). On shutdown we destroy the pool if it
   // was ever opened.
@@ -88,6 +108,14 @@ export async function startDaemon({ foreground = false } = {}) {
     log(`received ${signal}, shutting down`);
     await socket.close();
     if (http) await http.close();
+    if (netEnabled) {
+      try {
+        const { shutdownEndpoint } = await import('../net/endpoint.js');
+        await shutdownEndpoint();
+      } catch (err) {
+        log(`iroh shutdown failed: ${err.message}`);
+      }
+    }
     try {
       const { default: cortexDb } = await import('../db/cortex.js');
       await cortexDb.destroy();

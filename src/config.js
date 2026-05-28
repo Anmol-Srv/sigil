@@ -104,6 +104,18 @@ const config = {
     port: Number(env('SIGIL_HTTP_PORT', 7777)),
   },
 
+  network: {
+    // 'solo'   — no Iroh, single-device install (default).
+    // 'master' — owns canonical DB, accepts paired devices.
+    // 'follower' — paired with a master, syncs over Iroh.
+    // 'lite-follower' — no local DB, every read/write proxied to master.
+    mode: env('SIGIL_MODE', 'solo'),
+    enabled: env('SIGIL_NETWORK_ENABLED', null) === null
+      ? env('SIGIL_MODE', 'solo') !== 'solo'
+      : env('SIGIL_NETWORK_ENABLED', 'false') !== 'false',
+    masterNodeId: env('SIGIL_MASTER_NODE_ID', '') || null,
+  },
+
   defaults: {
     namespace: process.env.DEFAULT_NAMESPACE || 'default',
   },

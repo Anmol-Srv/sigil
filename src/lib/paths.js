@@ -57,6 +57,10 @@ export const GUI_WEB_DIR_DEV     = join(PKG_ROOT, 'src', 'gui', 'web'); // today
 // Back-compat alias
 export const GUI_WEB_DIR         = GUI_WEB_DIR_BUILT;
 
+// Iroh — persistent node storage (identity + blob store)
+export const SIGIL_IROH_DIR      = join(SIGIL_HOME, 'iroh');
+export const SIGIL_IDENTITY_KEY  = join(SIGIL_HOME, 'identity.key'); // Ed25519 secret (32 bytes, hex-encoded)
+
 export const CLAUDE_HOME = join(HOME, '.claude');
 export const CLAUDE_SETTINGS_PATH = join(CLAUDE_HOME, 'settings.json');
 export const CLAUDE_MD_PATH = join(CLAUDE_HOME, 'CLAUDE.md');

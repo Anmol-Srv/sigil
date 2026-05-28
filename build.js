@@ -26,6 +26,7 @@ const EXTERNAL = [
   '@modelcontextprotocol/sdk/server/stdio.js',
   'dotenv',                    // light, better to externalize for config flexibility
   'ws',                        // WebSocket — bufferutil/utf-8-validate optional natives
+  '@number0/iroh',             // Iroh NAPI binding — prebuilt native, must be external
 ];
 
 const ENTRIES = [

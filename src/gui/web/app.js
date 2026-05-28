@@ -45,13 +45,25 @@ function escape(v) {
 
 async function refreshHealth() {
   try {
-    const data = await rpc('ping');
-    renderDl($('#health-pane'), [
-      ['pid', data.pid],
-      ['version', data.version],
-      ['node', data.node],
-      ['uptime', formatUptime(data.uptimeMs)],
+    const [ping, nodeInfo] = await Promise.all([
+      rpc('ping'),
+      rpc('nodeInfo').catch(() => ({ enabled: false })),
     ]);
+    const rows = [
+      ['pid', ping.pid],
+      ['version', ping.version],
+      ['node', ping.node],
+      ['uptime', formatUptime(ping.uptimeMs)],
+      ['network mode', nodeInfo.mode || '—'],
+    ];
+    if (nodeInfo.enabled) {
+      rows.push(['iroh nodeId', nodeInfo.nodeId || nodeInfo.error || '—']);
+      if (nodeInfo.relayUrl) rows.push(['relay', nodeInfo.relayUrl]);
+      if (nodeInfo.addresses?.length) rows.push(['addresses', nodeInfo.addresses.join(', ')]);
+    } else {
+      rows.push(['iroh', 'disabled (solo)']);
+    }
+    renderDl($('#health-pane'), rows);
     setConn('ok', 'connected');
   } catch (err) {
     setConn('err', err.message);
