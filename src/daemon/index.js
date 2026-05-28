@@ -92,13 +92,15 @@ export async function startDaemon({ foreground = false } = {}) {
   if (config.network.enabled) {
     try {
       // Register accept-side protocol handlers BEFORE constructing the
-      // Iroh runtime. Only master nodes serve sigil/pair/1 (followers
-      // dial outbound when joining; they don't accept pair requests).
+      // Iroh runtime. Only master nodes serve sigil/pair/1 + sigil/rpc/1
+      // (followers dial outbound).
       if (config.network.mode === 'master') {
         const { registerProtocol } = await import('../net/endpoint.js');
         const { PAIR_ALPN, createPairAcceptor } = await import('../net/pairing.js');
+        const { RPC_ALPN, createRpcAcceptor } = await import('../net/rpc-server.js');
         registerProtocol(PAIR_ALPN, createPairAcceptor({ log }));
-        log(`registered accept handler: ${PAIR_ALPN}`);
+        registerProtocol(RPC_ALPN, createRpcAcceptor({ registry, log }));
+        log(`registered accept handlers: ${PAIR_ALPN}, ${RPC_ALPN}`);
       }
 
       const { getNodeInfo } = await import('../net/endpoint.js');
