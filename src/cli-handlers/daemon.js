@@ -25,6 +25,7 @@ import {
 } from '../daemon/lifecycle.js';
 import { openSocketClient } from '../clients/socket-client.js';
 import { connectOrStartDaemon } from '../clients/auto-spawn.js';
+import { formatUptime } from '../lib/format.js';
 
 const HELP = `sigil daemon — control the Sigil daemon
 
@@ -196,12 +197,4 @@ async function cmdLogs(args) {
   }
 }
 
-function formatUptime(ms) {
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  if (h) return `${h}h ${m}m ${sec}s`;
-  if (m) return `${m}m ${sec}s`;
-  return `${sec}s`;
-}
+// formatUptime moved to src/lib/format.js (PR review #26).

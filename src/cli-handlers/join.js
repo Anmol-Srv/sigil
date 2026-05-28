@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PKG_ROOT } from '../lib/paths.js';
+import { parseFlags } from './flags.js';
 
 const HELP = `sigil join — pair this device with a Sigil master
 
@@ -123,22 +124,6 @@ export async function runJoin(args) {
   } catch (err) {
     console.error(`(warning: failed to persist mode to .env: ${err.message})`);
   }
-}
-
-function parseFlags(args) {
-  const out = {};
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a.startsWith('--') && a.includes('=')) {
-      const [k, v] = a.slice(2).split('=');
-      out[k] = v;
-    } else if (a.startsWith('--')) {
-      const k = a.slice(2);
-      const next = args[i + 1];
-      out[k] = next && !next.startsWith('--') ? args[++i] : true;
-    }
-  }
-  return out;
 }
 
 function readVersion() {

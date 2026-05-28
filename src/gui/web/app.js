@@ -214,7 +214,53 @@ $('#db-migrate').addEventListener('click', async () => {
 });
 
 // ── Devices ───────────────────────────────────────────────────────────
+// PR review #31: event delegation. Bind one click listener to each
+// tbody once and dispatch on data-attributes. Previous version added
+// new listeners on every refresh, which leaked across re-renders.
+let devicesBound = false;
+function bindDeviceTableHandlers() {
+  if (devicesBound) return;
+  devicesBound = true;
+  $('#dev-table tbody').addEventListener('click', async (e) => {
+    const t = e.target.closest('button');
+    if (!t) return;
+    if (t.dataset.revoke) {
+      const reason = prompt(
+        'Revoke reason:\n\n  paused      — temporary (can re-activate later)\n  compromised — terminal (key leaked; only re-pairing re-enables)\n\nType "paused" or "compromised":',
+        'paused',
+      );
+      if (!reason) return;
+      if (reason !== 'paused' && reason !== 'compromised') {
+        alert(`Invalid reason "${reason}" — expected "paused" or "compromised".`);
+        return;
+      }
+      try {
+        await rpc('device.revoke', { id: Number(t.dataset.revoke), reason });
+      } catch (err) {
+        alert(`Revoke failed: ${err.message}`);
+        return;
+      }
+      refreshDevices();
+    } else if (t.dataset.activate) {
+      try {
+        await rpc('device.activate', { id: Number(t.dataset.activate) });
+      } catch (err) {
+        alert(`Activate failed: ${err.message}`);
+        return;
+      }
+      refreshDevices();
+    }
+  });
+  $('#dev-codes tbody').addEventListener('click', async (e) => {
+    const t = e.target.closest('button[data-revoke-code]');
+    if (!t) return;
+    await rpc('pair.revoke', { id: Number(t.dataset.revokeCode) });
+    refreshDevices();
+  });
+}
+
 async function refreshDevices() {
+  bindDeviceTableHandlers();
   // Devices
   try {
     const { devices } = await rpc('device.list', {});
@@ -243,37 +289,8 @@ async function refreshDevices() {
             <td>${actions}</td>
           </tr>`;
       }).join('');
-      tbody.querySelectorAll('button[data-revoke]').forEach((b) => {
-        b.addEventListener('click', async () => {
-          const reason = prompt(
-            'Revoke reason:\n\n  paused      — temporary (can re-activate later)\n  compromised — terminal (key leaked; only re-pairing re-enables)\n\nType "paused" or "compromised":',
-            'paused',
-          );
-          if (!reason) return;
-          if (reason !== 'paused' && reason !== 'compromised') {
-            alert(`Invalid reason "${reason}" — expected "paused" or "compromised".`);
-            return;
-          }
-          try {
-            await rpc('device.revoke', { id: Number(b.dataset.revoke), reason });
-          } catch (err) {
-            alert(`Revoke failed: ${err.message}`);
-            return;
-          }
-          refreshDevices();
-        });
-      });
-      tbody.querySelectorAll('button[data-activate]').forEach((b) => {
-        b.addEventListener('click', async () => {
-          try {
-            await rpc('device.activate', { id: Number(b.dataset.activate) });
-          } catch (err) {
-            alert(`Activate failed: ${err.message}`);
-            return;
-          }
-          refreshDevices();
-        });
-      });
+      // Per-row handlers now provided by delegated listener on the
+      // tbody — see bindDeviceTableHandlers().
     }
   } catch (err) {
     $('#dev-table tbody').innerHTML = `<tr><td colspan="7" class="muted">${escape(err.message)}</td></tr>`;
@@ -297,12 +314,7 @@ async function refreshDevices() {
           <td>${!c.consumedBy ? `<button data-revoke-code="${c.id}">Revoke</button>` : ''}</td>
         </tr>`;
       }).join('');
-      tbody.querySelectorAll('button[data-revoke-code]').forEach((b) => {
-        b.addEventListener('click', async () => {
-          await rpc('pair.revoke', { id: Number(b.dataset.revokeCode) });
-          refreshDevices();
-        });
-      });
+      // pair.revoke handler is delegated on #dev-codes tbody (above).
     }
   } catch (err) {
     $('#dev-codes tbody').innerHTML = `<tr><td colspan="6" class="muted">${escape(err.message)}</td></tr>`;

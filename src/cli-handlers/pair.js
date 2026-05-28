@@ -6,6 +6,7 @@
  *   sigil pair revoke <id>
  */
 import { connectOrStartDaemon } from '../clients/auto-spawn.js';
+import { parseFlags } from './flags.js';
 
 const HELP = `sigil pair — create and manage device pairing codes
 
@@ -102,18 +103,3 @@ async function cmdRevoke(args) {
   }
 }
 
-function parseFlags(args) {
-  const out = {};
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a.startsWith('--') && a.includes('=')) {
-      const [k, v] = a.slice(2).split('=');
-      out[k] = v;
-    } else if (a.startsWith('--')) {
-      const k = a.slice(2);
-      const v = args[i + 1] && !args[i + 1].startsWith('--') ? args[++i] : true;
-      out[k] = v;
-    }
-  }
-  return out;
-}

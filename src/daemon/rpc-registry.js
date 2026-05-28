@@ -9,6 +9,8 @@
  * (CLI thin client, MCP tool, GUI) is responsible for rendering.
  */
 
+import { serializeError } from '../lib/errors.js';
+
 export const RPC_ERRORS = {
   UNKNOWN_METHOD: 'unknown_method',
   INVALID_PARAMS: 'invalid_params',
@@ -65,31 +67,4 @@ export function createRegistry() {
   return { register, replace, dispatch, list };
 }
 
-/**
- * Flatten a thrown error into a wire-safe shape. AggregateError (thrown by
- * pg/undici/node-fetch when every address candidate fails) loses its useful
- * detail when stringified — we surface the first sub-error's message and
- * code so the CLI can pattern-match (e.g. ECONNREFUSED → friendly hint).
- */
-function serializeError(err) {
-  let code = err.code || RPC_ERRORS.HANDLER_ERROR;
-  let message = err.message || String(err);
-
-  if (err instanceof AggregateError && Array.isArray(err.errors) && err.errors.length) {
-    const first = err.errors[0];
-    code = first.code || code;
-    message = first.message || message;
-    // Preserve sibling codes for richer diagnostics
-    const codes = [...new Set(err.errors.map((e) => e.code).filter(Boolean))];
-    if (codes.length > 1) message += ` (and ${err.errors.length - 1} more: ${codes.slice(1).join(', ')})`;
-  } else if (err.cause && (!message || message === 'AggregateError')) {
-    code = err.cause.code || code;
-    message = err.cause.message || message;
-  }
-
-  return {
-    code,
-    message,
-    stack: process.env.SIGIL_DEBUG ? err.stack : undefined,
-  };
-}
+// serializeError moved to src/lib/errors.js (PR review #25).

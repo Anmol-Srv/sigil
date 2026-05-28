@@ -1,32 +1,40 @@
 /**
  * lite-follower mode: redirect data-touching RPC methods to master.
  *
- * Local methods that should NOT be proxied (they are about *this* device):
- *   ping, mode, nodeInfo, readEnv, writeEnv, manifest.get
- *
- * Methods that exist locally but make no sense for a lite-follower
- * (admin-only, master-side): replaced with a "not on follower" error.
- *
- * Everything else is proxied via MemoryClient → RemoteClient → Iroh
- * sigil/rpc/1 to master.
+ * PR review #29: explicit allowlist of proxied methods. Previously we
+ * iterated registry.list() and replaced anything not in LOCAL_ONLY —
+ * which meant any future local-only method silently got proxied
+ * unless the contributor remembered to add it to LOCAL_ONLY. Now we
+ * proxy ONLY what's in PROXIED_TO_MASTER; anything else stays local
+ * (the safer default).
  */
-const LOCAL_ONLY = new Set([
-  'ping',
-  'mode',
-  'nodeInfo',
-  'readEnv',
-  'writeEnv',
-  'manifest.get',
-  // refreshContext writes ~/.sigil/CLAUDE.md ON THIS DEVICE — must stay
-  // local. Its data-fetch companions (refreshContext.fetch and .explain)
-  // are not in LOCAL_ONLY and get proxied to master in the loop below.
-  'refreshContext',
+
+/** Calls that hit the canonical DB on master. */
+const PROXIED_TO_MASTER = new Set([
+  // Read-side
+  'search',
+  'searchEntity',
+  'traverseGraph',
+  'getFactContext',
+  'getEntityContext',
+  'getPod',
+  'listPods',
+  'listFacts',
+  'status',
+  'refreshContext.fetch',
+  'refreshContext.explain',
+  // Write-side
+  'remember',
+  'forgetFact',
+  'ingestDoc',
 ]);
 
+/** Admin-only / master-only — fail loudly on lite-follower. */
 const FORBIDDEN_ON_LITE = new Set([
   'pair.create',
   'pair.list',
   'pair.revoke',
+  'pair.sweep',
   'device.list',
   'device.revoke',
   'device.activate',
@@ -37,24 +45,20 @@ const FORBIDDEN_ON_LITE = new Set([
 export async function installLiteProxy({ registry, log }) {
   const { getMemoryClient } = await import('../memory/client.js');
 
-  for (const method of registry.list()) {
-    if (LOCAL_ONLY.has(method)) continue;
-
-    if (FORBIDDEN_ON_LITE.has(method)) {
-      registry.replace(method, () => {
-        const err = new Error(`"${method}" is not available on a lite-follower device. Run on the master device.`);
-        err.code = 'not_on_follower';
-        throw err;
-      });
-      continue;
-    }
-
-    // Proxy: lazy-load memory client, forward call to master
-    registry.replace(method, async (params) => {
-      const client = await getMemoryClient();
-      return client.call(method, params);
+  let proxied = 0;
+  let forbidden = 0;
+  for (const method of PROXIED_TO_MASTER) {
+    if (!registry.replace(method, async (params) => (await getMemoryClient()).call(method, params))) continue;
+    proxied++;
+  }
+  for (const method of FORBIDDEN_ON_LITE) {
+    const replaced = registry.replace(method, () => {
+      const err = new Error(`"${method}" is not available on a lite-follower device. Run on the master device.`);
+      err.code = 'not_on_follower';
+      throw err;
     });
+    if (replaced) forbidden++;
   }
 
-  log(`lite-follower: ${registry.list().length} methods present, data methods proxied to master`);
+  log(`lite-follower: ${proxied} methods proxied, ${forbidden} forbidden, rest local`);
 }

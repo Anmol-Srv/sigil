@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { readFile, writeFile, chmod, mkdir } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { dirname } from 'node:path';
@@ -12,22 +11,20 @@ import { SIGIL_GUI_TOKEN } from '../lib/paths.js';
  * (they could read .env too), so this is "auth for *this* user" not
  * cross-user isolation.
  */
+// PR review #24: collapse cache + existsSync + length-check into one
+// try-read-or-create routine.
 let cached = null;
 export async function getGuiToken() {
   if (cached) return cached;
-  if (existsSync(SIGIL_GUI_TOKEN)) {
+  try {
     const t = (await readFile(SIGIL_GUI_TOKEN, 'utf8')).trim();
-    if (t.length >= 32) {
-      cached = t;
-      return t;
-    }
-  }
+    if (/^[0-9a-f]{64}$/.test(t)) return (cached = t);
+  } catch { /* missing or unreadable — fall through to create */ }
   await mkdir(dirname(SIGIL_GUI_TOKEN), { recursive: true });
   const fresh = randomBytes(32).toString('hex');
   await writeFile(SIGIL_GUI_TOKEN, fresh, 'utf8');
   try { await chmod(SIGIL_GUI_TOKEN, 0o600); } catch { /* best effort */ }
-  cached = fresh;
-  return fresh;
+  return (cached = fresh);
 }
 
 /**

@@ -40,7 +40,9 @@ export async function getSecretKey() {
         + 'Refusing to overwrite — move or delete the file manually to regenerate.',
       );
     }
-    cachedSecret = hexToBytes(raw);
+    // PR review #23: Buffer.from(hex,'hex') + Array.from is the same
+    // thing in two well-tested lines instead of 13 hand-rolled ones.
+    cachedSecret = Array.from(Buffer.from(raw, 'hex'));
     return cachedSecret;
   }
 
@@ -48,20 +50,6 @@ export async function getSecretKey() {
   const buf = randomBytes(SECRET_BYTES);
   await writeFile(SIGIL_IDENTITY_KEY, buf.toString('hex'), 'utf8');
   try { await chmod(SIGIL_IDENTITY_KEY, 0o600); } catch { /* best effort */ }
-  cachedSecret = bufferToBytes(buf);
+  cachedSecret = Array.from(buf);
   return cachedSecret;
-}
-
-function hexToBytes(hex) {
-  const out = new Array(SECRET_BYTES);
-  for (let i = 0; i < SECRET_BYTES; i++) {
-    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
-}
-
-function bufferToBytes(buf) {
-  const out = new Array(buf.length);
-  for (let i = 0; i < buf.length; i++) out[i] = buf[i];
-  return out;
 }

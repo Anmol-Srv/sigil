@@ -57,6 +57,9 @@ export async function produceManifest() {
       model: config.embedding.model || null,
       dimensions: Number(config.embedding.dimensions) || null,
       normalization: 'l2',
+      // PR review #28: nominal upper bound — embedder doesn't currently
+      // export a canonical constant. Bump together with the underlying
+      // provider tokenizer limits when those change.
       maxInputTokens: 8192,
     },
     // Sourced from the chunker module so the manifest cannot drift

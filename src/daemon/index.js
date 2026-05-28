@@ -14,28 +14,7 @@ import { setRegistry, clearRegistry } from './registry-holder.js';
 import { startSocketServer } from './socket-server.js';
 import { startHttpServer } from './http-server.js';
 
-import { registerPing } from './handlers/ping.js';
-import { registerRemember } from './handlers/remember.js';
-import { registerSearch } from './handlers/search.js';
-import { registerStatus } from './handlers/status.js';
-import { registerSearchEntity } from './handlers/search-entity.js';
-import { registerTraverseGraph } from './handlers/traverse-graph.js';
-import { registerGetFactContext } from './handlers/get-fact-context.js';
-import { registerGetEntityContext } from './handlers/get-entity-context.js';
-import { registerGetPod } from './handlers/get-pod.js';
-import { registerListPods } from './handlers/list-pods.js';
-import { registerIngestDoc } from './handlers/ingest-doc.js';
-import { registerListFacts } from './handlers/list-facts.js';
-import { registerForgetFact } from './handlers/forget-fact.js';
-import { registerRefreshContext } from './handlers/refresh-context.js';
-import { registerTestDbConnection } from './handlers/test-db-connection.js';
-import { registerRunMigrations } from './handlers/run-migrations.js';
-import { registerEnv } from './handlers/env.js';
-import { registerNodeInfo } from './handlers/node-info.js';
-import { registerPair } from './handlers/pair.js';
-import { registerMode } from './handlers/mode.js';
-import { registerManifest } from './handlers/manifest.js';
-import { registerDevice } from './handlers/device.js';
+import { registerAll } from './handlers/index.js';
 
 const STARTED_AT = Date.now();
 
@@ -58,28 +37,7 @@ export async function startDaemon({ foreground = false } = {}) {
 
   const registry = createRegistry();
   setRegistry(registry);
-  registerPing(registry, { startedAt: STARTED_AT });
-  registerRemember(registry);
-  registerSearch(registry);
-  registerStatus(registry);
-  registerSearchEntity(registry);
-  registerTraverseGraph(registry);
-  registerGetFactContext(registry);
-  registerGetEntityContext(registry);
-  registerGetPod(registry);
-  registerListPods(registry);
-  registerIngestDoc(registry);
-  registerListFacts(registry);
-  registerForgetFact(registry);
-  registerRefreshContext(registry);
-  registerTestDbConnection(registry);
-  registerRunMigrations(registry);
-  registerEnv(registry);
-  registerNodeInfo(registry);
-  registerPair(registry);
-  registerMode(registry);
-  registerManifest(registry);
-  registerDevice(registry);
+  registerAll(registry, { startedAt: STARTED_AT });
 
   const socket = await startSocketServer({ registry, log });
 
