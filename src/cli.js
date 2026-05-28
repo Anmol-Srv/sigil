@@ -63,9 +63,48 @@ Options:
 
 Run sigil <command> --help for command-specific options.`;
 
-if (!command || command === '--help' || command === '-h') {
+if (command === '--help' || command === '-h') {
   console.log(HELP);
   process.exit(0);
+}
+
+// Zero-arg launch: start the daemon (auto-spawn if needed) and open the
+// browser at the GUI URL. This is the "npx sigil" UX — one command and
+// you land on the onboarding wizard.
+if (!command) {
+  await launchAndOpenBrowser();
+  process.exit(0);
+}
+
+async function launchAndOpenBrowser() {
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const { getGuiToken } = await import('./daemon/gui-token.js');
+  process.stderr.write('[sigil] starting daemon…\n');
+  const client = await connectOrStartDaemon({ quiet: true });
+  const { data } = await client.call('ping', {});
+  await client.close();
+
+  const { default: config } = await import('./config.js');
+  const token = await getGuiToken();
+  const url = `http://${config.http.host}:${config.http.port}/?t=${token}`;
+  console.log('');
+  console.log(`  Sigil is running on this machine.`);
+  console.log('');
+  console.log(`    PID:    ${data.pid}`);
+  console.log(`    GUI:    ${url}`);
+  console.log('');
+  console.log(`  Opening the dashboard in your browser…`);
+  console.log(`  (Press Ctrl+C at any time. The daemon stays running.)`);
+  console.log('');
+
+  // Cross-platform browser open. Fire and forget; user sees the URL above.
+  const opener = process.platform === 'darwin' ? 'open'
+              : process.platform === 'win32'  ? 'start'
+              : 'xdg-open';
+  const { spawn } = await import('node:child_process');
+  try {
+    spawn(opener, [url], { detached: true, stdio: 'ignore' }).unref();
+  } catch { /* user can still paste from terminal */ }
 }
 
 const commands = {
