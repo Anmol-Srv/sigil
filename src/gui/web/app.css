@@ -118,9 +118,10 @@ header {
   height: 100%;
 }
 .brand-mark {
-  width: 18px;
-  height: 18px;
-  background: var(--accent);
+  width: 20px;
+  height: 20px;
+  display: block;
+  flex-shrink: 0;
 }
 .brand-name {
   font-weight: 600;
