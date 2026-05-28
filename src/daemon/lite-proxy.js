@@ -17,6 +17,10 @@ const LOCAL_ONLY = new Set([
   'readEnv',
   'writeEnv',
   'manifest.get',
+  // refreshContext writes ~/.sigil/CLAUDE.md ON THIS DEVICE — must stay
+  // local. Its data-fetch companions (refreshContext.fetch and .explain)
+  // are not in LOCAL_ONLY and get proxied to master in the loop below.
+  'refreshContext',
 ]);
 
 const FORBIDDEN_ON_LITE = new Set([
