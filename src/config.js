@@ -13,6 +13,10 @@ if (dbType !== 'postgres') {
 const config = {
   db: {
     type: 'postgres',
+    // Connection URL takes precedence when set. Recognized providers
+    // (Neon, Supabase, RDS, Render, Railway, CockroachDB) get sensible
+    // SSL defaults automatically; override with ?sslmode=... in the URL.
+    url: env('SIGIL_DATABASE_URL', env('DATABASE_URL', '')) || null,
     host: env('SIGIL_DB_HOST', 'localhost'),
     port: Number(env('SIGIL_DB_PORT', 5432)),
     database: env('SIGIL_DB_NAME', 'sigil'),

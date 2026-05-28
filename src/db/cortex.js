@@ -1,20 +1,19 @@
 import knex from 'knex';
 
 import config from '../config.js';
+import { selectDriver } from './drivers/index.js';
+
+const driver = selectDriver(config);
 
 const cortexDb = knex({
   client: 'pg',
-  connection: {
-    host: config.db.host,
-    port: config.db.port,
-    database: config.db.database,
-    user: config.db.user,
-    password: config.db.password,
-  },
+  connection: driver.connection,
   pool: { min: 2, max: 10 },
   postProcessResponse,
   wrapIdentifier,
 });
+
+cortexDb.__sigilDriver = driver;
 
 function postProcessResponse(result) {
   if (Array.isArray(result)) return result.map(toCamel);
