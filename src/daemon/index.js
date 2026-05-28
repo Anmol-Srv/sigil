@@ -123,6 +123,17 @@ export async function startDaemon({ foreground = false } = {}) {
     log(`iroh disabled (SIGIL_MODE=${config.network.mode})`);
   }
 
+  // Lite-follower: swap data-touching handlers for proxies that forward
+  // to master over Iroh. The local DB is never touched on this device.
+  if (config.network.mode === 'lite-follower') {
+    try {
+      const { installLiteProxy } = await import('./lite-proxy.js');
+      await installLiteProxy({ registry, log });
+    } catch (err) {
+      log(`lite-proxy install failed: ${err.message}`);
+    }
+  }
+
   // Lazy-init guard: handlers that touch the DB open the connection on
   // first use (see handlers/*). On shutdown we destroy the pool if it
   // was ever opened.

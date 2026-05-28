@@ -45,7 +45,17 @@ export function createRegistry() {
     return [...handlers.keys()].sort();
   }
 
-  return { register, dispatch, list };
+  /**
+   * Replace an existing handler. Used by the lite-follower path to swap
+   * a data-touching local handler for one that proxies to master.
+   */
+  function replace(method, fn) {
+    if (!handlers.has(method)) return false;
+    handlers.set(method, fn);
+    return true;
+  }
+
+  return { register, replace, dispatch, list };
 }
 
 /**
