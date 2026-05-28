@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, openSync, closeSync } from 'node:fs';
+import { existsSync, openSync, closeSync, mkdirSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import {
   SIGIL_DAEMON_LOG,
   SIGIL_DAEMON_SOCK,
+  SIGIL_HOME,
   PKG_ROOT,
 } from '../lib/paths.js';
 import { detectRunningDaemon } from '../daemon/lifecycle.js';
@@ -50,6 +51,12 @@ async function canConnect() {
 }
 
 async function spawnDaemon() {
+  // Fresh-install safety: ensure SIGIL_HOME exists BEFORE we try to
+  // open the log file as the parent's stdio target. The child would
+  // also create it, but the openSync() calls below run in the parent
+  // and would ENOENT on a brand-new install. (PR review #3.)
+  mkdirSync(SIGIL_HOME, { recursive: true });
+
   // Defensive cleanup: detectRunningDaemon clears stale pid/socket files
   // if no live daemon exists. Without this, a previous crash can leave
   // ~/.sigil/sock behind and the new daemon will refuse to bind.
