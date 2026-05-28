@@ -17,7 +17,7 @@
 import { createServer } from 'node:http';
 import { existsSync, createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { join, extname, normalize } from 'node:path';
+import { join, extname, normalize, sep } from 'node:path';
 import { WebSocketServer } from 'ws';
 
 import { GUI_WEB_DIR_BUILT, GUI_WEB_DIR_DEV } from '../lib/paths.js';
@@ -179,10 +179,13 @@ async function serveIndex(req, res, url, webDir, log) {
 
 async function serveStatic(req, res, sub, webDir) {
   if (!webDir) return writeJson(res, 404, { ok: false, error: { code: 'not_found', message: 'no web dir' } });
-  // Prevent path-traversal: normalize and ensure the resolved path stays
-  // inside webDir.
+  // Prevent path-traversal: normalize the resolved path, then check it
+  // starts with the normalized webDir + a separator. Using path.sep
+  // explicitly avoids the prior bug where '/foo/' → normalize → '/foo',
+  // so a candidate of '/foobar/secret' passed startsWith('/foo'). PR review #6.
   const candidate = normalize(join(webDir, sub));
-  if (!candidate.startsWith(normalize(webDir) + (webDir.endsWith('/') ? '' : '/'))) {
+  const root = normalize(webDir) + sep;
+  if (!candidate.startsWith(root)) {
     return writeJson(res, 403, { ok: false, error: { code: 'forbidden', message: 'path traversal blocked' } });
   }
   if (!existsSync(candidate)) {
