@@ -11,6 +11,7 @@ import {
 } from './lifecycle.js';
 import { createRegistry } from './rpc-registry.js';
 import { startSocketServer } from './socket-server.js';
+import { startHttpServer } from './http-server.js';
 
 import { registerPing } from './handlers/ping.js';
 import { registerRemember } from './handlers/remember.js';
@@ -64,12 +65,23 @@ export async function startDaemon({ foreground = false } = {}) {
 
   const socket = await startSocketServer({ registry, log });
 
+  const { default: config } = await import('../config.js');
+  let http = null;
+  if (config.http.enabled) {
+    try {
+      http = await startHttpServer({ registry, log, config });
+    } catch (err) {
+      log(`http server failed to start: ${err.message}`);
+    }
+  }
+
   // Lazy-init guard: handlers that touch the DB open the connection on
   // first use (see handlers/*). On shutdown we destroy the pool if it
   // was ever opened.
   installShutdownHooks(async (signal) => {
     log(`received ${signal}, shutting down`);
     await socket.close();
+    if (http) await http.close();
     try {
       const { default: cortexDb } = await import('../db/cortex.js');
       await cortexDb.destroy();

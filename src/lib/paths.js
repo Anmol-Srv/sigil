@@ -50,6 +50,13 @@ export const SIGIL_DAEMON_SOCK = join(SIGIL_HOME, 'sock');
 export const SIGIL_DAEMON_PID  = join(SIGIL_HOME, 'sigild.pid');
 export const SIGIL_DAEMON_LOG  = join(SIGIL_HOME, 'sigild.log');
 
+// GUI
+export const SIGIL_GUI_TOKEN     = join(SIGIL_HOME, 'gui.token');
+export const GUI_WEB_DIR_BUILT   = join(PKG_ROOT, 'dist', 'gui');     // future: minified build
+export const GUI_WEB_DIR_DEV     = join(PKG_ROOT, 'src', 'gui', 'web'); // today: vanilla source
+// Back-compat alias
+export const GUI_WEB_DIR         = GUI_WEB_DIR_BUILT;
+
 export const CLAUDE_HOME = join(HOME, '.claude');
 export const CLAUDE_SETTINGS_PATH = join(CLAUDE_HOME, 'settings.json');
 export const CLAUDE_MD_PATH = join(CLAUDE_HOME, 'CLAUDE.md');

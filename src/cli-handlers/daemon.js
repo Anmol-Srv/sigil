@@ -34,6 +34,8 @@ Usage:
   sigil daemon status
   sigil daemon restart
   sigil daemon logs [--follow]
+  sigil daemon open                 Open the GUI in your browser
+  sigil daemon url                  Print the GUI URL (with auth token)
 
 The daemon holds the Postgres pool, Iroh endpoint, and caches shared by
 every CLI verb, MCP client, and hook on this machine. It auto-starts on
@@ -57,11 +59,34 @@ export async function runDaemon(args) {
     case 'status':   return cmdStatus(rest);
     case 'restart':  await cmdStop(rest); await delay(200); return cmdStart(rest);
     case 'logs':     return cmdLogs(rest);
+    case 'open':     return cmdOpen({ launch: true });
+    case 'url':      return cmdOpen({ launch: false });
     default:
       console.error(`Unknown subcommand: daemon ${sub}\n`);
       console.log(HELP);
       process.exit(1);
   }
+}
+
+async function cmdOpen({ launch }) {
+  // Ensure daemon is running (auto-spawn).
+  const c = await connectOrStartDaemon({ quiet: true });
+  await c.call('ping', {});
+  await c.close();
+
+  const { default: config } = await import('../config.js');
+  const { getGuiToken } = await import('../daemon/gui-token.js');
+  const token = await getGuiToken();
+  const url = `http://${config.http.host}:${config.http.port}/?t=${token}`;
+  console.log(url);
+
+  if (!launch) return;
+  const opener =
+    process.platform === 'darwin' ? 'open' :
+    process.platform === 'win32'  ? 'start' :
+    'xdg-open';
+  const { spawn } = await import('node:child_process');
+  spawn(opener, [url], { detached: true, stdio: 'ignore' }).unref();
 }
 
 async function cmdStart(args) {

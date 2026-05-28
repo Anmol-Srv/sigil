@@ -98,6 +98,12 @@ const config = {
     logLevel: process.env.LOG_LEVEL || 'info',
   },
 
+  http: {
+    enabled: env('SIGIL_HTTP_ENABLED', 'true') !== 'false',
+    host: env('SIGIL_HTTP_HOST', '127.0.0.1'),
+    port: Number(env('SIGIL_HTTP_PORT', 7777)),
+  },
+
   defaults: {
     namespace: process.env.DEFAULT_NAMESPACE || 'default',
   },

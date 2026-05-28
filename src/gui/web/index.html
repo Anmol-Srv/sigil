@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sigil</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>Sigil</h1>
+    <nav>
+      <a href="#health" data-route="health" class="active">Health</a>
+      <a href="#kb" data-route="kb">Knowledge Base</a>
+      <a href="#methods" data-route="methods">RPC Methods</a>
+    </nav>
+    <div class="status-pill" id="conn">connecting…</div>
+  </header>
+
+  <main>
+    <section id="view-health" class="view active">
+      <h2>Daemon</h2>
+      <dl id="health-pane"><dt>pid</dt><dd>—</dd></dl>
+    </section>
+
+    <section id="view-kb" class="view">
+      <h2>Knowledge Base</h2>
+      <dl id="kb-pane"><dt>facts</dt><dd>—</dd></dl>
+      <h3>Hot facts</h3>
+      <ul id="hot-facts"></ul>
+    </section>
+
+    <section id="view-methods" class="view">
+      <h2>RPC Methods</h2>
+      <p class="muted">All RPC methods registered on this daemon. The CLI, MCP server, and this GUI all route through the same registry.</p>
+      <ul id="methods-list"></ul>
+    </section>
+  </main>
+
+  <footer>
+    <span id="footer-status">Sigil GUI · loopback only · auth via gui.token</span>
+  </footer>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

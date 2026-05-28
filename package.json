@@ -25,6 +25,7 @@
     "dist/",
     "prompts/",
     "src/db/migrations/",
+    "src/gui/web/",
     "integrations/",
     "knexfile.js",
     "LICENSE",
