@@ -122,13 +122,14 @@ async function handlePairRequest(req, remoteNodeId) {
   let masterNodeId = null;
   try { masterNodeId = (await getNodeInfo()).nodeId; } catch { /* ignore */ }
 
+  const { produceManifest } = await import('../memory/manifest.js');
+  const manifest = await produceManifest();
+
   return {
     ok: true,
     device: { id: device.id, role: row.role, namespaces: row.namespaces },
     masterNodeId,
-    // Full schema manifest lands in PR 12. Stub for now so the client
-    // protocol can develop without blocking on the manifest design.
-    manifest: { v: 1, stub: true },
+    manifest,
   };
 }
 

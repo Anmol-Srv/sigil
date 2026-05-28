@@ -34,6 +34,7 @@ import { registerEnv } from './handlers/env.js';
 import { registerNodeInfo } from './handlers/node-info.js';
 import { registerPair } from './handlers/pair.js';
 import { registerMode } from './handlers/mode.js';
+import { registerManifest } from './handlers/manifest.js';
 
 const STARTED_AT = Date.now();
 
@@ -76,6 +77,7 @@ export async function startDaemon({ foreground = false } = {}) {
   registerNodeInfo(registry);
   registerPair(registry);
   registerMode(registry);
+  registerManifest(registry);
 
   const socket = await startSocketServer({ registry, log });
 

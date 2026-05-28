@@ -77,6 +77,35 @@ export async function runJoin(args) {
   console.log(`  namespaces:       ${(result.device.namespaces || []).join(', ') || '(all)'}`);
   console.log(`  master nodeId:    ${result.masterNodeId}`);
 
+  // Verify the master's schema manifest matches what THIS device can
+  // produce. Failure is fatal for full-stack followers (their facts
+  // would silently corrupt the cluster's vector space). Lite followers
+  // tolerate it — they don't store anything anyway.
+  if (result.manifest) {
+    const { produceManifest, verifyManifest } = await import('../memory/manifest.js');
+    const local = await produceManifest();
+    const verdict = verifyManifest(local, result.manifest);
+    if (verdict.warnings.length) {
+      console.log('\nManifest warnings:');
+      for (const w of verdict.warnings) console.log(`  ⚠ ${w}`);
+    }
+    if (!verdict.ok) {
+      console.error('\nManifest errors:');
+      for (const e of verdict.errors) console.error(`  ✗ ${e}`);
+      if (!lite) {
+        console.error('\nFollower mode requires a matching manifest. Either align the config on');
+        console.error('this device (embedding model/dim, chunker, migrations) or join as a');
+        console.error('lite-follower (which never stores facts locally): retry with --lite');
+        process.exit(1);
+      } else {
+        console.error('\nProceeding as lite-follower — manifest drift OK because lite-follower');
+        console.error('devices never store facts locally.');
+      }
+    } else {
+      console.log('✓ schema manifest matches master');
+    }
+  }
+
   // Persist mode + master node id in ~/.sigil/.env so subsequent runs
   // start in follower mode automatically.
   try {
