@@ -31,6 +31,7 @@ import { registerTestDbConnection } from './handlers/test-db-connection.js';
 import { registerRunMigrations } from './handlers/run-migrations.js';
 import { registerEnv } from './handlers/env.js';
 import { registerNodeInfo } from './handlers/node-info.js';
+import { registerPair } from './handlers/pair.js';
 
 const STARTED_AT = Date.now();
 
@@ -70,6 +71,7 @@ export async function startDaemon({ foreground = false } = {}) {
   registerRunMigrations(registry);
   registerEnv(registry);
   registerNodeInfo(registry);
+  registerPair(registry);
 
   const socket = await startSocketServer({ registry, log });
 
@@ -89,6 +91,16 @@ export async function startDaemon({ foreground = false } = {}) {
   let netEnabled = false;
   if (config.network.enabled) {
     try {
+      // Register accept-side protocol handlers BEFORE constructing the
+      // Iroh runtime. Only master nodes serve sigil/pair/1 (followers
+      // dial outbound when joining; they don't accept pair requests).
+      if (config.network.mode === 'master') {
+        const { registerProtocol } = await import('../net/endpoint.js');
+        const { PAIR_ALPN, createPairAcceptor } = await import('../net/pairing.js');
+        registerProtocol(PAIR_ALPN, createPairAcceptor({ log }));
+        log(`registered accept handler: ${PAIR_ALPN}`);
+      }
+
       const { getNodeInfo } = await import('../net/endpoint.js');
       const info = await getNodeInfo();
       netEnabled = true;

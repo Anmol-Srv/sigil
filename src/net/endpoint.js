@@ -21,6 +21,21 @@ import { getSecretKey } from './identity.js';
 
 let iroh = null;
 let nodePromise = null;
+const pendingProtocols = new Map();
+
+/**
+ * Register an accept-side handler for an ALPN. Must be called BEFORE
+ * the Iroh runtime starts (i.e. before any getEndpoint / getNodeInfo
+ * call). Multiple ALPNs can be registered.
+ *
+ * The handler signature mirrors Iroh's: (err, conn) => Promise<void>.
+ */
+export function registerProtocol(alpn, handler) {
+  if (iroh || nodePromise) {
+    throw new Error(`registerProtocol("${alpn}"): runtime already started; register before first getEndpoint() call`);
+  }
+  pendingProtocols.set(alpn, handler);
+}
 
 async function ensureRuntime() {
   if (iroh) return iroh;
@@ -30,10 +45,25 @@ async function ensureRuntime() {
   const secretKey = await getSecretKey();
 
   nodePromise = import('@number0/iroh').then(async ({ Iroh }) => {
-    // Pass the persisted Ed25519 secret so the NodeID stays stable across
-    // daemon restarts — that ID is what device rows on master devices
-    // store for authorization.
-    iroh = await Iroh.persistent(SIGIL_IROH_DIR, { secretKey });
+    // Build the protocols map. Keys are Buffers; the runtime stringifies
+    // them as comma-joined byte arrays and matches incoming ALPNs by
+    // identity. Each handler factory returns { accept, shutdown }.
+    const protocols = {};
+    for (const [alpn, handler] of pendingProtocols) {
+      const key = Buffer.from(alpn);
+      protocols[key] = (err, ep) => {
+        if (err) throw err;
+        return {
+          accept: handler,
+          shutdown: () => {},
+        };
+      };
+    }
+
+    iroh = await Iroh.persistent(SIGIL_IROH_DIR, {
+      secretKey,
+      protocols: Object.keys(protocols).length ? protocols : undefined,
+    });
     return iroh;
   });
   return nodePromise;
@@ -42,6 +72,18 @@ async function ensureRuntime() {
 export async function getEndpoint() {
   const i = await ensureRuntime();
   return i.node.endpoint();
+}
+
+/** Dial a remote NodeAddr on a given ALPN. */
+export async function dial(nodeAddr, alpn) {
+  const ep = await getEndpoint();
+  return ep.connect(nodeAddr, Buffer.from(alpn));
+}
+
+/** Get this node's full address (includes relay + addresses). */
+export async function getNodeAddr() {
+  const i = await ensureRuntime();
+  return i.net.nodeAddr();
 }
 
 /**

@@ -55,6 +55,8 @@ Commands:
   reset                    Reset the database (drops all data)
   register                 Register as a Claude Code MCP server (advanced)
   daemon <sub>             Control the Sigil daemon (start | stop | status | logs)
+  pair <sub>               Create / list / revoke pairing codes (master)
+  join <node-id> <code>    Pair this device with a master Sigil install
 
 Options:
   --help                   Show this help message
@@ -88,11 +90,23 @@ const commands = {
   why: runWhy,
   kind: runKind,
   daemon: runDaemonVerb,
+  pair: runPairVerb,
+  join: runJoinVerb,
 };
 
 async function runDaemonVerb(args) {
   const { runDaemon } = await import('./cli-handlers/daemon.js');
   return runDaemon(args);
+}
+
+async function runPairVerb(args) {
+  const { runPair } = await import('./cli-handlers/pair.js');
+  return runPair(args);
+}
+
+async function runJoinVerb(args) {
+  const { runJoin } = await import('./cli-handlers/join.js');
+  return runJoin(args);
 }
 
 const handler = commands[command];
