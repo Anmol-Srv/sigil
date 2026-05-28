@@ -75,6 +75,20 @@ async function audmDecide(newContent, existingContent) {
 async function insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding }) {
   const uid = `fact-${nanoid(16)}`;
 
+  // Provenance + embedding-shape stamp. (PR review #5.)
+  // - created_by_device_id comes from the authenticated RPC caller via
+  //   AsyncLocalStorage; NULL means "this device" (local CLI / hooks /
+  //   master-bound MCP), matching the back-compat semantics in the
+  //   migration that added the column.
+  // - embedding_model / embedding_dim let cross-device sync refuse
+  //   mismatched vectors at the row level (defence in depth alongside
+  //   the schema manifest).
+  let createdByDeviceId = null;
+  try {
+    const { currentDeviceId } = await import('../../daemon/request-context.js');
+    createdByDeviceId = currentDeviceId();
+  } catch { /* request-context unavailable outside daemon — fall through */ }
+
   const [fact] = await cortexDb('fact')
     .insert({
       uid,
@@ -88,6 +102,9 @@ async function insertFact({ content, category, confidence, importance, namespace
       sourceSection: sourceSection || null,
       embedding: pgVector(embedding),
       validFrom: new Date(),
+      embeddingModel: config.embedding.model || null,
+      embeddingDim: Number(config.embedding.dimensions) || null,
+      createdByDeviceId,
     })
     .returning('*');
 

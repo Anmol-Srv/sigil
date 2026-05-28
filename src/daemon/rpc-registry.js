@@ -33,8 +33,15 @@ export function createRegistry() {
         error: { code: RPC_ERRORS.UNKNOWN_METHOD, message: `unknown method: ${method}` },
       };
     }
+    // Bind caller identity into AsyncLocalStorage so leaf code (fact
+    // store, etc.) can read provenance without parameter threading.
+    // PR review #5.
+    const { runWithRequestContext } = await import('./request-context.js');
     try {
-      const data = await fn(params ?? {}, ctx);
+      const data = await runWithRequestContext(
+        { device: ctx.device || null, transport: ctx.transport || null },
+        () => fn(params ?? {}, ctx),
+      );
       return { ok: true, data };
     } catch (err) {
       return { ok: false, error: serializeError(err) };
