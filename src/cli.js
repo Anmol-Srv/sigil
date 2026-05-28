@@ -1406,27 +1406,26 @@ Options:
     process.exit(0);
   }
 
-  const { listFacts } = await import('./memory/facts/store.js');
-  const config = (await import('./config.js')).default;
-  const cortexDb = (await import('./db/cortex.js')).default;
-
-  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1] || config.defaults.namespace;
+  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1];
   const category = args.find((a) => a.startsWith('--category='))?.split('=')[1];
   const limit = Number(args.find((a) => a.startsWith('--limit='))?.split('=')[1] || 20);
 
-  const facts = await listFacts({ namespace, category, limit });
-
-  if (!facts.length) {
-    console.log('No facts found.');
-  } else {
-    for (const fact of facts) {
-      const importance = fact.importance === 'vital' ? ' [VITAL]' : '';
-      console.log(`${fact.uid.slice(0, 8)} [${fact.category}]${importance} ${fact.content}`);
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+  try {
+    const { data } = await client.call('listFacts', { namespace, category, limit });
+    if (!data.facts.length) {
+      console.log('No facts found.');
+    } else {
+      for (const fact of data.facts) {
+        const importance = fact.importance === 'vital' ? ' [VITAL]' : '';
+        console.log(`${fact.uid.slice(0, 8)} [${fact.category}]${importance} ${fact.content}`);
+      }
+      console.log(`\n${data.facts.length} fact${data.facts.length > 1 ? 's' : ''} shown. Use 'sigil forget <id>' to delete.`);
     }
-    console.log(`\n${facts.length} fact${facts.length > 1 ? 's' : ''} shown. Use 'sigil forget <id>' to delete.`);
+  } finally {
+    await client.close();
   }
-
-  await cortexDb.destroy();
 }
 
 // ─── Forget ──────────────────────────────────────────────────────────────────
@@ -1445,41 +1444,19 @@ The <id> can be any of:
     process.exit(args[0] ? 0 : 1);
   }
 
-  const { deleteFact } = await import('./memory/facts/store.js');
-  const cortexDb = (await import('./db/cortex.js')).default;
-
   const idArg = args[0];
-
-  // Resolve to a UID — accept three input forms so users can paste whatever
-  // they see in `sigil facts` / `sigil search` output without thinking
-  // about which kind of identifier it is.
-  let match;
-  if (/^\d+$/.test(idArg)) {
-    // Pure-numeric → numeric row id
-    [match] = await cortexDb('fact').where({ id: Number(idArg) }).limit(1);
-  } else if (idArg.startsWith('fact-')) {
-    // UID or UID prefix
-    [match] = await cortexDb('fact').where('uid', 'like', `${idArg}%`).limit(1);
-  } else {
-    // Bare prefix fallback
-    [match] = await cortexDb('fact').where('uid', 'like', `${idArg}%`).limit(1);
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+  try {
+    const { data } = await client.call('forgetFact', { id: idArg });
+    if (data.notFound) {
+      console.error(`No fact matches: ${idArg}`);
+      process.exit(1);
+    }
+    console.log(`Forgotten: ${data.deleted.content}`);
+  } finally {
+    await client.close();
   }
-
-  if (!match) {
-    console.error(`No fact matches: ${idArg}`);
-    await cortexDb.destroy();
-    process.exit(1);
-  }
-
-  const deleted = await deleteFact(match.uid);
-  if (!deleted) {
-    console.error(`No fact matches: ${idArg}`);
-    await cortexDb.destroy();
-    process.exit(1);
-  }
-
-  console.log(`Forgotten: ${deleted.content}`);
-  await cortexDb.destroy();
 }
 
 // ─── Remember ────────────────────────────────────────────────────────────────
@@ -1689,10 +1666,8 @@ Examples:
     process.exit(0);
   }
 
-  const { ingestDocument } = await import('./ingestion/pipeline.js');
   const { readSource, readSources } = await import('./ingestion/sources/file.js');
   const { fetchSource } = await import('./ingestion/sources/url.js');
-  const cortexDb = (await import('./db/cortex.js')).default;
 
   const namespace = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1];
   const skipFacts = flags.includes('--skip-facts');
@@ -1701,61 +1676,64 @@ Examples:
   const results = { success: [], failed: [], skipped: [] };
   const startTime = Date.now();
 
-  for (const input of inputs) {
-    try {
-      let sources;
-
-      if (input.startsWith('http://') || input.startsWith('https://')) {
-        sources = [await fetchSource(input)];
-      } else if (input.includes('*')) {
-        sources = await readSources(input);
-        if (!sources.length) {
-          console.error(`Error: No files matched pattern: ${input}`);
-          results.failed.push({ input, error: 'no files matched' });
-          continue;
-        }
-      } else {
-        sources = [await readSource(input)];
-      }
-
-      for (const source of sources) {
-        console.log(`Ingesting: ${source.title}`);
-        const result = await ingestDocument({
-          content: source.content,
-          title: source.title,
-          sourcePath: source.sourcePath,
-          sourceType: source.sourceType,
-          contentType: source.contentType,
-          namespace,
-          metadata: source.metadata,
-          skipFacts,
-          skipEntities,
-        });
-
-        if (result.skipped) {
-          results.skipped.push(source.title);
-          console.log(`  Skipped (unchanged)`);
+  // File/URL/glob resolution stays in CLI — these are local filesystem
+  // operations and don't need to run in the daemon. The daemon does the
+  // heavy lifting (chunking, embedding, fact extraction) per source.
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+  try {
+    for (const input of inputs) {
+      try {
+        let sources;
+        if (input.startsWith('http://') || input.startsWith('https://')) {
+          sources = [await fetchSource(input)];
+        } else if (input.includes('*')) {
+          sources = await readSources(input);
+          if (!sources.length) {
+            console.error(`Error: No files matched pattern: ${input}`);
+            results.failed.push({ input, error: 'no files matched' });
+            continue;
+          }
         } else {
-          results.success.push(source.title);
-          console.log(`  Done — ${result.chunkCount} chunks, ${result.facts.total} facts (${result.facts.added} new, ${result.facts.updated} updated)`);
+          sources = [await readSource(input)];
         }
+
+        for (const source of sources) {
+          console.log(`Ingesting: ${source.title}`);
+          const { data } = await client.call('ingestDoc', {
+            content: source.content,
+            title: source.title,
+            filePath: source.sourcePath,
+            sourceType: source.sourceType,
+            namespace,
+            metadata: source.metadata,
+            skipFacts,
+            skipEntities,
+          });
+          if (data.skipped) {
+            results.skipped.push(source.title);
+            console.log('  Skipped (unchanged)');
+          } else {
+            results.success.push(source.title);
+            const f = data.facts;
+            console.log(`  Done — ${data.chunkCount} chunks${f ? `, ${f.total} facts (${f.added} new, ${f.updated ?? 0} updated)` : ''}`);
+          }
+        }
+      } catch (err) {
+        console.error(`  Failed: ${input} — ${err.message}`);
+        results.failed.push({ input, error: err.message });
       }
-    } catch (err) {
-      console.error(`  Failed: ${input} — ${err.message}`);
-      results.failed.push({ input, error: err.message });
     }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\nDone in ${elapsed}s — ${results.success.length} ingested, ${results.skipped.length} skipped, ${results.failed.length} failed`);
+
+    if (results.success.length > 0) {
+      await client.call('refreshContext', {}).catch(() => {});
+    }
+  } finally {
+    await client.close();
   }
-
-  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  console.log(`\nDone in ${elapsed}s — ${results.success.length} ingested, ${results.skipped.length} skipped, ${results.failed.length} failed`);
-
-  if (results.success.length > 0) {
-    const config = (await import('./config.js')).default;
-    const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
-    await updateContextSnapshot({ namespace: config.defaults.namespace }).catch(() => {});
-  }
-
-  await cortexDb.destroy();
 
   if (results.failed.length && !results.success.length) process.exit(1);
 }
@@ -1870,59 +1848,45 @@ Options:
     process.exit(0);
   }
 
-  const config = (await import('./config.js')).default;
-  const cortexDb = (await import('./db/cortex.js')).default;
-  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1] || config.defaults.namespace;
+  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1];
   const limitArg = args.find((a) => a.startsWith('--limit='))?.split('=')[1];
   const limit = limitArg ? Number(limitArg) : 20;
   const explain = args.includes('--explain');
 
-  if (explain) {
-    // Don't write the snapshot — show which kind each fact came from.
-    await import('./memory/pods/kinds/index.js');
-    const { activeKinds } = await import('./memory/pods/registry.js');
-    const { factsInPodsByRecency } = await import('./memory/facts/hot-context.js');
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+  try {
+    const { data } = await client.call('refreshContext', {
+      namespace,
+      limit,
+      explain,
+      cwd: process.cwd(),
+    });
 
-    const ctx = { namespace, cwd: process.cwd() };
-    const active = await activeKinds(ctx);
-    console.log(`Hot-context blend for namespace=${namespace}:`);
-    console.log('');
-    for (const { kind, scope } of active) {
-      console.log(`  ${kind.name} (budget=${kind.hotContextBudget}, ${kind.visibility})`);
-      let facts;
-      try {
-        if (typeof kind.fetchFacts === 'function') {
-          facts = await kind.fetchFacts(ctx, { slots: kind.hotContextBudget, namespace });
+    if (data.mode === 'explain') {
+      console.log(`Hot-context blend for namespace=${data.namespace}:\n`);
+      for (const section of data.sections) {
+        console.log(`  ${section.name} (budget=${section.budget}, ${section.visibility})`);
+        if (section.error) console.log(`    (failed: ${section.error})`);
+        if (!section.facts.length) {
+          console.log('    (no facts)');
         } else {
-          facts = await factsInPodsByRecency(scope, namespace, kind.hotContextBudget);
+          for (const f of section.facts) {
+            console.log(`    - ${(f.content || '').slice(0, 120)}`);
+          }
         }
-      } catch (err) {
-        facts = [];
-        console.log(`    (failed: ${err.message})`);
+        console.log('');
       }
-      if (!facts || facts.length === 0) {
-        console.log('    (no facts)');
-      } else {
-        for (const f of facts.slice(0, kind.hotContextBudget)) {
-          console.log(`    - ${(typeof f === 'string' ? f : f.content || '').slice(0, 120)}`);
-        }
-      }
-      console.log('');
+      return;
     }
-    await cortexDb.destroy();
-    return;
-  }
 
-  const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
-  const { writeSharedInstructions } = await import('./lib/clients/instructions.js');
-  await writeSharedInstructions();
-  const count = await updateContextSnapshot({ namespace, limit });
-  await cortexDb.destroy();
-
-  if (count) {
-    console.log(`Context refreshed — ${count} facts written to ~/.sigil/CLAUDE.md`);
-  } else {
-    console.log('No facts found. Ingest some content first.');
+    if (data.count) {
+      console.log(`Context refreshed — ${data.count} facts written to ~/.sigil/CLAUDE.md`);
+    } else {
+      console.log('No facts found. Ingest some content first.');
+    }
+  } finally {
+    await client.close();
   }
 }
 

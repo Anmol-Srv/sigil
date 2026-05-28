@@ -23,6 +23,9 @@ import { registerGetEntityContext } from './handlers/get-entity-context.js';
 import { registerGetPod } from './handlers/get-pod.js';
 import { registerListPods } from './handlers/list-pods.js';
 import { registerIngestDoc } from './handlers/ingest-doc.js';
+import { registerListFacts } from './handlers/list-facts.js';
+import { registerForgetFact } from './handlers/forget-fact.js';
+import { registerRefreshContext } from './handlers/refresh-context.js';
 
 const STARTED_AT = Date.now();
 
@@ -55,6 +58,9 @@ export async function startDaemon({ foreground = false } = {}) {
   registerGetPod(registry);
   registerListPods(registry);
   registerIngestDoc(registry);
+  registerListFacts(registry);
+  registerForgetFact(registry);
+  registerRefreshContext(registry);
 
   const socket = await startSocketServer({ registry, log });
 
