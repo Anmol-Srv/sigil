@@ -10,6 +10,7 @@ import {
   writePidFile,
 } from './lifecycle.js';
 import { createRegistry } from './rpc-registry.js';
+import { setRegistry, clearRegistry } from './registry-holder.js';
 import { startSocketServer } from './socket-server.js';
 import { startHttpServer } from './http-server.js';
 
@@ -32,6 +33,7 @@ import { registerRunMigrations } from './handlers/run-migrations.js';
 import { registerEnv } from './handlers/env.js';
 import { registerNodeInfo } from './handlers/node-info.js';
 import { registerPair } from './handlers/pair.js';
+import { registerMode } from './handlers/mode.js';
 
 const STARTED_AT = Date.now();
 
@@ -53,6 +55,7 @@ export async function startDaemon({ foreground = false } = {}) {
   await writePidFile();
 
   const registry = createRegistry();
+  setRegistry(registry);
   registerPing(registry, { startedAt: STARTED_AT });
   registerRemember(registry);
   registerSearch(registry);
@@ -72,6 +75,7 @@ export async function startDaemon({ foreground = false } = {}) {
   registerEnv(registry);
   registerNodeInfo(registry);
   registerPair(registry);
+  registerMode(registry);
 
   const socket = await startSocketServer({ registry, log });
 
@@ -137,6 +141,7 @@ export async function startDaemon({ foreground = false } = {}) {
       log(`pool destroy failed: ${err.message}`);
     }
     await removePidFile();
+    clearRegistry();
     log('stopped');
   });
 
