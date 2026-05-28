@@ -222,29 +222,55 @@ async function refreshDevices() {
     if (!devices.length) {
       tbody.innerHTML = '<tr><td colspan="7" class="muted">no devices paired yet</td></tr>';
     } else {
-      tbody.innerHTML = devices.map((d) => `
-        <tr>
-          <td>${escape(d.name)}</td>
-          <td><code>${escape(d.nodeId.slice(0, 16))}…</code></td>
-          <td><span class="badge ${d.role === 'admin' ? 'err' : d.role === 'writer' ? 'ok' : ''}">${escape(d.role)}</span></td>
-          <td>${escape((d.namespaces && d.namespaces.length) ? d.namespaces.join(', ') : '(all)')}</td>
-          <td>${escape(d.lastSeenAt ? new Date(d.lastSeenAt).toISOString().slice(0, 16).replace('T', ' ') : '—')}</td>
-          <td><span class="badge ${d.active ? 'ok' : 'err'}">${d.active ? 'active' : 'revoked'}</span></td>
-          <td>${d.active
-            ? `<button data-revoke="${d.id}">Revoke</button>`
-            : `<button data-activate="${d.id}">Re-activate</button>`}</td>
-        </tr>
-      `).join('');
+      tbody.innerHTML = devices.map((d) => {
+        const statusLabel = d.active
+          ? 'active'
+          : d.revokedReason === 'compromised' ? 'compromised' : 'paused';
+        const statusBadge = d.active ? 'ok' : d.revokedReason === 'compromised' ? 'err' : '';
+        const actions = d.active
+          ? `<button data-revoke="${d.id}">Revoke</button>`
+          : d.reactivatable
+            ? `<button data-activate="${d.id}">Re-activate</button>`
+            : `<span class="muted" title="revoked as compromised — re-pair required">re-pair only</span>`;
+        return `
+          <tr>
+            <td>${escape(d.name)}</td>
+            <td><code>${escape(d.nodeId.slice(0, 16))}…</code></td>
+            <td><span class="badge ${d.role === 'admin' ? 'err' : d.role === 'writer' ? 'ok' : ''}">${escape(d.role)}</span></td>
+            <td>${escape((d.namespaces && d.namespaces.length) ? d.namespaces.join(', ') : '(all)')}</td>
+            <td>${escape(d.lastSeenAt ? new Date(d.lastSeenAt).toISOString().slice(0, 16).replace('T', ' ') : '—')}</td>
+            <td><span class="badge ${statusBadge}">${statusLabel}</span></td>
+            <td>${actions}</td>
+          </tr>`;
+      }).join('');
       tbody.querySelectorAll('button[data-revoke]').forEach((b) => {
         b.addEventListener('click', async () => {
-          if (!confirm(`Revoke device ${b.dataset.revoke}? Future RPC calls will be rejected.`)) return;
-          await rpc('device.revoke', { id: Number(b.dataset.revoke) });
+          const reason = prompt(
+            'Revoke reason:\n\n  paused      — temporary (can re-activate later)\n  compromised — terminal (key leaked; only re-pairing re-enables)\n\nType "paused" or "compromised":',
+            'paused',
+          );
+          if (!reason) return;
+          if (reason !== 'paused' && reason !== 'compromised') {
+            alert(`Invalid reason "${reason}" — expected "paused" or "compromised".`);
+            return;
+          }
+          try {
+            await rpc('device.revoke', { id: Number(b.dataset.revoke), reason });
+          } catch (err) {
+            alert(`Revoke failed: ${err.message}`);
+            return;
+          }
           refreshDevices();
         });
       });
       tbody.querySelectorAll('button[data-activate]').forEach((b) => {
         b.addEventListener('click', async () => {
-          await rpc('device.activate', { id: Number(b.dataset.activate) });
+          try {
+            await rpc('device.activate', { id: Number(b.dataset.activate) });
+          } catch (err) {
+            alert(`Activate failed: ${err.message}`);
+            return;
+          }
           refreshDevices();
         });
       });
