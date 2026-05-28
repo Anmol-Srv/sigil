@@ -156,15 +156,19 @@ Retrieval is hybrid: pgvector cosine + tsvector keyword fused via Reciprocal Ran
 
 Sigil needs **Postgres 13+ with the `pgvector` extension** running somewhere reachable. You bring the server; `sigil init` does everything else.
 
-### 1. Have Postgres running
+### 1. Have Postgres available
 
+Two paths — pick whichever is easier for you.
+
+**A. Local install** (laptop dev, single machine):
 ```bash
 # Recommended: pgvector image includes the extension out of the box
 docker run -d --name sigil-pg -p 5432:5432 \
   -e POSTGRES_PASSWORD=sigil_dev pgvector/pgvector:pg15
 ```
+Alternatives: `brew install postgresql@15 pgvector && brew services start postgresql@15`, apt, asdf, etc.
 
-Alternatives: `brew install postgresql@15 pgvector && brew services start postgresql@15`, or any managed Postgres with the `vector` extension enabled (RDS, Neon, Supabase, Crunchy, …).
+**B. Managed / cloud Postgres** (Neon, Supabase, AWS RDS, Render, Railway, CockroachDB, Crunchy, …): grab the connection URL from your provider's dashboard. Make sure the `vector` extension is enabled (one-click on Neon/Supabase; parameter group on RDS). Nothing to install locally.
 
 ### 2. Install + setup
 
@@ -177,9 +181,16 @@ sigil init
 
 1. Asks for your LLM provider (OpenRouter, OpenAI, Anthropic, Ollama, or Claude Code subscription).
 2. Asks for your embedding provider (OpenAI, Voyage, or Ollama).
-3. Asks for your Postgres connection. **If the `sigil` database doesn't exist yet, it asks once for Postgres admin credentials and auto-creates the database, the `sigil_app` user, and the `vector` extension.** Admin creds are used once and never written to disk; only `sigil_app` credentials land in `~/.sigil/.env`.
+3. Asks **Local Postgres install** or **Connection URL**.
+   - *Local:* prompts for host/port/user/password. If the database doesn't exist yet, it asks once for Postgres admin credentials and auto-creates the database, the `sigil_app` user, and the `vector` extension. Admin creds are used once and never written to disk.
+   - *URL:* prompts for a `postgres://…` connection string (Neon, Supabase, RDS, etc.), probes it, and verifies `pgvector` is installed. Stored as `SIGIL_DATABASE_URL` — the only DB key you need.
 4. Runs schema migrations.
 5. Auto-detects every AI client on your machine (Claude Code, Codex CLI, Cursor, Kiro) and wires Sigil into each one: hooks for Claude Code, MCP server registration + steering rules for the rest. Adds `@~/.sigil/CLAUDE.md` to your global Claude config so hot-context is always loaded.
+
+Non-interactive (CI / dotfiles):
+```bash
+sigil init --url "postgres://user:pass@ep-foo.neon.tech/sigil?sslmode=require"
+```
 
 Re-running `sigil init` is idempotent. Existing `~/.sigil/.env` keys are preserved; only prompted values are updated.
 
@@ -257,15 +268,17 @@ Unlike Claude Code there's no hook layer; the agent decides when to call. Captur
 
 ## Cross-machine memory
 
-Point multiple installs at the same Postgres and they share one brain:
+Point multiple installs at the same Postgres and they share one brain. Either form works — Sigil uses whichever is set:
 
 ```bash
-# Machine 1 (laptop)
+# Discrete env (typical for a self-hosted box on your LAN/VPN)
 SIGIL_DB_HOST=postgres.your-network.local sigil init
 
-# Machine 2 (home server, different OS, doesn't matter)
-SIGIL_DB_HOST=postgres.your-network.local sigil init
+# Or a single connection URL (typical for managed Postgres)
+sigil init --url "postgres://user:pass@ep-foo.neon.tech/sigil?sslmode=require"
 ```
+
+`SIGIL_DATABASE_URL` (or `DATABASE_URL`) takes precedence over the discrete `SIGIL_DB_HOST/PORT/NAME/USER/PASSWORD` keys when both are present.
 
 Both machines now share memory. A fact captured on machine 1 surfaces on machine 2's next prompt. Reads and writes go directly to Postgres; consistency is whatever Postgres gives you (which is plenty for personal memory).
 

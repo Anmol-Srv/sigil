@@ -179,26 +179,45 @@ async function runInit(args) {
     console.log(`sigil init — Set up Sigil (DB, env, hooks, Claude integration)
 
 Usage:
-  sigil init [--dry-run]
+  sigil init [--dry-run] [--url <postgres-url>]
 
 Options:
-  --dry-run    Walk through every prompt and print the exact files that would
-               be created or modified, but write nothing to disk. Use this on
-               first install to preview the changes Sigil will make to your
-               ~/.sigil/ and ~/.claude/ directories.
+  --dry-run            Walk through every prompt and print the exact files
+                       that would be created or modified, but write nothing
+                       to disk.
+  --url <url>          Skip the DB prompts and use the given Postgres URL
+                       (Neon, Supabase, AWS RDS, Render, Railway, Cockroach,
+                       self-hosted). Persisted as SIGIL_DATABASE_URL in
+                       ~/.sigil/.env. The URL is probed (incl. pgvector
+                       check) before any other setup runs.
+
+Database modes:
+  Local Postgres install  — discrete SIGIL_DB_HOST/PORT/USER/PASSWORD env
+                            vars; uses an admin one-shot to create the
+                            database + user + pgvector extension.
+  Connection URL          — single SIGIL_DATABASE_URL env var; database +
+                            user assumed to exist already (typical for
+                            cloud Postgres providers).
 
 Files Sigil touches (originals are backed up to <path>.sigil.bak before write):
-  ~/.sigil/.env                 Sigil config + API keys (incl. Postgres connection)
+  ~/.sigil/.env                 Sigil config + API keys + DB connection
   ~/.sigil/CLAUDE.md            Sigil instructions for Claude
   ~/.claude/CLAUDE.md           One @import line added (existing content preserved)
-  ~/.claude/settings.json       UserPromptSubmit + PostToolUse + Stop + SessionEnd hooks (merged)
-
-Sigil 0.10.0+ requires Postgres. Sigil's migrations run against your DB
-during init; existing tables are detected and preserved.`);
+  ~/.claude/settings.json       UserPromptSubmit + PostToolUse + Stop + SessionEnd hooks (merged)`);
     process.exit(0);
   }
 
   const dryRun = args.includes('--dry-run');
+  const urlFlagIdx = args.findIndex((a) => a === '--url' || a.startsWith('--url='));
+  let urlFlag = null;
+  if (urlFlagIdx !== -1) {
+    const tok = args[urlFlagIdx];
+    urlFlag = tok.includes('=') ? tok.split('=')[1] : args[urlFlagIdx + 1];
+    if (!urlFlag) {
+      console.error('--url requires a Postgres connection string');
+      process.exit(1);
+    }
+  }
 
   const clack = await import('@clack/prompts');
   const fs = await import('node:fs/promises');
@@ -427,118 +446,210 @@ during init; existing tables are detected and preserved.`);
   });
   if (isCancel(namespace)) { cancel('Setup cancelled.'); process.exit(0); }
 
-  // ── Postgres connection ───────────────────────────────────────────────────
+  // ── Database connection ───────────────────────────────────────────────────
   //
-  // Sigil 0.10.0+ requires Postgres. We assume the user has Postgres running
-  // (Docker, brew, RDS, anything). On first init we probe the connection;
-  // if the sigil database doesn't exist yet we ask once for admin creds and
-  // bootstrap it (CREATE DATABASE + CREATE USER + GRANT + CREATE EXTENSION
-  // vector). Admin creds are used once and dropped — only sigil_app
-  // credentials land in ~/.sigil/.env.
+  // Two paths:
+  //   local — discrete SIGIL_DB_HOST/PORT/NAME/USER/PASSWORD env. We probe;
+  //           if missing DB / auth fails we ask once for admin creds and
+  //           CREATE DATABASE / USER / EXTENSION vector. Admin creds are
+  //           used once and dropped.
+  //   url   — single SIGIL_DATABASE_URL (Neon, Supabase, RDS, etc.). We
+  //           probe via probeUrlConnection (incl. pgvector check). The DB
+  //           and user are assumed to exist already — typical for managed
+  //           Postgres where the provider creates them for you.
 
-  const dbHost = await text({
-    message: 'Postgres host',
-    placeholder: existing.SIGIL_DB_HOST || 'localhost',
-    initialValue: existing.SIGIL_DB_HOST || 'localhost',
-  });
-  if (isCancel(dbHost)) { cancel('Setup cancelled.'); process.exit(0); }
+  let dbMode = 'local';
+  let urlValue = null;
+  // Connection-URL state — populated only when dbMode === 'url'
+  let urlProbe = null;
+  // Local-install state — populated only when dbMode === 'local'
+  let dbHost, dbPort, dbName, dbUser, finalDbPassword;
 
-  const dbPortStr = await text({
-    message: 'Postgres port',
-    placeholder: existing.SIGIL_DB_PORT || '5432',
-    initialValue: existing.SIGIL_DB_PORT || '5432',
-    validate: (v) => { if (v && !/^\d+$/.test(v)) return 'Port must be a number'; },
-  });
-  if (isCancel(dbPortStr)) { cancel('Setup cancelled.'); process.exit(0); }
-  const dbPort = Number(dbPortStr);
-
-  const dbName = await text({
-    message: 'Sigil database name',
-    placeholder: existing.SIGIL_DB_NAME || 'sigil',
-    initialValue: existing.SIGIL_DB_NAME || 'sigil',
-  });
-  if (isCancel(dbName)) { cancel('Setup cancelled.'); process.exit(0); }
-
-  const dbUser = await text({
-    message: 'Sigil database user',
-    placeholder: existing.SIGIL_DB_USER || 'sigil_app',
-    initialValue: existing.SIGIL_DB_USER || 'sigil_app',
-  });
-  if (isCancel(dbUser)) { cancel('Setup cancelled.'); process.exit(0); }
-
-  const dbPassword = await text({
-    message: existing.SIGIL_DB_PASSWORD ? 'Sigil database password (keep existing — press Enter)' : 'Sigil database password',
-    placeholder: existing.SIGIL_DB_PASSWORD ? '(unchanged)' : 'sigil_dev or generate',
-    validate: (v) => { if (!v && !existing.SIGIL_DB_PASSWORD) return 'Password required'; },
-  });
-  if (isCancel(dbPassword)) { cancel('Setup cancelled.'); process.exit(0); }
-  const finalDbPassword = dbPassword || existing.SIGIL_DB_PASSWORD;
-
-  // Probe with the prompted credentials. If sigil DB exists + creds work,
-  // we're done. Otherwise: missing DB → ask for admin to bootstrap. Auth
-  // failure → ask if they want to reset the password via admin.
-  if (!dryRun) {
-    const { probeSigilConnection, ensurePostgresDatabase, diagnoseConnectionError } =
-      await import('./db/setup.js');
-    const probeSpinner = spinner();
-    probeSpinner.start('Probing Postgres connection...');
-    const probe = await probeSigilConnection({
-      host: dbHost, port: dbPort, database: dbName, user: dbUser, password: finalDbPassword,
+  // Non-interactive: --url short-circuits the picker. Useful for scripted
+  // dotfile installs ("curl … | sigil init --url $DATABASE_URL").
+  if (urlFlag) {
+    dbMode = 'url';
+    urlValue = urlFlag;
+  } else if (existing.SIGIL_DATABASE_URL && !existing.SIGIL_DB_HOST) {
+    // Existing install was URL-based. Default to URL mode but let the user
+    // pivot back to local if they really mean to.
+    const choice = await select({
+      message: 'Database mode',
+      options: [
+        { value: 'url',   label: 'Connection URL', hint: 'keep current SIGIL_DATABASE_URL' },
+        { value: 'local', label: 'Local Postgres install', hint: 'discrete host/port/user/password' },
+      ],
+      initialValue: 'url',
     });
+    if (isCancel(choice)) { cancel('Setup cancelled.'); process.exit(0); }
+    dbMode = choice;
+  } else {
+    const choice = await select({
+      message: 'Database mode',
+      options: [
+        { value: 'local', label: 'Local Postgres install', hint: 'docker / brew / RDS host:port' },
+        { value: 'url',   label: 'Connection URL',         hint: 'Neon, Supabase, RDS, Render, …' },
+      ],
+      initialValue: existing.SIGIL_DB_HOST ? 'local' : 'local',
+    });
+    if (isCancel(choice)) { cancel('Setup cancelled.'); process.exit(0); }
+    dbMode = choice;
+  }
 
-    if (probe.ok) {
-      probeSpinner.stop(`Connected to ${dbUser}@${dbHost}:${dbPort}/${dbName}`);
-    } else {
-      const diag = diagnoseConnectionError({ code: probe.code, message: probe.message });
-      probeSpinner.stop(`Connection failed (${diag.kind})`);
+  if (dbMode === 'url') {
+    if (!urlValue) {
+      urlValue = await text({
+        message: 'Postgres connection URL',
+        placeholder: existing.SIGIL_DATABASE_URL || 'postgres://user:pass@host.neon.tech/db',
+        initialValue: existing.SIGIL_DATABASE_URL || '',
+        validate: (v) => { if (!/^postgres(ql)?:\/\//i.test(v || '')) return 'Must start with postgres:// or postgresql://'; },
+      });
+      if (isCancel(urlValue)) { cancel('Setup cancelled.'); process.exit(0); }
+    }
 
-      if (diag.kind === 'unreachable') {
-        cancel(`Postgres unreachable at ${dbHost}:${dbPort}.\n${diag.hint}`);
+    if (!dryRun) {
+      const { probeUrlConnection } = await import('./db/setup.js');
+      const probeSpinner = spinner();
+      probeSpinner.start('Probing connection URL...');
+      urlProbe = await probeUrlConnection(urlValue);
+
+      if (!urlProbe.ok) {
+        probeSpinner.stop(`Connection failed (${urlProbe.stage}${urlProbe.code ? `: ${urlProbe.code}` : ''})`);
+        cancel(
+          `Could not connect: ${urlProbe.error}\n`
+          + (urlProbe.stage === 'parse'    ? '  Check the URL format (postgres://user:pass@host:port/db?sslmode=...)' : '')
+          + (urlProbe.stage === 'connect'  ? `  Provider hint: ${urlProbe.provider}. For Neon use the pooler URL.` : '')
+          + (urlProbe.stage === 'query'    ? '  Connection succeeded but a basic SELECT failed — check user privileges.' : ''),
+        );
         process.exit(1);
       }
 
-      if (diag.kind === 'missing-db' || diag.kind === 'auth') {
-        const wantsBootstrap = await confirm({
-          message: diag.kind === 'missing-db'
-            ? `Database "${dbName}" does not exist. Create it now (requires admin credentials)?`
-            : `Authentication failed for ${dbUser}@${dbName}. Create / reset the user now (requires admin credentials)?`,
-          initialValue: true,
+      if (!urlProbe.pgvector) {
+        probeSpinner.stop(`Connected (${urlProbe.provider}, ${urlProbe.connectMs}ms) — pgvector NOT installed`);
+        const proceed = await confirm({
+          message: 'pgvector extension is not installed on this database. Sigil cannot run without it. Continue anyway?',
+          initialValue: false,
         });
-        if (isCancel(wantsBootstrap) || !wantsBootstrap) {
-          cancel('Setup cancelled — fix Postgres credentials and re-run sigil init.');
-          process.exit(0);
-        }
-
-        const adminUser = await text({
-          message: 'Postgres admin user',
-          placeholder: 'postgres',
-          initialValue: 'postgres',
-        });
-        if (isCancel(adminUser)) { cancel('Setup cancelled.'); process.exit(0); }
-
-        const adminPassword = await text({
-          message: 'Postgres admin password (used once, not stored)',
-          placeholder: 'admin password',
-          validate: (v) => { if (!v) return 'Required to create the database'; },
-        });
-        if (isCancel(adminPassword)) { cancel('Setup cancelled.'); process.exit(0); }
-
-        const bootstrapSpinner = spinner();
-        bootstrapSpinner.start('Creating database, user, and pgvector extension...');
-        try {
-          const { actions } = await ensurePostgresDatabase({
-            admin: { host: dbHost, port: dbPort, user: adminUser, password: adminPassword },
-            sigil: { database: dbName, user: dbUser, password: finalDbPassword },
-          });
-          bootstrapSpinner.stop(`Bootstrapped: ${actions.join(', ')}`);
-        } catch (err) {
-          bootstrapSpinner.stop('Bootstrap failed');
-          cancel(err.message);
+        if (isCancel(proceed) || !proceed) {
+          cancel(
+            'Cancelled. Install pgvector on your database first:\n'
+            + (urlProbe.provider === 'neon'             ? '  Neon:     extensions are auto-enabled, but the role may need the right privileges' : '')
+            + (urlProbe.provider.startsWith('supabase') ? '  Supabase: enable via Dashboard → Database → Extensions → vector' : '')
+            + (urlProbe.provider === 'aws-rds'          ? '  RDS:      add `vector` to the parameter group `shared_preload_libraries`' : '')
+            + '\nThen re-run sigil init.',
+          );
           process.exit(1);
         }
       } else {
-        cancel(`Postgres setup failed: ${diag.hint}`);
-        process.exit(1);
+        probeSpinner.stop(`Connected (${urlProbe.provider}, ${urlProbe.connectMs}ms) — pgvector ✓`);
+      }
+    }
+  } else {
+    // ── Local Postgres install path ────────────────────────────────────────
+    const dbHostInput = await text({
+      message: 'Postgres host',
+      placeholder: existing.SIGIL_DB_HOST || 'localhost',
+      initialValue: existing.SIGIL_DB_HOST || 'localhost',
+    });
+    if (isCancel(dbHostInput)) { cancel('Setup cancelled.'); process.exit(0); }
+    dbHost = dbHostInput;
+
+    const dbPortStr = await text({
+      message: 'Postgres port',
+      placeholder: existing.SIGIL_DB_PORT || '5432',
+      initialValue: existing.SIGIL_DB_PORT || '5432',
+      validate: (v) => { if (v && !/^\d+$/.test(v)) return 'Port must be a number'; },
+    });
+    if (isCancel(dbPortStr)) { cancel('Setup cancelled.'); process.exit(0); }
+    dbPort = Number(dbPortStr);
+
+    const dbNameInput = await text({
+      message: 'Sigil database name',
+      placeholder: existing.SIGIL_DB_NAME || 'sigil',
+      initialValue: existing.SIGIL_DB_NAME || 'sigil',
+    });
+    if (isCancel(dbNameInput)) { cancel('Setup cancelled.'); process.exit(0); }
+    dbName = dbNameInput;
+
+    const dbUserInput = await text({
+      message: 'Sigil database user',
+      placeholder: existing.SIGIL_DB_USER || 'sigil_app',
+      initialValue: existing.SIGIL_DB_USER || 'sigil_app',
+    });
+    if (isCancel(dbUserInput)) { cancel('Setup cancelled.'); process.exit(0); }
+    dbUser = dbUserInput;
+
+    const dbPassword = await text({
+      message: existing.SIGIL_DB_PASSWORD ? 'Sigil database password (keep existing — press Enter)' : 'Sigil database password',
+      placeholder: existing.SIGIL_DB_PASSWORD ? '(unchanged)' : 'sigil_dev or generate',
+      validate: (v) => { if (!v && !existing.SIGIL_DB_PASSWORD) return 'Password required'; },
+    });
+    if (isCancel(dbPassword)) { cancel('Setup cancelled.'); process.exit(0); }
+    finalDbPassword = dbPassword || existing.SIGIL_DB_PASSWORD;
+
+    if (!dryRun) {
+      const { probeSigilConnection, ensurePostgresDatabase, diagnoseConnectionError } =
+        await import('./db/setup.js');
+      const probeSpinner = spinner();
+      probeSpinner.start('Probing Postgres connection...');
+      const probe = await probeSigilConnection({
+        host: dbHost, port: dbPort, database: dbName, user: dbUser, password: finalDbPassword,
+      });
+
+      if (probe.ok) {
+        probeSpinner.stop(`Connected to ${dbUser}@${dbHost}:${dbPort}/${dbName}`);
+      } else {
+        const diag = diagnoseConnectionError({ code: probe.code, message: probe.message });
+        probeSpinner.stop(`Connection failed (${diag.kind})`);
+
+        if (diag.kind === 'unreachable') {
+          cancel(`Postgres unreachable at ${dbHost}:${dbPort}.\n${diag.hint}`);
+          process.exit(1);
+        }
+
+        if (diag.kind === 'missing-db' || diag.kind === 'auth') {
+          const wantsBootstrap = await confirm({
+            message: diag.kind === 'missing-db'
+              ? `Database "${dbName}" does not exist. Create it now (requires admin credentials)?`
+              : `Authentication failed for ${dbUser}@${dbName}. Create / reset the user now (requires admin credentials)?`,
+            initialValue: true,
+          });
+          if (isCancel(wantsBootstrap) || !wantsBootstrap) {
+            cancel('Setup cancelled — fix Postgres credentials and re-run sigil init.');
+            process.exit(0);
+          }
+
+          const adminUser = await text({
+            message: 'Postgres admin user',
+            placeholder: 'postgres',
+            initialValue: 'postgres',
+          });
+          if (isCancel(adminUser)) { cancel('Setup cancelled.'); process.exit(0); }
+
+          const adminPassword = await text({
+            message: 'Postgres admin password (used once, not stored)',
+            placeholder: 'admin password',
+            validate: (v) => { if (!v) return 'Required to create the database'; },
+          });
+          if (isCancel(adminPassword)) { cancel('Setup cancelled.'); process.exit(0); }
+
+          const bootstrapSpinner = spinner();
+          bootstrapSpinner.start('Creating database, user, and pgvector extension...');
+          try {
+            const { actions } = await ensurePostgresDatabase({
+              admin: { host: dbHost, port: dbPort, user: adminUser, password: adminPassword },
+              sigil: { database: dbName, user: dbUser, password: finalDbPassword },
+            });
+            bootstrapSpinner.stop(`Bootstrapped: ${actions.join(', ')}`);
+          } catch (err) {
+            bootstrapSpinner.stop('Bootstrap failed');
+            cancel(err.message);
+            process.exit(1);
+          }
+        } else {
+          cancel(`Postgres setup failed: ${diag.hint}`);
+          process.exit(1);
+        }
       }
     }
   }
@@ -567,11 +678,23 @@ during init; existing tables are detected and preserved.`);
   finalEnv.DEFAULT_NAMESPACE = namespace;
   finalEnv.SIGIL_ENCRYPTION_KEY = encryptionKey;
   finalEnv.SIGIL_DB_TYPE = 'postgres';
-  finalEnv.SIGIL_DB_HOST = dbHost;
-  finalEnv.SIGIL_DB_PORT = String(dbPort);
-  finalEnv.SIGIL_DB_NAME = dbName;
-  finalEnv.SIGIL_DB_USER = dbUser;
-  finalEnv.SIGIL_DB_PASSWORD = finalDbPassword;
+  if (dbMode === 'url') {
+    finalEnv.SIGIL_DATABASE_URL = urlValue;
+    // Strip stale discrete-mode keys so the driver selector unambiguously
+    // picks the URL path on next start.
+    delete finalEnv.SIGIL_DB_HOST;
+    delete finalEnv.SIGIL_DB_PORT;
+    delete finalEnv.SIGIL_DB_NAME;
+    delete finalEnv.SIGIL_DB_USER;
+    delete finalEnv.SIGIL_DB_PASSWORD;
+  } else {
+    delete finalEnv.SIGIL_DATABASE_URL;
+    finalEnv.SIGIL_DB_HOST = dbHost;
+    finalEnv.SIGIL_DB_PORT = String(dbPort);
+    finalEnv.SIGIL_DB_NAME = dbName;
+    finalEnv.SIGIL_DB_USER = dbUser;
+    finalEnv.SIGIL_DB_PASSWORD = finalDbPassword;
+  }
 
   const envContent = [
     `# Sigil — generated ${new Date().toISOString().slice(0, 10)}`,
@@ -649,7 +772,10 @@ during init; existing tables are detected and preserved.`);
       process.exit(1);
     }
   } else {
-    planFile('migrate', 'postgres', `${config.db.host}:${config.db.port}/${config.db.database}`);
+    const dest = dbMode === 'url'
+      ? `connection URL (${urlValue ? new URL(urlValue).hostname : '—'})`
+      : `${dbHost}:${dbPort}/${dbName}`;
+    planFile('migrate', 'postgres', dest);
     planFile('verify', 'embedder', `${embeddingProvider}/${embeddingModel} — live ping (skipped in dry-run)`);
   }
 
@@ -861,12 +987,22 @@ Checks: Postgres connection, LLM provider, embedding provider, hook registration
     log('warn', 'Config validation', `unable to run: ${err.message}`);
   }
 
-  // Database
+  // Database — surface which driver path is in use so a user troubleshooting
+  // a Neon outage sees "DB driver: url (neon)" rather than wondering why
+  // SIGIL_DB_HOST is empty.
   try {
     const cortexDb = (await import('./db/cortex.js')).default;
     const config = (await import('./config.js')).default;
+    const { selectDriver } = await import('./db/drivers/index.js');
+    const driver = selectDriver(config);
+
     await cortexDb.raw('SELECT 1');
-    log('ok', 'Database', `Postgres @ ${config.db.host}:${config.db.port}/${config.db.database}`);
+    if (driver.kind === 'url') {
+      const host = driver.connection.host;
+      log('ok', 'DB driver', `URL (${driver.provider}, host=${host})`);
+    } else {
+      log('ok', 'DB driver', `local (${config.db.host}:${config.db.port}/${config.db.database})`);
+    }
 
     const { getFactCount } = await import('./memory/facts/store.js');
     const { getStats } = await import('./memory/documents/store.js');
@@ -875,9 +1011,13 @@ Checks: Postgres connection, LLM provider, embedding provider, hook registration
     await cortexDb.destroy();
   } catch (err) {
     const msg = err.message || String(err);
+    const config = (await import('./config.js')).default;
     if (/ECONNREFUSED|connection refused|password authentication failed/i.test(msg)) {
       log('fail', 'Database', `Postgres unreachable — ${msg.split('\n')[0]}`);
-      log('warn', 'Recovery', "check that Postgres is running and SIGIL_DB_* env vars are set in ~/.sigil/.env");
+      log('warn', 'Recovery',
+        config.db.url
+          ? 'verify SIGIL_DATABASE_URL is valid and the provider is reachable'
+          : 'check that Postgres is running and SIGIL_DB_* env vars are set in ~/.sigil/.env');
     } else {
       log('fail', 'Database', msg);
     }

@@ -13,6 +13,8 @@
 
 import pg from 'pg';
 
+import { buildUrlConnection, classifyProvider } from './drivers/url.js';
+
 const PG_ERR = {
   DB_DOES_NOT_EXIST: '3D000',
   CONNECTION_REFUSED: 'ECONNREFUSED',
@@ -32,6 +34,50 @@ export async function probeSigilConnection({ host, port, database, user, passwor
       code: err.code,
       message: err.message,
     };
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Probe an external connection URL (Neon, Supabase, RDS, Render, Railway,
+ * CockroachDB, self-hosted). Returns:
+ *   { ok: true,  provider, connectMs, database, serverVersion, pgvector }
+ *   { ok: false, stage: 'parse'|'connect'|'query', error, code? }
+ *
+ * Shared by `sigil init` and the GUI's testDbConnection RPC so both
+ * paths apply the same SSL heuristics and the same pgvector check.
+ */
+export async function probeUrlConnection(url) {
+  let connection;
+  let provider = 'unknown';
+  try {
+    connection = buildUrlConnection(url);
+    provider = classifyProvider(url);
+  } catch (err) {
+    return { ok: false, stage: 'parse', error: err.message };
+  }
+
+  const client = new pg.Client(connection);
+  const t0 = Date.now();
+  try {
+    await client.connect();
+  } catch (err) {
+    return { ok: false, stage: 'connect', provider, error: err.message, code: err.code };
+  }
+  try {
+    const sel = await client.query('SELECT current_database() AS db, version() AS version');
+    const ext = await client.query("SELECT extname FROM pg_extension WHERE extname = 'vector'");
+    return {
+      ok: true,
+      provider,
+      connectMs: Date.now() - t0,
+      database: sel.rows[0].db,
+      serverVersion: sel.rows[0].version,
+      pgvector: ext.rowCount > 0,
+    };
+  } catch (err) {
+    return { ok: false, stage: 'query', provider, error: err.message, code: err.code };
   } finally {
     try { await client.end(); } catch { /* ignore */ }
   }
