@@ -23,6 +23,7 @@ import { join } from 'node:path';
 
 import { PKG_ROOT, MIGRATIONS_DIR } from '../lib/paths.js';
 import config from '../config.js';
+import { CHUNKER_PROFILE } from '../ingestion/chunker.js';
 
 export const MANIFEST_VERSION = 1;
 
@@ -58,12 +59,9 @@ export async function produceManifest() {
       normalization: 'l2',
       maxInputTokens: 8192,
     },
-    chunker: {
-      version: 3,
-      size: 512,
-      overlap: 64,
-      contextualPrefix: true,
-    },
+    // Sourced from the chunker module so the manifest cannot drift
+    // from the values the chunker actually uses. (PR review #4.)
+    chunker: { ...CHUNKER_PROFILE },
     prompts: promptHashes,
     memory: {
       skipThreshold: config.memory.skipThreshold,

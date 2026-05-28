@@ -3,6 +3,18 @@ const DEFAULT_OVERLAP_TOKENS = 50;
 const CHARS_PER_TOKEN = 4;
 
 /**
+ * Canonical chunker configuration for the schema manifest. Any change
+ * here is a breaking change for vector compatibility across paired
+ * devices, so bump `version` whenever size/overlap shift.
+ */
+export const CHUNKER_PROFILE = Object.freeze({
+  version: 3,
+  size: DEFAULT_MAX_TOKENS,
+  overlap: DEFAULT_OVERLAP_TOKENS,
+  contextualPrefix: true,
+});
+
+/**
  * Split text into chunks respecting sentence boundaries.
  *
  * Returns: [{ content, index }]
