@@ -74,50 +74,62 @@ async function handlePairRequest(req, remoteNodeId) {
   const { getNodeInfo } = await import('./endpoint.js');
 
   const codeHash = hashCode(req.code);
-  const row = await cortexDb('pairing_code').where({ code_hash: codeHash }).first();
-  if (!row) return reject('invalid_code', 'pairing code not recognised');
-  if (row.consumedByDeviceId) return reject('already_consumed', 'pairing code was already used');
-  if (new Date(row.expiresAt) < new Date()) return reject('expired', 'pairing code has expired');
 
-  // Check whether this node_id is already a known device. If so, refresh
-  // the existing row instead of creating a duplicate (still consume the
-  // code so it can't be reused).
-  const existing = await cortexDb('device').where({ node_id: remoteNodeId }).first();
-  let device;
-  if (existing) {
-    await cortexDb('device').where({ id: existing.id }).update({
-      name: req.name,
-      role: row.role,
-      namespaces: row.namespaces,
-      active: true,
-      last_seen_at: cortexDb.fn.now(),
-      meta: JSON.stringify({
+  // Race-free redemption: do the lookup, expiry check, device upsert, and
+  // code-consumption mark inside a single transaction with FOR UPDATE on
+  // the code row. Two concurrent redemptions serialize; the second sees
+  // consumed_by_device_id already set and gets 'already_consumed'.
+  let txResult;
+  try {
+    txResult = await cortexDb.transaction(async (trx) => {
+      const row = await trx('pairing_code')
+        .where({ code_hash: codeHash })
+        .forUpdate()
+        .first();
+      if (!row) return { ok: false, error: { code: 'invalid_code', message: 'pairing code not recognised' } };
+      if (row.consumedByDeviceId) return { ok: false, error: { code: 'already_consumed', message: 'pairing code was already used' } };
+      if (new Date(row.expiresAt) < new Date()) return { ok: false, error: { code: 'expired', message: 'pairing code has expired' } };
+
+      // Upsert device row keyed by node_id. PostgreSQL ON CONFLICT lets
+      // us collapse the existing/new branches into one statement that
+      // returns the resulting id either way.
+      const meta = {
         hostname: req.hostname || null,
         sigilVersion: req.sigilVersion || null,
-        repairedAt: new Date().toISOString(),
-      }),
+      };
+      const [device] = await trx('device')
+        .insert({
+          node_id: remoteNodeId,
+          name: req.name,
+          role: row.role,
+          namespaces: row.namespaces,
+          active: true,
+          last_seen_at: trx.fn.now(),
+          meta: JSON.stringify(meta),
+        })
+        .onConflict('node_id')
+        .merge({
+          name: req.name,
+          role: row.role,
+          namespaces: row.namespaces,
+          active: true,
+          last_seen_at: trx.fn.now(),
+          meta: JSON.stringify({ ...meta, repairedAt: new Date().toISOString() }),
+        })
+        .returning(['id']);
+
+      await trx('pairing_code').where({ id: row.id }).update({
+        consumed_by_device_id: device.id,
+        consumed_at: trx.fn.now(),
+      });
+
+      return { ok: true, device: { id: device.id, role: row.role, namespaces: row.namespaces } };
     });
-    device = { id: existing.id };
-  } else {
-    const [row2] = await cortexDb('device').insert({
-      node_id: remoteNodeId,
-      name: req.name,
-      role: row.role,
-      namespaces: row.namespaces,
-      active: true,
-      last_seen_at: cortexDb.fn.now(),
-      meta: JSON.stringify({
-        hostname: req.hostname || null,
-        sigilVersion: req.sigilVersion || null,
-      }),
-    }).returning(['id']);
-    device = { id: row2.id };
+  } catch (err) {
+    return reject('transaction_failed', err.message);
   }
 
-  await cortexDb('pairing_code').where({ id: row.id }).update({
-    consumed_by_device_id: device.id,
-    consumed_at: cortexDb.fn.now(),
-  });
+  if (!txResult.ok) return txResult;
 
   let masterNodeId = null;
   try { masterNodeId = (await getNodeInfo()).nodeId; } catch { /* ignore */ }
@@ -127,7 +139,7 @@ async function handlePairRequest(req, remoteNodeId) {
 
   return {
     ok: true,
-    device: { id: device.id, role: row.role, namespaces: row.namespaces },
+    device: txResult.device,
     masterNodeId,
     manifest,
   };
