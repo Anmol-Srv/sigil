@@ -18,9 +18,11 @@ import { createServer } from 'node:http';
 import { existsSync, createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { join, extname, normalize } from 'node:path';
+import { WebSocketServer } from 'ws';
 
 import { GUI_WEB_DIR_BUILT, GUI_WEB_DIR_DEV } from '../lib/paths.js';
 import { getGuiToken, isValidToken } from './gui-token.js';
+import bus from './events.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -54,6 +56,36 @@ export async function startHttpServer({ registry, log, config }) {
     }
   });
 
+  // WebSocket upgrade for /api/v1/events
+  const wss = new WebSocketServer({ noServer: true });
+  server.on('upgrade', async (req, socket, head) => {
+    const u = new URL(req.url, 'http://localhost');
+    if (u.pathname !== '/api/v1/events') {
+      socket.destroy();
+      return;
+    }
+    // Token via Authorization header, cookie, or ?t=<token>
+    const wsAuth = (await checkAuth(req)) || (u.searchParams.get('t') && await isValidToken(u.searchParams.get('t')));
+    if (!wsAuth) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      // Replay recent buffer first so a freshly-opened tab sees history
+      for (const evt of bus.recent(50)) {
+        try { ws.send(JSON.stringify(evt)); } catch { /* socket dead */ }
+      }
+      const unsub = bus.subscribe((evt) => {
+        if (ws.readyState === ws.OPEN) {
+          try { ws.send(JSON.stringify(evt)); } catch { /* ignore */ }
+        }
+      });
+      ws.on('close', unsub);
+      ws.on('error', () => unsub());
+    });
+  });
+
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(config.http.port, config.http.host, () => {
@@ -68,7 +100,10 @@ export async function startHttpServer({ registry, log, config }) {
 
   return {
     url,
-    close: () => new Promise((resolve) => server.close(() => resolve())),
+    close: () => new Promise((resolve) => {
+      wss.close();
+      server.close(() => resolve());
+    }),
   };
 }
 

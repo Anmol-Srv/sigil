@@ -28,7 +28,7 @@ export function registerIngestDoc(registry) {
       skipEntities,
     });
 
-    return {
+    const response = {
       skipped: Boolean(result.skipped),
       title: result.title ?? null,
       documentId: result.documentId ?? null,
@@ -37,5 +37,15 @@ export function registerIngestDoc(registry) {
       entities: result.entities ?? null,
       output: result.md?.url ?? null,
     };
+
+    const { default: bus } = await import('../events.js');
+    bus.emit('write.document', {
+      title: response.title,
+      skipped: response.skipped,
+      chunkCount: response.chunkCount,
+      factsAdded: response.facts?.added ?? 0,
+    });
+
+    return response;
   });
 }

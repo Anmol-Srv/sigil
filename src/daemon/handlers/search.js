@@ -34,7 +34,7 @@ export function registerSearch(registry) {
       podScope,
     });
 
-    return {
+    const response = {
       query,
       namespaces,
       facts: (result.facts || []).map(serializeFact),
@@ -43,6 +43,16 @@ export function registerSearch(registry) {
       matchedEntity: result.matchedEntity || null,
       relatedEntities: result.relatedEntities || [],
     };
+
+    const { default: bus } = await import('../events.js');
+    bus.emit('read.search', {
+      query: query.length > 80 ? query.slice(0, 80) + '…' : query,
+      namespaces,
+      factCount: response.facts.length,
+      chunkCount: response.chunks.length,
+    });
+
+    return response;
   });
 }
 

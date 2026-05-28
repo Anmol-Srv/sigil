@@ -25,6 +25,7 @@ const EXTERNAL = [
   '@modelcontextprotocol/sdk/server/mcp.js',
   '@modelcontextprotocol/sdk/server/stdio.js',
   'dotenv',                    // light, better to externalize for config flexibility
+  'ws',                        // WebSocket — bufferutil/utf-8-validate optional natives
 ];
 
 const ENTRIES = [

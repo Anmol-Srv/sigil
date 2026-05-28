@@ -12,7 +12,10 @@
     <nav>
       <a href="#health" data-route="health" class="active">Health</a>
       <a href="#kb" data-route="kb">Knowledge Base</a>
-      <a href="#methods" data-route="methods">RPC Methods</a>
+      <a href="#activity" data-route="activity">Activity</a>
+      <a href="#setup" data-route="setup">Setup</a>
+      <a href="#settings" data-route="settings">Settings</a>
+      <a href="#methods" data-route="methods">RPC</a>
     </nav>
     <div class="status-pill" id="conn">connecting…</div>
   </header>
@@ -28,6 +31,66 @@
       <dl id="kb-pane"><dt>facts</dt><dd>—</dd></dl>
       <h3>Hot facts</h3>
       <ul id="hot-facts"></ul>
+    </section>
+
+    <section id="view-activity" class="view">
+      <h2>Live activity</h2>
+      <p class="muted">Streamed over WebSocket from sigild. Shows every write, search, and event the daemon emits.</p>
+      <div class="activity-controls">
+        <button id="activity-clear">Clear</button>
+        <span id="activity-status" class="muted">disconnected</span>
+      </div>
+      <ul id="activity-feed"></ul>
+    </section>
+
+    <section id="view-setup" class="view">
+      <h2>Database setup</h2>
+      <p class="muted">Test a Postgres connection before committing it to <code>~/.sigil/.env</code>. Use a connection URL (Neon / Supabase / RDS / Render / Railway / self-hosted) or discrete fields.</p>
+
+      <form id="db-form">
+        <label>
+          <span>Mode</span>
+          <select id="db-mode">
+            <option value="url">Connection URL</option>
+            <option value="fields">Host / Port / DB / User / Password</option>
+          </select>
+        </label>
+
+        <div id="db-url-pane">
+          <label>
+            <span>URL</span>
+            <input type="text" id="db-url" placeholder="postgres://user:pass@host.neon.tech/db" autocomplete="off">
+          </label>
+        </div>
+
+        <div id="db-fields-pane" style="display:none">
+          <div class="row">
+            <label><span>Host</span><input type="text" id="db-host" value="localhost" autocomplete="off"></label>
+            <label><span>Port</span><input type="number" id="db-port" value="5432"></label>
+          </div>
+          <div class="row">
+            <label><span>Database</span><input type="text" id="db-database" value="sigil" autocomplete="off"></label>
+            <label><span>User</span><input type="text" id="db-user" value="sigil_app" autocomplete="off"></label>
+          </div>
+          <label><span>Password</span><input type="password" id="db-password" autocomplete="off"></label>
+        </div>
+
+        <div class="actions">
+          <button type="button" id="db-test">Test connection</button>
+          <button type="button" id="db-migrate" disabled>Run migrations</button>
+        </div>
+      </form>
+
+      <pre id="db-result" class="result"></pre>
+    </section>
+
+    <section id="view-settings" class="view">
+      <h2>Environment</h2>
+      <p class="muted">Variables read from <code>~/.sigil/.env</code>. Secret keys (anything ending in KEY, PASSWORD, TOKEN, SECRET) are masked.</p>
+      <table id="env-table">
+        <thead><tr><th>Key</th><th>Value</th></tr></thead>
+        <tbody><tr><td colspan="2" class="muted">loading…</td></tr></tbody>
+      </table>
     </section>
 
     <section id="view-methods" class="view">

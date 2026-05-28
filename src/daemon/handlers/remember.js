@@ -40,6 +40,9 @@ export function registerRemember(registry) {
       await updateContextSnapshot({ namespace }).catch(() => {});
     }
 
+    const { default: bus } = await import('../events.js');
+    bus.emit('write.fact', { added, updated, alreadyKnown, namespace, count: facts.length });
+
     return { added, updated, alreadyKnown, namespace };
   });
 }

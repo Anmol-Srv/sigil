@@ -27,6 +27,9 @@ import { registerIngestDoc } from './handlers/ingest-doc.js';
 import { registerListFacts } from './handlers/list-facts.js';
 import { registerForgetFact } from './handlers/forget-fact.js';
 import { registerRefreshContext } from './handlers/refresh-context.js';
+import { registerTestDbConnection } from './handlers/test-db-connection.js';
+import { registerRunMigrations } from './handlers/run-migrations.js';
+import { registerEnv } from './handlers/env.js';
 
 const STARTED_AT = Date.now();
 
@@ -62,6 +65,9 @@ export async function startDaemon({ foreground = false } = {}) {
   registerListFacts(registry);
   registerForgetFact(registry);
   registerRefreshContext(registry);
+  registerTestDbConnection(registry);
+  registerRunMigrations(registry);
+  registerEnv(registry);
 
   const socket = await startSocketServer({ registry, log });
 

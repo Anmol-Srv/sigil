@@ -116,3 +116,51 @@ footer {
   font-size: 12px;
   text-align: center;
 }
+
+/* Setup form */
+form { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+form label { display: block; margin-bottom: 12px; }
+form label span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+form input, form select {
+  width: 100%; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+  font: 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+form .actions { display: flex; gap: 8px; margin-top: 8px; }
+form button, .activity-controls button {
+  padding: 8px 14px; border-radius: 6px;
+  background: var(--accent); color: var(--bg); border: none;
+  font: 600 13px system-ui; cursor: pointer;
+}
+form button:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }
+.activity-controls button { background: var(--border); color: var(--fg); }
+
+pre.result {
+  margin-top: 16px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  max-height: 320px; overflow: auto;
+}
+
+/* Env table */
+table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+th, td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+th { background: rgba(255,255,255,0.02); color: var(--muted); font-weight: 500; font-size: 12px; }
+tr:last-child td { border-bottom: none; }
+.badge { background: var(--border); color: var(--muted); font-size: 11px; padding: 2px 8px; border-radius: 4px; }
+.badge.ok  { background: rgba(92,210,142,0.15); color: var(--ok); }
+.badge.err { background: rgba(240,126,126,0.15); color: var(--err); }
+
+/* Activity */
+.activity-controls { display: flex; align-items: center; gap: 12px; margin: 8px 0 12px; }
+.activity-controls .muted { font-size: 12px; }
+#activity-feed li.event {
+  display: grid; grid-template-columns: 70px 110px 1fr; gap: 12px;
+  align-items: center; padding: 8px 14px; font-size: 12px;
+}
+#activity-feed .ts { color: var(--muted); font-family: ui-monospace, monospace; }
+
