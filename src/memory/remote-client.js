@@ -49,8 +49,9 @@ class RemoteClient {
     let lastErr;
     while (attempt < 2) {
       attempt++;
+      let conn;
       try {
-        const conn = await this.ensureConnection();
+        conn = await this.ensureConnection();
         const bi = await conn.openBi();
         const request_id = randomUUID();
         await bi.send.writeAll(Buffer.from(JSON.stringify({ v: 1, method, params, request_id })));
@@ -58,16 +59,22 @@ class RemoteClient {
         const raw = await bi.recv.readToEnd(MAX_RESP);
         const frame = JSON.parse(raw.toString());
         if (!frame.ok) {
+          // Handler-side rejection — leave the connection intact and
+          // surface the error. PR review #10: pre-fix tore down the
+          // long-lived Iroh connection on every authorization failure.
           const err = new Error(frame.error?.message || frame.error?.code || 'rpc error');
           err.code = frame.error?.code || 'handler_error';
+          err.isHandlerError = true;
           throw err;
         }
         return frame.data;
       } catch (err) {
         lastErr = err;
-        // Connection-layer error → drop and retry once.
+        if (err.isHandlerError) {
+          throw err; // never retry, never drop connection
+        }
+        // Transport-layer error → drop connection and retry once.
         if (this.conn) { this.conn._dead = true; this.conn = null; }
-        if (err.code && err.code !== 'handler_error') break; // handler-side error: don't retry
       }
     }
     throw lastErr;

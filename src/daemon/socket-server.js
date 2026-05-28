@@ -28,17 +28,30 @@ export async function startSocketServer({ registry, log }) {
 
   const server = createServer((socket) => {
     let buffer = '';
+    let closed = false;
+    // PR review #16: per-connection Promise chain serializes handler
+    // dispatch. Two `remember` calls on the same MCP connection now
+    // execute in arrival order; AUDM's pairwise dedup invariants
+    // (whose comments warn against parallel ingests) are preserved.
+    let chain = Promise.resolve();
     socket.setEncoding('utf8');
 
     socket.on('data', (chunk) => {
+      if (closed) return;
       buffer += chunk;
       let nl;
       while ((nl = buffer.indexOf('\n')) !== -1) {
         const line = buffer.slice(0, nl);
         buffer = buffer.slice(nl + 1);
-        if (line.trim()) handleFrame(line, socket, registry, log);
+        if (!line.trim()) continue;
+        chain = chain.then(() => {
+          if (closed) return; // PR review #30
+          return handleFrame(line, socket, registry, log);
+        });
       }
     });
+
+    socket.on('close', () => { closed = true; });
 
     socket.on('error', (err) => {
       // EPIPE / ECONNRESET are routine when clients hang up mid-call.

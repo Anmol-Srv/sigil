@@ -14,14 +14,11 @@ export function registerForgetFact(registry) {
       throw err;
     }
 
-    let match;
-    if (/^\d+$/.test(idArg)) {
-      [match] = await cortexDb('fact').where({ id: Number(idArg) }).limit(1);
-    } else if (idArg.startsWith('fact-')) {
-      [match] = await cortexDb('fact').where('uid', 'like', `${idArg}%`).limit(1);
-    } else {
-      [match] = await cortexDb('fact').where('uid', 'like', `${idArg}%`).limit(1);
-    }
+    // PR review #8: numeric id or UID prefix; the `fact-` vs bare-prefix
+    // branches were doing identical queries.
+    const [match] = /^\d+$/.test(idArg)
+      ? await cortexDb('fact').where({ id: Number(idArg) }).limit(1)
+      : await cortexDb('fact').where('uid', 'like', `${idArg}%`).limit(1);
 
     if (!match) return { notFound: true, query: idArg };
 

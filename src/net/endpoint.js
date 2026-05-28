@@ -45,13 +45,14 @@ async function ensureRuntime() {
   const secretKey = await getSecretKey();
 
   nodePromise = import('@number0/iroh').then(async ({ Iroh }) => {
-    // Build the protocols map. Keys are Buffers; the runtime stringifies
-    // them as comma-joined byte arrays and matches incoming ALPNs by
-    // identity. Each handler factory returns { accept, shutdown }.
+    // PR review #17: use the ALPN string directly as the key. We were
+    // previously setting protocols[Buffer.from(alpn)] which coerces to
+    // toString('utf8') — works today but only because the resulting
+    // string happens to equal the ALPN. Using the string is what the
+    // iroh test fixture documents.
     const protocols = {};
     for (const [alpn, handler] of pendingProtocols) {
-      const key = Buffer.from(alpn);
-      protocols[key] = (err, ep) => {
+      protocols[alpn] = (err, ep) => {
         if (err) throw err;
         return {
           accept: handler,
@@ -90,14 +91,24 @@ export async function getNodeAddr() {
  * Status snapshot. Includes node ID, listen addresses, and current relay
  * URL. Safe to expose to the GUI — the node ID is a public key, the
  * addresses tell other devices how to reach this one.
+ *
+ * PR review #21: fail loudly if Iroh's status shape changes — pre-1.0
+ * the API isn't frozen. A silent `nodeId: null` would propagate into
+ * the pair flow as broken handshakes.
  */
 export async function getNodeInfo() {
   const i = await ensureRuntime();
   const status = await i.node.status();
+  if (!status || typeof status !== 'object') {
+    throw new Error('iroh: node.status() returned non-object — Iroh API shape changed?');
+  }
+  if (!status.addr || typeof status.addr.nodeId !== 'string') {
+    throw new Error(`iroh: node.status().addr.nodeId missing (got ${JSON.stringify(status).slice(0, 200)}) — Iroh API shape changed?`);
+  }
   return {
-    nodeId: status.addr?.nodeId ?? null,
-    relayUrl: status.addr?.relayUrl ?? null,
-    addresses: status.addr?.addresses ?? [],
+    nodeId: status.addr.nodeId,
+    relayUrl: status.addr.relayUrl ?? null,
+    addresses: status.addr.addresses ?? [],
     version: status.version ?? null,
     listenAddrs: status.listenAddrs ?? [],
   };

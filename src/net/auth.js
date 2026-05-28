@@ -44,13 +44,20 @@ export const METHOD_ROLES = {
   writeEnv:           'admin',
 };
 
+// PR review #11: throttle last_seen_at writes to once a minute per
+// device so a chatty follower doesn't produce a write storm on `device`.
+const LAST_SEEN_THROTTLE_MS = 60_000;
+
 export async function authenticate(remoteNodeId) {
   const { default: cortexDb } = await import('../db/cortex.js');
   const device = await cortexDb('device').where({ node_id: remoteNodeId }).first();
   if (!device) return { ok: false, code: 'unknown_device', message: 'no device row for this NodeID' };
   if (!device.active) return { ok: false, code: 'revoked', message: 'device has been revoked' };
-  // Touch last_seen_at — best effort, don't fail the request if this fails
-  cortexDb('device').where({ id: device.id }).update({ last_seen_at: cortexDb.fn.now() }).catch(() => {});
+
+  const lastSeenMs = device.lastSeenAt ? new Date(device.lastSeenAt).getTime() : 0;
+  if (Date.now() - lastSeenMs > LAST_SEEN_THROTTLE_MS) {
+    cortexDb('device').where({ id: device.id }).update({ last_seen_at: cortexDb.fn.now() }).catch(() => {});
+  }
   return { ok: true, device };
 }
 

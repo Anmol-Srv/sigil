@@ -43,6 +43,19 @@ export function registerEnv(registry) {
     const next = applyPatch(raw, patch);
     await mkdir(dirname(SIGIL_ENV_PATH), { recursive: true });
     await writeFile(SIGIL_ENV_PATH, next, 'utf8');
+
+    // PR review #19: if a memory-routing env var was touched, drop the
+    // cached MemoryClient so the next call rebuilds against the new
+    // master / mode. process.env reflects only the daemon's startup
+    // values, but the cached client closure is what matters for routing.
+    const sensitiveKeys = ['SIGIL_MODE', 'SIGIL_MASTER_NODE_ID', 'SIGIL_NETWORK_ENABLED'];
+    if (Object.keys(patch).some((k) => sensitiveKeys.includes(k))) {
+      try {
+        const { resetMemoryClient } = await import('../../memory/client.js');
+        resetMemoryClient();
+      } catch { /* ignore */ }
+    }
+
     return { ok: true, path: SIGIL_ENV_PATH, patchedKeys: Object.keys(patch) };
   });
 }

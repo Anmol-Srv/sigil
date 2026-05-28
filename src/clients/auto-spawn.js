@@ -15,7 +15,11 @@ import { detectRunningDaemon } from '../daemon/lifecycle.js';
 import { openSocketClient } from './socket-client.js';
 
 const READY_TIMEOUT_MS = 5_000;
-const POLL_INTERVAL_MS = 50;
+// PR review #15: exponential backoff. Typical cold start is well under
+// 1 second; the first few polls catch it fast, then we space out so we
+// don't burn CPU on slow boots.
+const POLL_INTERVAL_MIN_MS = 25;
+const POLL_INTERVAL_MAX_MS = 400;
 
 /**
  * Return an open socket client to the daemon, starting the daemon first
@@ -104,9 +108,11 @@ function resolveDaemonScript() {
 
 async function waitForReady() {
   const deadline = Date.now() + READY_TIMEOUT_MS;
+  let interval = POLL_INTERVAL_MIN_MS;
   while (Date.now() < deadline) {
     if (await canConnect()) return;
-    await delay(POLL_INTERVAL_MS);
+    await delay(interval);
+    interval = Math.min(interval * 2, POLL_INTERVAL_MAX_MS);
   }
   throw new Error(
     `daemon did not become ready within ${READY_TIMEOUT_MS}ms — check ${SIGIL_DAEMON_LOG}`,

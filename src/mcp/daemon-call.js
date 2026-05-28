@@ -25,14 +25,30 @@ async function getClient() {
   return clientPromise;
 }
 
+// PR review #14: reconnect by err.code (set by socket-client on
+// transport errors), not substring match of err.message — which would
+// false-positive on any handler error that mentioned ENOENT/closed.
+const TRANSPORT_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ENOENT',
+  'EPIPE',
+  'ECONNRESET',
+]);
+function isTransportError(err) {
+  if (!err) return false;
+  if (err.code && TRANSPORT_ERROR_CODES.has(err.code)) return true;
+  // The socket-client surfaces "daemon connection closed" as a plain
+  // Error (no code) when the underlying socket drops mid-call.
+  return /^daemon connection closed/i.test(err.message || '');
+}
+
 export async function daemonCall(method, params) {
   const client = await getClient();
   try {
     const { data } = await client.call(method, params ?? {});
     return data;
   } catch (err) {
-    // If the daemon went away mid-call, try once to reconnect.
-    if (/closed|ECONNREFUSED|ENOENT/i.test(err.message || '')) {
+    if (isTransportError(err)) {
       cachedClient = null;
       clientPromise = null;
       const retryClient = await getClient();

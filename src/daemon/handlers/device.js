@@ -12,15 +12,20 @@
 const VALID_REASONS = new Set(['paused', 'compromised']);
 
 export function registerDevice(registry) {
-  registry.register('device.list', async () => {
+  registry.register('device.list', async (params = {}) => {
     const { default: cortexDb } = await import('../../db/cortex.js');
+    const limit = Math.min(Math.max(Number(params.limit) || 100, 1), 500);
+    const offset = Math.max(Number(params.offset) || 0, 0);
     const rows = await cortexDb('device')
       .select(
         'id', 'node_id', 'name', 'role', 'namespaces', 'active', 'meta',
         'last_seen_at', 'created_at', 'revoked_reason',
       )
-      .orderBy('created_at', 'desc');
+      .orderBy('created_at', 'desc')
+      .limit(limit)
+      .offset(offset);
     return {
+      limit, offset,
       devices: rows.map((r) => ({
         id: r.id,
         nodeId: r.nodeId,
@@ -51,10 +56,17 @@ export function registerDevice(registry) {
       err.code = 'invalid_params';
       throw err;
     }
+    const row = await cortexDb('device').where({ id }).first();
     const n = await cortexDb('device').where({ id }).update({
       active: false,
       revoked_reason: reason,
     });
+    if (n > 0 && row) {
+      // PR review #12: notify rpc-server to terminate any live
+      // Iroh connections from this NodeID.
+      const { default: bus } = await import('../events.js');
+      bus.emit('device.revoked', { deviceId: row.id, nodeId: row.nodeId, reason });
+    }
     return { revoked: n > 0, reason };
   });
 

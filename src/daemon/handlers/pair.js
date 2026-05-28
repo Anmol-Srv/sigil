@@ -27,6 +27,14 @@ export function registerPair(registry) {
     const ttl = Number.isFinite(params.ttlSeconds) ? params.ttlSeconds : DEFAULT_TTL_SECONDS;
     const expiresAt = new Date(Date.now() + ttl * 1000);
 
+    // PR review #13: best-effort opportunistic sweep of expired+unconsumed
+    // codes older than a day. Runs in background; doesn't block creation.
+    cortexDb('pairing_code')
+      .whereNull('consumed_by_device_id')
+      .where('expires_at', '<', new Date(Date.now() - 24 * 3600 * 1000))
+      .del()
+      .catch(() => {});
+
     const code = generateCode();
     await cortexDb('pairing_code').insert({
       code_hash: hashCode(code),
@@ -50,8 +58,12 @@ export function registerPair(registry) {
     };
   });
 
-  registry.register('pair.list', async () => {
+  registry.register('pair.list', async (params = {}) => {
     const { default: cortexDb } = await import('../../db/cortex.js');
+    // PR review #13: pagination
+    const limit = Math.min(Math.max(Number(params.limit) || 50, 1), 200);
+    const offset = Math.max(Number(params.offset) || 0, 0);
+
     const rows = await cortexDb('pairing_code')
       .leftJoin('device', 'pairing_code.consumed_by_device_id', 'device.id')
       .select(
@@ -65,8 +77,11 @@ export function registerPair(registry) {
         'device.name as consumed_by_name',
         'device.node_id as consumed_by_node_id',
       )
-      .orderBy('pairing_code.created_at', 'desc');
+      .orderBy('pairing_code.created_at', 'desc')
+      .limit(limit)
+      .offset(offset);
     return {
+      limit, offset,
       codes: rows.map((r) => ({
         id: r.id,
         name: r.name,
@@ -78,6 +93,19 @@ export function registerPair(registry) {
         expired: new Date(r.expiresAt) < new Date(),
       })),
     };
+  });
+
+  // PR review #13: cleanup expired, unconsumed codes. Called by
+  // pair.create's housekeeping path and exposed as its own RPC for the
+  // GUI / cron.
+  registry.register('pair.sweep', async () => {
+    const { default: cortexDb } = await import('../../db/cortex.js');
+    const cutoff = new Date(Date.now() - 24 * 3600 * 1000); // > 1 day past expiry
+    const deleted = await cortexDb('pairing_code')
+      .whereNull('consumed_by_device_id')
+      .where('expires_at', '<', cutoff)
+      .del();
+    return { deleted };
   });
 
   registry.register('pair.revoke', async (params) => {

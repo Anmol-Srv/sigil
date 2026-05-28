@@ -76,10 +76,25 @@ export async function startHttpServer({ registry, log, config }) {
       for (const evt of bus.recent(50)) {
         try { ws.send(JSON.stringify(evt)); } catch { /* socket dead */ }
       }
+      // PR review #20: backpressure. If a slow tab lets bufferedAmount
+      // grow past this watermark, drop further events for that socket
+      // rather than letting the WebSocket library buffer indefinitely.
+      // 256 KB ≈ 200+ activity events at typical payload size.
+      const BP_HIGH_WATER = 256 * 1024;
+      let droppedSinceLastSent = 0;
       const unsub = bus.subscribe((evt) => {
-        if (ws.readyState === ws.OPEN) {
-          try { ws.send(JSON.stringify(evt)); } catch { /* ignore */ }
+        if (ws.readyState !== ws.OPEN) return;
+        if (ws.bufferedAmount > BP_HIGH_WATER) {
+          droppedSinceLastSent++;
+          return;
         }
+        try {
+          if (droppedSinceLastSent > 0) {
+            ws.send(JSON.stringify({ type: 'meta.dropped', ts: new Date().toISOString(), count: droppedSinceLastSent }));
+            droppedSinceLastSent = 0;
+          }
+          ws.send(JSON.stringify(evt));
+        } catch { /* ignore */ }
       });
       ws.on('close', unsub);
       ws.on('error', () => unsub());
@@ -218,9 +233,11 @@ async function checkAuth(req) {
 
 async function readJsonBody(req) {
   const chunks = [];
+  let total = 0; // PR review #9: incremental size check instead of O(n²) reduce
   for await (const c of req) {
     chunks.push(c);
-    if (chunks.reduce((n, x) => n + x.length, 0) > 1_000_000) {
+    total += c.length;
+    if (total > 1_000_000) {
       throw new Error('request body too large (>1MB)');
     }
   }
