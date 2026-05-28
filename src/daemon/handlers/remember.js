@@ -21,11 +21,14 @@ export function registerRemember(registry) {
     let added = 0;
     let updated = 0;
     let alreadyKnown = 0;
+    const _t0 = Date.now();
+    const inputs = []; // per-input causal trace
 
     for (const text of facts) {
       const result = await ingestDocument({ content: text, namespace, classify: true });
       if (result.skipped || result.route === 'noise') {
         alreadyKnown++;
+        inputs.push({ input: String(text).slice(0, 240), route: result.route ?? null, skipped: true, verdicts: result.facts?.verdicts || [] });
         continue;
       }
       const a = result.facts?.added ?? 0;
@@ -33,6 +36,14 @@ export function registerRemember(registry) {
       added += a;
       updated += u;
       if (a + u === 0) alreadyKnown++;
+      inputs.push({
+        input: String(text).slice(0, 240),
+        route: result.route ?? null,
+        skipped: false,
+        counts: { added: a, updated: u, skipped: result.facts?.skipped ?? 0, contradicted: result.facts?.contradicted ?? 0 },
+        verdicts: result.facts?.verdicts || [],
+        entities: result.entities ? { entityCount: result.entities.entityCount, relationCount: result.entities.relationCount, topics: result.entities.topics || [] } : null,
+      });
     }
 
     if (added + updated > 0) {
@@ -40,8 +51,14 @@ export function registerRemember(registry) {
       await updateContextSnapshot({ namespace }).catch(() => {});
     }
 
-    const { default: bus } = await import('../events.js');
-    bus.emit('write.fact', { added, updated, alreadyKnown, namespace, count: facts.length });
+    const { recordTrace } = await import('../trace-store.js');
+    recordTrace({
+      kind: 'ingest',
+      summary: `remember ${facts.length} input${facts.length === 1 ? '' : 's'} → +${added} added, ~${updated} updated, ${alreadyKnown} known`,
+      namespace,
+      durationMs: Date.now() - _t0,
+      detail: { op: 'remember', namespace, totals: { added, updated, alreadyKnown, inputCount: facts.length }, inputs },
+    }).catch(() => {});
 
     return { added, updated, alreadyKnown, namespace };
   });

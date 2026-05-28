@@ -23,15 +23,28 @@ async function saveFact({ content, category, confidence, importance, namespace, 
   const embedding = precomputed || await embed(content);
   const similar = await findSimilar(embedding, { namespace });
 
+  // AUDM telemetry attached to every return for the trace log: the similarity
+  // that drove the decision, candidate count, and the thresholds in effect —
+  // so the Activity log can explain *why* a fact was added vs deduped vs
+  // superseded. Purely additive; existing callers ignore `audm`.
+  const thresholds = { skip: SKIP_THRESHOLD, ambiguous: AMBIGUOUS_THRESHOLD };
+
   if (!similar.length) {
     const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding });
-    return { action: 'ADD', fact };
+    return { action: 'ADD', fact, audm: { topSimilarity: null, matchCount: 0, decision: 'no-match', thresholds } };
   }
 
   const topMatch = similar[0];
+  const audmBase = {
+    topSimilarity: Number(topMatch.similarity),
+    matchCount: similar.length,
+    existingId: topMatch.id,
+    existingContent: topMatch.content,
+    thresholds,
+  };
 
   if (topMatch.similarity >= SKIP_THRESHOLD) {
-    return { action: 'SKIP', existing: topMatch };
+    return { action: 'SKIP', existing: topMatch, audm: { ...audmBase, decision: 'skip-duplicate' } };
   }
 
   if (topMatch.similarity >= AMBIGUOUS_THRESHOLD) {
@@ -43,19 +56,23 @@ async function saveFact({ content, category, confidence, importance, namespace, 
       const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding });
       await markSuperseded(topMatch.id, fact.id);
       await recordHistory({ targetType: 'fact', targetId: topMatch.id, event: 'UPDATE', oldContent: topMatch.content, newContent: content, triggeredBy: `audm:sim=${topMatch.similarity.toFixed(3)}` });
-      return { action: 'UPDATE', fact, supersededId: topMatch.id };
+      return { action: 'UPDATE', fact, supersededId: topMatch.id, audm: { ...audmBase, decision: 'llm:UPDATE' } };
     }
 
     if (decision === 'CONTRADICT') {
       const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding });
       await markContradicted(topMatch.id, fact.id);
       await recordHistory({ targetType: 'fact', targetId: topMatch.id, event: 'CONTRADICT', oldContent: topMatch.content, newContent: content, triggeredBy: `audm:sim=${topMatch.similarity.toFixed(3)}` });
-      return { action: 'CONTRADICT', fact, contradictedId: topMatch.id };
+      return { action: 'CONTRADICT', fact, contradictedId: topMatch.id, audm: { ...audmBase, decision: 'llm:CONTRADICT' } };
     }
+
+    // Ambiguous zone but the LLM judged the new fact distinct → add as new.
+    const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding });
+    return { action: 'ADD', fact, audm: { ...audmBase, decision: 'llm:ADD' } };
   }
 
   const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding });
-  return { action: 'ADD', fact };
+  return { action: 'ADD', fact, audm: { ...audmBase, decision: 'below-ambiguous' } };
 }
 
 async function audmDecide(newContent, existingContent) {

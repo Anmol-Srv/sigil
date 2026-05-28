@@ -32,8 +32,11 @@ const KEYWORD_WEIGHT = 0.7;
 const MAX_ENTITY_QUERY_LENGTH = 60;
 
 async function search(query, { namespaces, limit = 5, minConfidence = 'medium', useGraph = false, includeChunks = false, pointInTime, expand = false, route = true, categories, synthesize = config.search.synthesize, podScope = null, ctx = {} } = {}) {
+  const _t0 = Date.now();
   if (!isSearchableQuery(query)) {
-    return emptySearchResult();
+    const empty = emptySearchResult();
+    empty._trace = { query, searchable: false, stages: [{ stage: 'guard', note: 'query is not searchable (empty or wildcard-only)' }], durationMs: Date.now() - _t0 };
+    return empty;
   }
 
   // When synthesis is on, force include chunks so the synthesizer has raw material
@@ -91,7 +94,81 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
     }
   }
 
+  result._trace = buildSearchTrace({
+    query, namespaces, limit, minConfidence, useGraph, expand, route,
+    routing, matchedEntity, podScope, podIds, result, factIds,
+    durationMs: Date.now() - _t0,
+  });
+
   return result;
+}
+
+// Assemble the full causal trace for a search: the routing decision, whether
+// an entity short-circuit fired, the resolved pod scope, and every ranked
+// fact/chunk with the scores that placed it there — cosine similarity, the
+// RRF fusion score, the ACT-R activation (frequency + recency decay), the
+// importance/confidence multipliers' net effect (final_score), the
+// post-merge normalized rrfScore, and any entity co-retrieval boost.
+function buildSearchTrace({ query, namespaces, limit, minConfidence, useGraph, expand, route, routing, matchedEntity, podScope, podIds, result, factIds, durationMs }) {
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n * 1e4) / 1e4 : null; };
+
+  const rankedFacts = (result.facts || []).map((f, i) => ({
+    rank: i + 1,
+    id: f.id ?? null,
+    content: String(f.content || '').slice(0, 240),
+    category: f.category ?? null,
+    importance: f.importance ?? null,
+    confidence: f.confidence ?? null,
+    source: f.source ?? null,                 // 'entity' | 'search'
+    similarity: num(f.similarity),            // cosine (vector)
+    rrfRaw: num(f.rrf_raw),                    // RRF fusion (vector+keyword)
+    activation: num(f.activation),             // ACT-R: ln(uses+1) − 0.5·ln(t_days) → decay/frequency
+    accessCount: f.access_count ?? null,
+    lastAccessedAt: f.lastAccessedAt ?? null,
+    finalScore: num(f.final_score),            // rrf × activation × importance × confidence
+    rrfScore: num(f.rrfScore),                 // normalized score the ranker sorted on
+    coRetrievalBoost: num(f.coRetrievalBoost), // entity-Hebbian bump, if any
+  }));
+
+  const rankedChunks = (result.chunks || []).map((c, i) => ({
+    rank: i + 1,
+    id: c.id ?? null,
+    sectionHeading: c.sectionHeading ?? null,
+    content: String(c.content || '').slice(0, 200),
+    similarity: num(c.similarity),
+    rrfScore: num(c.rrfScore),
+  }));
+
+  return {
+    query,
+    namespaces,
+    durationMs,
+    params: { limit, minConfidence, useGraphRequested: useGraph, expandRequested: expand, routeEnabled: route },
+    routing: routing
+      ? {
+          intent: routing.intent ?? null,
+          reasoning: routing.reasoning ?? null,
+          useGraph: routing.useGraph ?? null,
+          expand: routing.expand ?? null,
+          limit: routing.limit ?? null,
+          categories: routing.categories ?? null,
+          pointInTime: routing.pointInTime ?? null,
+        }
+      : null,
+    strategy: matchedEntity ? 'entity-first' : 'standard',
+    matchedEntity: matchedEntity
+      ? { id: matchedEntity.id, name: matchedEntity.name, type: matchedEntity.entityType, aliases: matchedEntity.aliases || [] }
+      : null,
+    podScope: { requested: podScope, resolvedIds: podIds },
+    ranking: {
+      model: 'RRF(vector×1.0 + keyword×0.7) × softplus(ACT-R activation) × importance × confidence',
+      facts: rankedFacts,
+      chunks: rankedChunks,
+    },
+    synthesized: result.synthesized || null,
+    relatedEntities: result.relatedEntities || [],
+    reinforced: { factIds, note: 'access_count bumped + Hebbian co-retrieval edges strengthened (off hot path)' },
+  };
 }
 
 function isSearchableQuery(query) {

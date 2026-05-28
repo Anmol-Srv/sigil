@@ -138,7 +138,7 @@ async function ingestDocument({
       skipped: false,
       route: 'thought',
       chunkCount: 0,
-      facts: thoughtResult.counts,
+      facts: { ...thoughtResult.counts, verdicts: traceVerdicts(thoughtResult.results) },
       entities: entityResult,
     };
   }
@@ -217,10 +217,24 @@ async function ingestDocument({
     documentUid: doc.uid,
     title: finalTitle,
     skipped: false,
+    route: classification?.route ?? null,
     chunkCount: chunks.length,
-    facts: factResult.counts,
+    facts: { ...factResult.counts, verdicts: traceVerdicts(factResult.results) },
     entities: entityResult,
   };
+}
+
+// Compact per-fact AUDM verdicts for the trace log: the action taken, the
+// fact text, and the similarity/decision telemetry from saveFact().
+function traceVerdicts(results) {
+  return (results || []).map((r) => ({
+    action: r.action,
+    factId: r.fact?.id ?? r.existing?.id ?? null,
+    content: String(r.fact?.content || r.existing?.content || '').slice(0, 240),
+    audm: r.audm || null,
+    supersededId: r.supersededId ?? null,
+    contradictedId: r.contradictedId ?? null,
+  }));
 }
 
 async function storeFactsInBatches(facts, { documentId, namespace, embeddings, defaultConfidence = 'medium', defaultImportance = 'supplementary' }) {

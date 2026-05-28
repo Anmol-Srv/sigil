@@ -306,16 +306,25 @@
     <section id="view-activity" class="view">
       <div class="section-head">
         <div class="title-block">
-          <h2>Live activity</h2>
-          <p>Streamed over WebSocket. Every write, search, peer connect/disconnect, and revocation appears here in real time.</p>
+          <h2>Activity</h2>
+          <p>Complete causal log. Every search records its routing decision, matched entity, and per-fact scores — cosine similarity, RRF fusion, ACT-R activation (recency + frequency decay), and final ranking. Every ingest records classification, per-fact AUDM verdicts with the similarity that drove them, and entity links. Persisted and replayable.</p>
         </div>
         <div class="actions">
-          <button class="btn" id="activity-clear">Clear</button>
+          <button class="btn" id="trace-refresh">Refresh</button>
+          <button class="btn danger" id="trace-clear">Clear log</button>
           <span class="conn-status" id="activity-status">disconnected</span>
         </div>
       </div>
-      <ul id="activity-feed"></ul>
-      <div class="empty" id="activity-empty">no events yet — try <code>sigil remember "test"</code> in another terminal</div>
+
+      <div class="trace-filters" id="trace-filters">
+        <button class="chip active" type="button" data-trace-filter="">All</button>
+        <button class="chip" type="button" data-trace-filter="search">Search</button>
+        <button class="chip" type="button" data-trace-filter="ingest">Ingest</button>
+        <button class="chip" type="button" data-trace-filter="lifecycle">Lifecycle</button>
+      </div>
+
+      <ul id="trace-list" class="trace-list"></ul>
+      <div class="empty" id="activity-empty">no activity yet — run <code>sigil search "..."</code> or <code>sigil remember "..."</code> and it'll appear here</div>
     </section>
 
     <!-- ── Setup (legacy DB test tab; same as onboarding) ─────────── -->

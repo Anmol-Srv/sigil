@@ -30,6 +30,7 @@ import { registerPair } from './pair.js';
 import { registerMode } from './mode.js';
 import { registerManifest } from './manifest.js';
 import { registerDevice } from './device.js';
+import { registerTrace } from './trace.js';
 
 export function registerAll(registry, { startedAt }) {
   registerPing(registry, { startedAt });
@@ -56,4 +57,5 @@ export function registerAll(registry, { startedAt }) {
   registerMode(registry);
   registerManifest(registry);
   registerDevice(registry);
+  registerTrace(registry);
 }

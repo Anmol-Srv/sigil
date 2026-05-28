@@ -370,7 +370,7 @@ function setRoute(name) {
   if (name === 'methods')  refreshMethods();
   if (name === 'settings') refreshEnv();
   if (name === 'devices')  refreshDevices();
-  if (name === 'activity') ensureActivityWs();
+  if (name === 'activity') { ensureActivityWs(); loadTraces(); }
 }
 function routeFromHash() {
   const r = (window.location.hash || '#health').slice(1);
@@ -468,7 +468,11 @@ async function refreshEnv() {
   }
 }
 
+// ── Activity / causal trace log ──────────────────────────────────────
 let ws = null;
+let traceFilter = '';
+const seenTraceUids = new Set();
+
 function ensureActivityWs() {
   if (ws && (ws.readyState === ws.OPEN || ws.readyState === ws.CONNECTING)) return;
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -479,40 +483,251 @@ function ensureActivityWs() {
     setTimeout(() => { if (location.hash === '#activity') ensureActivityWs(); }, 1500);
   });
   ws.addEventListener('error', () => setActivityStatus('err', 'error'));
-  ws.addEventListener('message', (e) => { try { appendEvent(JSON.parse(e.data)); } catch {} });
+  ws.addEventListener('message', (e) => { try { onLiveEvent(JSON.parse(e.data)); } catch {} });
 }
-function setActivityStatus(state, label) { const el = $('#activity-status'); el.className = `conn-status ${state}`; el.textContent = label; }
-function appendEvent(evt) {
+function setActivityStatus(state, label) { const el = $('#activity-status'); if (!el) return; el.className = `conn-status ${state}`; el.textContent = label; }
+
+function onLiveEvent(evt) {
+  if (evt.type === 'trace') {
+    if (traceFilter && evt.kind !== traceFilter) return;
+    prependTrace(evt, true);
+  } else if (!traceFilter) {
+    // operational events (rpc/pair/device) only shown in the unfiltered view
+    prependOpEvent(evt);
+  }
+}
+
+async function loadTraces() {
+  const list = $('#trace-list');
+  if (!list) return;
+  try {
+    const { traces } = await rpc('trace.list', { kind: traceFilter || undefined, limit: 50 });
+    seenTraceUids.clear();
+    list.innerHTML = '';
+    if (!traces.length) { $('#activity-empty').style.display = 'block'; return; }
+    $('#activity-empty').style.display = 'none';
+    for (const t of traces) { list.appendChild(traceCard(t)); seenTraceUids.add(t.uid); }
+  } catch (err) {
+    list.innerHTML = `<li class="empty">failed to load history: ${escape(err.message)}</li>`;
+  }
+}
+
+function prependTrace(t, isLive) {
+  if (t.uid && seenTraceUids.has(t.uid)) return;
+  if (t.uid) seenTraceUids.add(t.uid);
   $('#activity-empty').style.display = 'none';
-  const ul = $('#activity-feed');
+  const card = traceCard(t);
+  if (isLive) card.classList.add('flash');
+  $('#trace-list').prepend(card);
+  trimList();
+}
+function prependOpEvent(evt) {
+  $('#activity-empty').style.display = 'none';
   const li = document.createElement('li');
-  li.className = 'event';
-  const ts = (evt.ts || '').slice(11, 19);
-  li.innerHTML = `<span class="ts">${escape(ts)}</span><span class="badge ${badgeClass(evt.type)}">${escape(evt.type)}</span><span>${summarizeEvent(evt)}</span>`;
-  ul.prepend(li);
-  while (ul.childNodes.length > 200) ul.removeChild(ul.lastChild);
+  li.className = 'trace-card op';
+  const ts = clock(evt.ts);
+  li.innerHTML = `<div class="trace-head static">
+    <span class="trace-ts">${escape(ts)}</span>
+    <span class="badge ${opBadge(evt.type)}">${escape(evt.type)}</span>
+    <span class="trace-summary">${opSummary(evt)}</span></div>`;
+  $('#trace-list').prepend(li);
+  trimList();
 }
-function summarizeEvent(evt) {
-  if (evt.type === 'write.fact')     return `added=${evt.added} updated=${evt.updated} known=${evt.alreadyKnown} ns=${escape(evt.namespace)}`;
-  if (evt.type === 'write.document') return `<code class="mono">${escape(evt.title)}</code> chunks=${evt.chunkCount} facts+${evt.factsAdded}${evt.skipped ? ' [skipped]' : ''}`;
-  if (evt.type === 'read.search')    return `q=<code class="mono">${escape(evt.query)}</code> facts=${evt.factCount} chunks=${evt.chunkCount}`;
-  if (evt.type === 'rpc.connected')   return `device ${escape(evt.name || evt.deviceId)}`;
-  if (evt.type === 'rpc.disconnected')return `device ${escape(evt.deviceId)}`;
-  if (evt.type === 'pair.consumed')   return `${escape(evt.deviceName)}`;
-  if (evt.type === 'pair.rejected')   return `reason=${escape(evt.code)}`;
-  if (evt.type === 'device.revoked')  return `device ${escape(evt.deviceId)} reason=${escape(evt.reason)}`;
-  if (evt.type === 'meta.dropped')    return `(${evt.count} events dropped)`;
-  return `<code class="mono">${escape(JSON.stringify(evt))}</code>`;
+function trimList() { const ul = $('#trace-list'); while (ul.childNodes.length > 200) ul.removeChild(ul.lastChild); }
+
+function traceCard(t) {
+  const li = document.createElement('li');
+  li.className = 'trace-card';
+  const dur = t.durationMs != null ? `${t.durationMs}ms` : '';
+  const ns = t.namespace ? `<span class="trace-ns">${escape(t.namespace)}</span>` : '';
+  li.innerHTML = `
+    <button class="trace-head" type="button" aria-expanded="false">
+      <span class="trace-caret">▸</span>
+      <span class="trace-ts">${escape(clock(t.ts))}</span>
+      <span class="badge ${traceBadge(t.kind)}">${escape(t.kind)}</span>
+      <span class="trace-summary">${escape(t.summary)}</span>
+      ${ns}
+      <span class="trace-dur">${escape(dur)}</span>
+    </button>
+    <div class="trace-detail" hidden></div>`;
+  const head = li.querySelector('.trace-head');
+  const body = li.querySelector('.trace-detail');
+  head.addEventListener('click', () => {
+    const isOpen = !body.hasAttribute('hidden');
+    if (isOpen) { body.setAttribute('hidden', ''); head.setAttribute('aria-expanded', 'false'); li.classList.remove('open'); return; }
+    if (!body.dataset.rendered) { body.innerHTML = renderTraceDetail(t); body.dataset.rendered = '1'; }
+    body.removeAttribute('hidden'); head.setAttribute('aria-expanded', 'true'); li.classList.add('open');
+  });
+  return li;
 }
-function badgeClass(type) {
-  if (type.startsWith('write.')) return 'ok';
-  if (type.startsWith('error')) return 'err';
-  if (type.startsWith('pair.rej')) return 'err';
-  if (type.startsWith('device.rev')) return 'warn';
-  if (type === 'meta.dropped') return 'warn';
+
+// ── Detail renderers ─────────────────────────────────────────────────
+function renderTraceDetail(t) {
+  const d = t.detail || {};
+  if (t.kind === 'search') return renderSearchTrace(d);
+  if (t.kind === 'ingest') return renderIngestTrace(d);
+  return `<pre class="trace-json">${escape(JSON.stringify(d, null, 2))}</pre>`;
+}
+
+const sc = (v) => (v === null || v === undefined ? '—' : String(v));
+
+function renderSearchTrace(d) {
+  const parts = [];
+
+  if (d.routing) {
+    const r = d.routing;
+    parts.push(traceBlock('Routing', `
+      ${kvline('intent', r.intent)}
+      ${kvline('reasoning', r.reasoning)}
+      ${kvline('useGraph', r.useGraph)} ${kvline('expand', r.expand)} ${kvline('limit', r.limit)}
+      ${r.categories && r.categories.length ? kvline('categories', r.categories.join(', ')) : ''}
+      ${r.pointInTime ? kvline('pointInTime', r.pointInTime) : ''}`));
+  } else {
+    parts.push(traceBlock('Routing', `<span class="muted">cognitive routing disabled for this query</span>`));
+  }
+
+  parts.push(traceBlock('Strategy', `${kvline('mode', d.strategy)} ${d.matchedEntity
+    ? `· matched entity <strong>${escape(d.matchedEntity.name)}</strong> <span class="muted">(${escape(d.matchedEntity.type)}${d.matchedEntity.aliases?.length ? ', aliases: ' + escape(d.matchedEntity.aliases.join(', ')) : ''})</span>`
+    : ''}`));
+
+  const facts = (d.ranking && d.ranking.facts) || [];
+  if (facts.length) {
+    const rows = facts.map((f) => `<tr>
+        <td class="num">${f.rank}</td>
+        <td class="fact-cell">${escape(f.content)}${f.source ? ` <span class="tag">${escape(f.source)}</span>` : ''}${f.importance === 'vital' ? ' <span class="tag vital">vital</span>' : ''}</td>
+        <td class="num" title="cosine similarity">${sc(f.similarity)}</td>
+        <td class="num" title="RRF fusion (vector+keyword)">${sc(f.rrfRaw)}</td>
+        <td class="num" title="ACT-R activation = ln(uses+1) − 0.5·ln(age_days); recency + frequency decay">${sc(f.activation)}</td>
+        <td class="num" title="access count (reinforcement)">${sc(f.accessCount)}</td>
+        <td class="num" title="rrf × activation × importance × confidence">${sc(f.finalScore)}</td>
+        <td class="num strong" title="normalized score the ranker sorted on">${sc(f.rrfScore)}</td>
+      </tr>`).join('');
+    parts.push(`<div class="trace-block"><div class="trace-block-h">Ranking <span class="muted">— ${escape(d.ranking.model)}</span></div>
+      <div class="trace-table-wrap"><table class="trace-table">
+        <thead><tr><th>#</th><th>fact</th><th>sim</th><th>rrf</th><th>act↓</th><th>uses</th><th>final</th><th>score</th></tr></thead>
+        <tbody>${rows}</tbody></table></div></div>`);
+  } else {
+    parts.push(traceBlock('Ranking', `<span class="muted">no facts matched</span>`));
+  }
+
+  const chunks = (d.ranking && d.ranking.chunks) || [];
+  if (chunks.length) {
+    const rows = chunks.map((c) => `<tr>
+        <td class="num">${c.rank}</td>
+        <td class="fact-cell">${c.sectionHeading ? `<span class="muted">${escape(c.sectionHeading)} · </span>` : ''}${escape(c.content)}</td>
+        <td class="num">${sc(c.similarity)}</td>
+        <td class="num strong">${sc(c.rrfScore)}</td>
+      </tr>`).join('');
+    parts.push(`<div class="trace-block"><div class="trace-block-h">Chunks</div>
+      <div class="trace-table-wrap"><table class="trace-table">
+        <thead><tr><th>#</th><th>chunk</th><th>sim</th><th>score</th></tr></thead>
+        <tbody>${rows}</tbody></table></div></div>`);
+  }
+
+  if (d.synthesized) parts.push(traceBlock('Synthesized answer', `<div class="synth">${escape(d.synthesized)}</div>`));
+
+  if (d.reinforced && d.reinforced.factIds && d.reinforced.factIds.length) {
+    parts.push(traceBlock('Reinforcement (decay update)', `<span class="muted">${escape(d.reinforced.note)}</span><br>fact ids: <code class="mono">${escape(d.reinforced.factIds.join(', '))}</code>`));
+  }
+
+  return parts.join('');
+}
+
+function renderIngestTrace(d) {
+  const parts = [];
+  const inputs = d.inputs || (d.verdicts ? [{ input: d.title, route: d.route, counts: d.counts, verdicts: d.verdicts, entities: d.entities }] : []);
+
+  if (d.totals) parts.push(traceBlock('Totals', `${kvline('added', d.totals.added)} ${kvline('updated', d.totals.updated)} ${kvline('alreadyKnown', d.totals.alreadyKnown)} ${kvline('inputs', d.totals.inputCount)}`));
+
+  inputs.forEach((inp, i) => {
+    const verdictRows = (inp.verdicts || []).map((v) => {
+      const a = v.audm || {};
+      const simTxt = a.topSimilarity != null
+        ? `sim <strong>${a.topSimilarity.toFixed(3)}</strong> ${audmExplain(a)}`
+        : `<span class="muted">${escape(a.decision || 'no match — new fact')}</span>`;
+      const link = v.supersededId ? ` → superseded #${v.supersededId}` : v.contradictedId ? ` → contradicted #${v.contradictedId}` : '';
+      return `<tr>
+        <td><span class="badge ${audmBadge(v.action)}">${escape(v.action)}</span></td>
+        <td class="fact-cell">${escape(v.content)}${link ? `<span class="muted">${escape(link)}</span>` : ''}</td>
+        <td class="audm-cell">${simTxt}</td>
+      </tr>`;
+    }).join('');
+
+    const head = `${inp.route ? `<span class="badge info">route: ${escape(inp.route)}</span> ` : ''}${inp.skipped ? '<span class="badge warn">skipped</span> ' : ''}<span class="muted">${escape(String(inp.input || '').slice(0, 160))}</span>`;
+    const counts = inp.counts ? `<div class="muted text-xs" style="margin:6px 0">+${inp.counts.added} added · ~${inp.counts.updated} updated · ${inp.counts.skipped} skipped · ${inp.counts.contradicted} contradicted</div>` : '';
+    const ents = inp.entities ? `<div class="text-xs muted" style="margin-top:6px">entities: ${inp.entities.entityCount}, relations: ${inp.entities.relationCount}${inp.entities.topics?.length ? ' · topics: ' + escape(inp.entities.topics.join(', ')) : ''}</div>` : '';
+
+    parts.push(`<div class="trace-block">
+      <div class="trace-block-h">Input ${inputs.length > 1 ? i + 1 : ''}</div>
+      <div style="margin-bottom:6px">${head}</div>
+      ${counts}
+      ${verdictRows ? `<div class="trace-table-wrap"><table class="trace-table"><thead><tr><th>AUDM</th><th>fact</th><th>decision</th></tr></thead><tbody>${verdictRows}</tbody></table></div>` : '<span class="muted text-xs">no facts extracted</span>'}
+      ${ents}
+    </div>`);
+  });
+
+  return parts.join('') || `<pre class="trace-json">${escape(JSON.stringify(d, null, 2))}</pre>`;
+}
+
+function audmExplain(a) {
+  const th = a.thresholds || {};
+  if (a.decision === 'skip-duplicate') return `≥ skip ${th.skip} → near-duplicate, deduped`;
+  if (a.decision === 'llm:UPDATE') return `in [${th.ambiguous}, ${th.skip}) → LLM judged UPDATE`;
+  if (a.decision === 'llm:CONTRADICT') return `in [${th.ambiguous}, ${th.skip}) → LLM judged CONTRADICT`;
+  if (a.decision === 'llm:ADD') return `in [${th.ambiguous}, ${th.skip}) → LLM judged distinct`;
+  if (a.decision === 'below-ambiguous') return `< ambiguous ${th.ambiguous} → distinct, added`;
+  return escape(a.decision || '');
+}
+
+function traceBlock(title, html) { return `<div class="trace-block"><div class="trace-block-h">${escape(title)}</div><div>${html}</div></div>`; }
+function kvline(k, v) { return `<span class="kvline"><span class="muted">${escape(k)}</span> ${escape(sc(v))}</span>`; }
+function clock(iso) { return (iso || '').slice(11, 19) || (iso || '').slice(0, 10); }
+
+function traceBadge(kind) {
+  if (kind === 'search') return 'info';
+  if (kind === 'ingest') return 'ok';
+  if (kind === 'lifecycle') return 'warn';
   return 'info';
 }
-$('#activity-clear')?.addEventListener('click', () => { $('#activity-feed').innerHTML = ''; $('#activity-empty').style.display = 'block'; });
+function audmBadge(action) {
+  const a = String(action || '').toUpperCase();
+  if (a === 'ADD') return 'ok';
+  if (a === 'SKIP') return '';
+  if (a === 'UPDATE') return 'info';
+  if (a === 'CONTRADICT') return 'err';
+  return 'info';
+}
+function opBadge(type) {
+  if (type.startsWith('write.')) return 'ok';
+  if (type.startsWith('error') || type.startsWith('pair.rej')) return 'err';
+  if (type.startsWith('device.rev') || type === 'meta.dropped') return 'warn';
+  return 'info';
+}
+function opSummary(evt) {
+  if (evt.type === 'rpc.connected')    return `device ${escape(evt.name || evt.deviceId)} connected`;
+  if (evt.type === 'rpc.disconnected') return `device ${escape(evt.deviceId)} disconnected`;
+  if (evt.type === 'rpc.denied')       return `denied ${escape(evt.method)} (${escape(evt.code)})`;
+  if (evt.type === 'pair.consumed')    return `paired ${escape(evt.deviceName)}`;
+  if (evt.type === 'pair.rejected')    return `pairing rejected (${escape(evt.code)})`;
+  if (evt.type === 'device.revoked')   return `device ${escape(evt.deviceId)} revoked (${escape(evt.reason)})`;
+  if (evt.type === 'meta.dropped')     return `${evt.count} live events dropped (backpressure)`;
+  return `<code class="mono">${escape(JSON.stringify(evt))}</code>`;
+}
+
+// Filter chips + actions
+$('#trace-filters')?.addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-trace-filter]');
+  if (!chip) return;
+  traceFilter = chip.dataset.traceFilter || '';
+  $$('#trace-filters .chip').forEach((c) => c.classList.toggle('active', c === chip));
+  loadTraces();
+});
+$('#trace-refresh')?.addEventListener('click', loadTraces);
+$('#trace-clear')?.addEventListener('click', async () => {
+  if (!confirm('Clear the entire trace log? This deletes persisted history.')) return;
+  try { await rpc('trace.clear'); } catch {}
+  loadTraces();
+});
 
 // ── Setup tab (legacy DB form) ──────────────────────────────────────
 $('#db-mode')?.addEventListener('change', (e) => {

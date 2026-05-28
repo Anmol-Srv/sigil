@@ -38,13 +38,24 @@ export function registerIngestDoc(registry) {
       output: result.md?.url ?? null,
     };
 
-    const { default: bus } = await import('../events.js');
-    bus.emit('write.document', {
-      title: response.title,
-      skipped: response.skipped,
-      chunkCount: response.chunkCount,
-      factsAdded: response.facts?.added ?? 0,
-    });
+    const f = response.facts || {};
+    const { recordTrace } = await import('../trace-store.js');
+    recordTrace({
+      kind: 'ingest',
+      summary: `ingest "${String(response.title || 'document').slice(0, 60)}" → ${response.chunkCount} chunks, +${f.added ?? 0} facts${response.skipped ? ' (skipped)' : ''}`,
+      namespace: namespace || null,
+      detail: {
+        op: 'ingestDoc',
+        title: response.title,
+        documentId: response.documentId,
+        skipped: response.skipped,
+        route: result.route ?? null,
+        chunkCount: response.chunkCount,
+        counts: { added: f.added ?? 0, updated: f.updated ?? 0, skipped: f.skipped ?? 0, contradicted: f.contradicted ?? 0, total: f.total ?? 0 },
+        verdicts: f.verdicts || [],
+        entities: response.entities ? { entityCount: response.entities.entityCount, relationCount: response.entities.relationCount, topics: response.entities.topics || [] } : null,
+      },
+    }).catch(() => {});
 
     return response;
   });

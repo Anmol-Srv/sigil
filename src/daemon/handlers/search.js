@@ -44,13 +44,19 @@ export function registerSearch(registry) {
       relatedEntities: result.relatedEntities || [],
     };
 
-    const { default: bus } = await import('../events.js');
-    bus.emit('read.search', {
-      query: query.length > 80 ? query.slice(0, 80) + '…' : query,
-      namespaces,
-      factCount: response.facts.length,
-      chunkCount: response.chunks.length,
-    });
+    // Persist + broadcast the full causal trace (routing → entity → ranked
+    // scores → decay/activation → synthesis). Best-effort; never blocks search.
+    const trace = result._trace || {};
+    const qShort = query.length > 80 ? query.slice(0, 80) + '…' : query;
+    const strategy = trace.strategy === 'entity-first' ? ' · entity-first' : '';
+    const { recordTrace } = await import('../trace-store.js');
+    recordTrace({
+      kind: 'search',
+      summary: `"${qShort}" → ${response.facts.length} facts, ${response.chunks.length} chunks${strategy}`,
+      namespace: namespaces[0] || null,
+      durationMs: trace.durationMs ?? null,
+      detail: trace,
+    }).catch(() => {});
 
     return response;
   });
