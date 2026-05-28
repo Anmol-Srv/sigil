@@ -16,6 +16,13 @@ import { registerPing } from './handlers/ping.js';
 import { registerRemember } from './handlers/remember.js';
 import { registerSearch } from './handlers/search.js';
 import { registerStatus } from './handlers/status.js';
+import { registerSearchEntity } from './handlers/search-entity.js';
+import { registerTraverseGraph } from './handlers/traverse-graph.js';
+import { registerGetFactContext } from './handlers/get-fact-context.js';
+import { registerGetEntityContext } from './handlers/get-entity-context.js';
+import { registerGetPod } from './handlers/get-pod.js';
+import { registerListPods } from './handlers/list-pods.js';
+import { registerIngestDoc } from './handlers/ingest-doc.js';
 
 const STARTED_AT = Date.now();
 
@@ -41,6 +48,13 @@ export async function startDaemon({ foreground = false } = {}) {
   registerRemember(registry);
   registerSearch(registry);
   registerStatus(registry);
+  registerSearchEntity(registry);
+  registerTraverseGraph(registry);
+  registerGetFactContext(registry);
+  registerGetEntityContext(registry);
+  registerGetPod(registry);
+  registerListPods(registry);
+  registerIngestDoc(registry);
 
   const socket = await startSocketServer({ registry, log });
 

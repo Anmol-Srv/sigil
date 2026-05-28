@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { searchByName, listByType } from '../../memory/entities/store.js';
+import { daemonCall } from '../daemon-call.js';
 import { textResponse } from '../utils.js';
 
 function registerSearchEntityTool(server) {
@@ -20,24 +20,19 @@ Returns compact entity list. Use get_entity_context(entityId) for full details.`
       if (!query && !entityType) {
         return textResponse('Error: Provide either a query (entity name) or entityType.');
       }
+      const { entities } = await daemonCall('searchEntity', { query, entityType, limit, namespace });
 
-      const results = query
-        ? await searchByName(query, { entityType, namespace, limit })
-        : await listByType(entityType, { namespace, limit });
-
-      if (!results.length) {
+      if (!entities.length) {
         const filter = query ? `matching "${query}"` : `of type "${entityType}"`;
         return textResponse(`No entities found ${filter}.`);
       }
 
-      const lines = results.map((e) => {
+      const lines = entities.map((e) => {
         const desc = e.description ? ` — ${e.description}` : '';
         return `- **${e.name}** (${e.entityType}, id:${e.id}, ${e.mentionCount} mentions)${desc}`;
       });
-
       const header = query ? `Entities matching "${query}"` : `${entityType} entities`;
-
-      return textResponse(`${header} (${results.length}):\n${lines.join('\n')}\n\n_Use get_entity_context(entityId=<id>) for details or traverse_graph(startEntityId=<id>) for connections._`);
+      return textResponse(`${header} (${entities.length}):\n${lines.join('\n')}\n\n_Use get_entity_context(entityId=<id>) for details or traverse_graph(startEntityId=<id>) for connections._`);
     },
   );
 }

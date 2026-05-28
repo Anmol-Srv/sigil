@@ -45,6 +45,15 @@ async function startMcp() {
   const server = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Best-effort: close the shared daemon socket when the MCP client
+  // disconnects so we don't leak a half-open socket on the daemon side.
+  const { closeDaemonConnection } = await import('./daemon-call.js');
+  const cleanup = () => { closeDaemonConnection().catch(() => {}); };
+  process.on('SIGTERM', cleanup);
+  process.on('SIGINT', cleanup);
+  process.on('beforeExit', cleanup);
+
   return server;
 }
 

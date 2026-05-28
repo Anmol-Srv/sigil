@@ -1,9 +1,6 @@
 import { z } from 'zod';
 
-import { getStats } from '../../memory/documents/store.js';
-import { getEntityCount } from '../../memory/entities/store.js';
-import { getRelationCount } from '../../memory/entities/relations.js';
-import { getFactCount, getHotFacts } from '../../memory/facts/store.js';
+import { daemonCall } from '../daemon-call.js';
 import { textResponse, truncate } from '../utils.js';
 
 function registerStatusTool(server) {
@@ -15,24 +12,14 @@ Use when: checking system health, verifying ingestion, reviewing knowledge graph
       namespace: z.string().optional().describe('Filter by namespace. Omit for global stats.'),
     },
     async ({ namespace }) => {
-      const [docStats, factCount, documents, people, topics, relations, hotFacts] = await Promise.all([
-        getStats(namespace),
-        getFactCount(namespace),
-        getEntityCount('document'),
-        getEntityCount('person'),
-        getEntityCount('topic'),
-        getRelationCount(),
-        getHotFacts(namespace, { limit: 5 }),
-      ]);
-
-      const scope = namespace ? ` (${namespace})` : '';
+      const data = await daemonCall('status', { namespace, hotFactsLimit: 5 });
+      const scope = data.namespace ? ` (${data.namespace})` : '';
       const text = [
-        `Sigil KB${scope}: ${docStats.documentCount} docs, ${docStats.totalChunks} chunks, ${factCount} facts`,
-        `Entities: ${documents} documents, ${people} people, ${topics} topics`,
-        `Relations: ${relations}`,
-        `Hot facts (top ${hotFacts.length}): ${hotFacts.map((f) => `${truncate(f.content, 60)} (${f.accessCount}x)`).join(', ') || 'none yet'}`,
+        `Sigil KB${scope}: ${data.documents} docs, ${data.chunks} chunks, ${data.facts} facts`,
+        `Entities: ${data.entities.documents} documents, ${data.entities.people} people, ${data.entities.topics} topics`,
+        `Relations: ${data.relations}`,
+        `Hot facts (top ${data.hotFacts.length}): ${data.hotFacts.map((f) => `${truncate(f.content, 60)} (${f.accessCount}x)`).join(', ') || 'none yet'}`,
       ].join('\n');
-
       return textResponse(text);
     },
   );

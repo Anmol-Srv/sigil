@@ -18,34 +18,55 @@ export function registerSearch(registry) {
     const route       = Boolean(params.route);
     const synthesize  = Boolean(params.synthesize);
     const includeChunks = Boolean(params.includeChunks) || synthesize;
+    const minConfidence = params.minConfidence;
+    const pointInTime = params.pointInTime ? new Date(params.pointInTime) : undefined;
+    const podScope = params.podScope ?? null;
 
-    const { facts, chunks, synthesized } = await search(query, {
+    const result = await search(query, {
       namespaces,
       limit,
       useGraph,
       route,
       synthesize,
       includeChunks,
+      minConfidence,
+      pointInTime,
+      podScope,
     });
 
     return {
       query,
       namespaces,
-      facts: facts.map((f) => ({
-        content: f.content,
-        similarity: numOrNull(f.similarity),
-        rrfScore: numOrNull(f.rrfScore),
-        id: f.id ?? null,
-      })),
-      chunks: chunks.map((c) => ({
-        content: c.content,
-        similarity: numOrNull(c.similarity),
-        rrfScore: numOrNull(c.rrfScore),
-        id: c.id ?? null,
-      })),
-      synthesized: synthesized || null,
+      facts: (result.facts || []).map(serializeFact),
+      chunks: (result.chunks || []).map(serializeChunk),
+      synthesized: result.synthesized || null,
+      matchedEntity: result.matchedEntity || null,
+      relatedEntities: result.relatedEntities || [],
     };
   });
+}
+
+function serializeFact(f) {
+  return {
+    id: f.id ?? null,
+    uid: f.uid ?? null,
+    content: f.content,
+    category: f.category ?? null,
+    confidence: f.confidence ?? null,
+    importance: f.importance ?? null,
+    similarity: numOrNull(f.similarity),
+    rrfScore: numOrNull(f.rrfScore),
+  };
+}
+
+function serializeChunk(c) {
+  return {
+    id: c.id ?? null,
+    content: c.content,
+    sectionHeading: c.sectionHeading ?? null,
+    similarity: numOrNull(c.similarity),
+    rrfScore: numOrNull(c.rrfScore),
+  };
 }
 
 function numOrNull(v) {

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { listPods } from '../../memory/pods/store.js';
+import { daemonCall } from '../daemon-call.js';
 import { textResponse } from '../utils.js';
 
 function registerListPodsTool(server) {
@@ -18,13 +18,11 @@ project, connector_workspace, custom.`,
       limit: z.number().int().positive().max(100).optional().default(20),
     },
     async ({ type, namespace, status, limit }) => {
-      const pods = await listPods({ podType: type, namespace, status, limit });
-
+      const { pods } = await daemonCall('listPods', { type, namespace, status, limit });
       if (!pods.length) {
         const filter = type ? ` of type "${type}"` : '';
         return textResponse(`No${filter} pods found.`);
       }
-
       const lines = [`Found ${pods.length} pod${pods.length === 1 ? '' : 's'}:`, ''];
       for (const p of pods) {
         const facts = p.memberFactCount ?? 0;
@@ -37,7 +35,6 @@ project, connector_workspace, custom.`,
       }
       lines.push('');
       lines.push('_Use get_pod(uid=...) for member facts and full metadata._');
-
       return textResponse(lines.join('\n'));
     },
   );

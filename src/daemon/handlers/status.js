@@ -3,13 +3,14 @@ export function registerStatus(registry) {
     const { getStats } = await import('../../memory/documents/store.js');
     const { getEntityCount } = await import('../../memory/entities/store.js');
     const { getRelationCount } = await import('../../memory/entities/relations.js');
-    const { getFactCount } = await import('../../memory/facts/store.js');
+    const { getFactCount, getHotFacts } = await import('../../memory/facts/store.js');
     const { getEntityHebbianStats } = await import('../../memory/lifecycle/entity-hebbian.js');
     const { default: cortexDb } = await import('../../db/cortex.js');
 
     const namespace = params.namespace || null;
+    const hotFactsLimit = Number.isFinite(params.hotFactsLimit) ? params.hotFactsLimit : 5;
 
-    const [docStats, factCount, documents, people, topics, relations, podRows, hebbian] = await Promise.all([
+    const [docStats, factCount, documents, people, topics, relations, podRows, hebbian, hotFacts] = await Promise.all([
       getStats(namespace),
       getFactCount(namespace),
       getEntityCount('document'),
@@ -18,6 +19,7 @@ export function registerStatus(registry) {
       getRelationCount(),
       cortexDb('pod').where({ status: 'active' }).select('podType'),
       getEntityHebbianStats({ topN: 3 }).catch(() => null),
+      getHotFacts(namespace, { limit: hotFactsLimit }).catch(() => []),
     ]);
 
     const podsByType = podRows.reduce((acc, r) => {
@@ -33,6 +35,11 @@ export function registerStatus(registry) {
       entities: { documents, people, topics },
       relations,
       podsByType,
+      hotFacts: (hotFacts || []).map((f) => ({
+        id: f.id ?? null,
+        content: f.content,
+        accessCount: f.accessCount ?? 0,
+      })),
       hebbian: hebbian
         ? {
             edgeCount: hebbian.edgeCount,

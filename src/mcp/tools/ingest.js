@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
-import { ingestDocument } from '../../ingestion/pipeline.js';
-import { resolveSource } from '../../ingestion/resolve-source.js';
+import { daemonCall } from '../daemon-call.js';
 import { textResponse } from '../utils.js';
 
 function registerIngestTool(server) {
@@ -21,22 +20,7 @@ Use when: adding documents to the knowledge base, ingesting files, URLs, or raw 
       skipEntities: z.boolean().optional().default(false).describe('Skip entity linking'),
     },
     async ({ content, filePath, url, title, namespace, sourceType, skipFacts, skipEntities }) => {
-      const source = await resolveSource({ content, filePath, url, title, sourceType });
-      if (!source) {
-        return textResponse('Error: provide content, filePath, or url.');
-      }
-
-      const result = await ingestDocument({
-        content: source.content,
-        title: title || source.title,
-        sourcePath: source.sourcePath,
-        sourceType: sourceType || source.sourceType,
-        contentType: source.contentType,
-        namespace,
-        metadata: source.metadata,
-        skipFacts,
-        skipEntities,
-      });
+      const result = await daemonCall('ingestDoc', { content, filePath, url, title, namespace, sourceType, skipFacts, skipEntities });
 
       const text = result.skipped
         ? `Document "${result.title}" already up to date — skipped.`
@@ -46,7 +30,7 @@ Use when: adding documents to the knowledge base, ingesting files, URLs, or raw 
             `- Chunks: ${result.chunkCount}`,
             result.facts ? `- Facts: ${result.facts.total} extracted (${result.facts.added} new, ${result.facts.skipped} skipped)` : '- Facts: skipped',
             result.entities ? `- Entities: ${result.entities.entityCount}, Relations: ${result.entities.relationCount}` : '- Entities: skipped',
-            result.md ? `- Output: ${result.md.url}` : '',
+            result.output ? `- Output: ${result.output}` : '',
           ].filter(Boolean).join('\n');
 
       return textResponse(text);
