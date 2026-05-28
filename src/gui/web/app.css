@@ -92,6 +92,7 @@ code, .mono { font-family: var(--font-mono); }
    ════════════════════════════════════════════════════════════════════════ */
 header {
   height: var(--header-h);
+  flex-shrink: 0;
   border-bottom: 1px solid var(--border);
   background: var(--bg-surface);
   position: sticky;
@@ -809,6 +810,7 @@ pre.result.err { border-color: rgba(226,100,100,0.30); }
    ════════════════════════════════════════════════════════════════════════ */
 footer {
   padding: var(--s-3) 0;
+  flex-shrink: 0;
   border-top: 1px solid var(--border);
   background: var(--bg-surface);
   color: var(--fg-3);
