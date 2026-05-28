@@ -22,6 +22,7 @@ import { registerForgetFact } from './forget-fact.js';
 import { registerRefreshContext } from './refresh-context.js';
 import { registerTestDbConnection } from './test-db-connection.js';
 import { registerRunMigrations } from './run-migrations.js';
+import { registerEnsurePgvector } from './ensure-pgvector.js';
 import { registerEnv } from './env.js';
 import { registerNodeInfo } from './node-info.js';
 import { registerPair } from './pair.js';
@@ -46,6 +47,7 @@ export function registerAll(registry, { startedAt }) {
   registerRefreshContext(registry);
   registerTestDbConnection(registry);
   registerRunMigrations(registry);
+  registerEnsurePgvector(registry);
   registerEnv(registry);
   registerNodeInfo(registry);
   registerPair(registry);

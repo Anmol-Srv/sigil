@@ -8,99 +8,154 @@
 </head>
 <body>
   <header>
-    <h1>Sigil</h1>
+    <div class="brand">
+      <div class="brand-mark"></div>
+      <div class="brand-name">Sigil</div>
+      <div class="brand-badge" id="brand-badge">local</div>
+    </div>
     <nav>
-      <a href="#health" data-route="health" class="active">Health</a>
-      <a href="#kb" data-route="kb">Knowledge Base</a>
-      <a href="#devices" data-route="devices">Devices</a>
+      <a href="#health"   data-route="health"   class="active">Overview</a>
+      <a href="#kb"       data-route="kb">Knowledge Base</a>
+      <a href="#devices"  data-route="devices">Devices</a>
       <a href="#activity" data-route="activity">Activity</a>
-      <a href="#setup" data-route="setup">Setup</a>
+      <a href="#setup"    data-route="setup">Setup</a>
       <a href="#settings" data-route="settings">Settings</a>
-      <a href="#methods" data-route="methods">RPC</a>
+      <a href="#methods"  data-route="methods">RPC</a>
     </nav>
-    <div class="status-pill" id="conn">connecting…</div>
+    <div class="conn-status" id="conn">connecting…</div>
   </header>
 
   <main>
+    <!-- ── Overview ─────────────────────────────────────────────── -->
     <section id="view-health" class="view active">
-      <h2>Daemon</h2>
-      <dl id="health-pane"><dt>pid</dt><dd>—</dd></dl>
-    </section>
-
-    <section id="view-kb" class="view">
-      <h2>Knowledge Base</h2>
-      <dl id="kb-pane"><dt>facts</dt><dd>—</dd></dl>
-      <h3>Hot facts</h3>
-      <ul id="hot-facts"></ul>
-    </section>
-
-    <section id="view-devices" class="view">
-      <h2>Paired devices</h2>
-      <p class="muted">Devices that have joined this Sigil cluster. Cryptographic identity = Ed25519 NodeID. Revoke to lock a device out without affecting its data history.</p>
-
-      <div class="actions">
-        <button id="dev-new">Create pairing code</button>
-        <button id="dev-refresh">Refresh</button>
-      </div>
-
-      <div id="dev-modal" class="modal" hidden>
-        <div class="modal-body">
-          <h3>New pairing code</h3>
-          <form id="dev-form">
-            <label><span>Device name</span><input type="text" id="dev-name" placeholder="laptop-b" autocomplete="off"></label>
-            <div class="row">
-              <label><span>Role</span><select id="dev-role"><option>reader</option><option selected>writer</option><option>admin</option></select></label>
-              <label><span>TTL (sec)</span><input type="number" id="dev-ttl" value="600"></label>
-            </div>
-            <label><span>Namespaces (comma-separated; empty = all)</span><input type="text" id="dev-ns" autocomplete="off"></label>
-            <div class="actions">
-              <button type="button" id="dev-create">Create</button>
-              <button type="button" id="dev-cancel">Cancel</button>
-            </div>
-          </form>
-          <pre id="dev-code-result" class="result" hidden></pre>
+      <div class="section-head">
+        <div>
+          <h2>Overview</h2>
+          <p>This Sigil install — its daemon process, identity, and where it stores memory.</p>
         </div>
       </div>
 
-      <table id="dev-table">
-        <thead><tr><th>Name</th><th>NodeID</th><th>Role</th><th>Namespaces</th><th>Last seen</th><th>Status</th><th></th></tr></thead>
-        <tbody><tr><td colspan="7" class="muted">loading…</td></tr></tbody>
-      </table>
+      <div class="banner-cards">
+        <div class="card">
+          <span class="lbl">Daemon</span>
+          <span class="title" id="hc-pid">—</span>
+          <span class="desc" id="hc-uptime">uptime …</span>
+        </div>
+        <div class="card">
+          <span class="lbl">Mode</span>
+          <span class="title" id="hc-mode">—</span>
+          <span class="desc" id="hc-driver">DB driver …</span>
+        </div>
+        <div class="card">
+          <span class="lbl">Identity</span>
+          <span class="title mono" id="hc-nodeid">—</span>
+          <span class="desc" id="hc-relay">no Iroh</span>
+        </div>
+      </div>
+
+      <h3>Details</h3>
+      <dl id="health-pane"><dt>pid</dt><dd>—</dd></dl>
+    </section>
+
+    <!-- ── Knowledge Base ───────────────────────────────────────── -->
+    <section id="view-kb" class="view">
+      <div class="section-head">
+        <div>
+          <h2>Knowledge Base</h2>
+          <p>Current document, chunk, fact, and entity counts. Hot facts power the Active Context block injected into every Claude Code session.</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="kb-refresh">Refresh</button>
+        </div>
+      </div>
+
+      <dl id="kb-pane"><dt>facts</dt><dd>—</dd></dl>
+
+      <h3>Hot facts</h3>
+      <ul id="hot-facts" class="methods-grid"></ul>
+    </section>
+
+    <!-- ── Devices ──────────────────────────────────────────────── -->
+    <section id="view-devices" class="view">
+      <div class="section-head">
+        <div>
+          <h2>Devices</h2>
+          <p>Other Sigil installs that have paired with this device. Identity is an Ed25519 NodeID; revoke locks a device out without affecting its data history.</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="dev-refresh">Refresh</button>
+          <button class="btn primary" id="dev-new">+ Add device</button>
+        </div>
+      </div>
+
+      <div class="row-count" id="dev-count">— devices</div>
+
+      <div class="table-wrap" id="dev-table-wrap">
+        <table id="dev-table">
+          <thead>
+            <tr>
+              <th>Device</th>
+              <th>NodeID</th>
+              <th>Role</th>
+              <th>Namespaces</th>
+              <th>Last seen</th>
+              <th>Status</th>
+              <th style="text-align:right">Actions</th>
+            </tr>
+          </thead>
+          <tbody><tr><td colspan="7" class="empty">loading…</td></tr></tbody>
+        </table>
+      </div>
 
       <h3>Pending pairing codes</h3>
-      <table id="dev-codes">
-        <thead><tr><th>Code id</th><th>Name</th><th>Role</th><th>Expires</th><th>Status</th><th></th></tr></thead>
-        <tbody><tr><td colspan="6" class="muted">loading…</td></tr></tbody>
-      </table>
+      <div class="table-wrap">
+        <table id="dev-codes">
+          <thead>
+            <tr><th>Code id</th><th>Device name</th><th>Role</th><th>Expires</th><th>Status</th><th style="text-align:right">Actions</th></tr>
+          </thead>
+          <tbody><tr><td colspan="6" class="empty">loading…</td></tr></tbody>
+        </table>
+      </div>
     </section>
 
+    <!-- ── Activity ─────────────────────────────────────────────── -->
     <section id="view-activity" class="view">
-      <h2>Live activity</h2>
-      <p class="muted">Streamed over WebSocket from sigild. Shows every write, search, and event the daemon emits.</p>
-      <div class="activity-controls">
-        <button id="activity-clear">Clear</button>
-        <span id="activity-status" class="muted">disconnected</span>
+      <div class="section-head">
+        <div>
+          <h2>Live activity</h2>
+          <p>Streamed over WebSocket. Every write, search, peer connect/disconnect, and revocation appears here in real time.</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="activity-clear">Clear</button>
+          <span class="conn-status" id="activity-status">disconnected</span>
+        </div>
       </div>
       <ul id="activity-feed"></ul>
+      <div class="empty" id="activity-empty">no events yet — try `sigil remember "test"` in another terminal</div>
     </section>
 
+    <!-- ── Setup ────────────────────────────────────────────────── -->
     <section id="view-setup" class="view">
-      <h2>Database setup</h2>
-      <p class="muted">Test a Postgres connection before committing it to <code>~/.sigil/.env</code>. Use a connection URL (Neon / Supabase / RDS / Render / Railway / self-hosted) or discrete fields.</p>
+      <div class="section-head">
+        <div>
+          <h2>Database setup</h2>
+          <p>Test a Postgres connection before committing it. Either a connection URL (Neon, Supabase, RDS, Render, Railway, CockroachDB) or discrete fields.</p>
+        </div>
+      </div>
 
       <form id="db-form">
         <label>
           <span>Mode</span>
           <select id="db-mode">
             <option value="url">Connection URL</option>
-            <option value="fields">Host / Port / DB / User / Password</option>
+            <option value="fields">Host / Port / Database / User / Password</option>
           </select>
         </label>
 
         <div id="db-url-pane">
           <label>
-            <span>URL</span>
-            <input type="text" id="db-url" placeholder="postgres://user:pass@host.neon.tech/db" autocomplete="off">
+            <span>Postgres URL</span>
+            <input type="text" id="db-url" placeholder="postgres://user:pass@host.neon.tech/db?sslmode=require" autocomplete="off">
           </label>
         </div>
 
@@ -117,33 +172,130 @@
         </div>
 
         <div class="actions">
-          <button type="button" id="db-test">Test connection</button>
-          <button type="button" id="db-migrate" disabled>Run migrations</button>
+          <button type="button" class="btn primary" id="db-test">Test connection</button>
+          <button type="button" class="btn" id="db-pgvector" disabled hidden>Install pgvector</button>
+          <button type="button" class="btn" id="db-migrate" disabled>Run migrations</button>
         </div>
       </form>
 
-      <pre id="db-result" class="result"></pre>
+      <pre id="db-result" class="result" style="display:none"></pre>
     </section>
 
+    <!-- ── Settings ─────────────────────────────────────────────── -->
     <section id="view-settings" class="view">
-      <h2>Environment</h2>
-      <p class="muted">Variables read from <code>~/.sigil/.env</code>. Secret keys (anything ending in KEY, PASSWORD, TOKEN, SECRET) are masked.</p>
-      <table id="env-table">
-        <thead><tr><th>Key</th><th>Value</th></tr></thead>
-        <tbody><tr><td colspan="2" class="muted">loading…</td></tr></tbody>
-      </table>
+      <div class="section-head">
+        <div>
+          <h2>Environment</h2>
+          <p>Variables read from <code class="mono">~/.sigil/.env</code>. Secret keys (anything ending in KEY, PASSWORD, TOKEN, SECRET) are masked.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="env-table">
+          <thead><tr><th>Key</th><th>Value</th></tr></thead>
+          <tbody><tr><td colspan="2" class="empty">loading…</td></tr></tbody>
+        </table>
+      </div>
     </section>
 
+    <!-- ── RPC ──────────────────────────────────────────────────── -->
     <section id="view-methods" class="view">
-      <h2>RPC Methods</h2>
-      <p class="muted">All RPC methods registered on this daemon. The CLI, MCP server, and this GUI all route through the same registry.</p>
-      <ul id="methods-list"></ul>
+      <div class="section-head">
+        <div>
+          <h2>RPC methods</h2>
+          <p>All methods registered on this daemon. The CLI, MCP server, and this GUI all route through the same registry.</p>
+        </div>
+      </div>
+      <ul id="methods-list" class="methods-grid"></ul>
     </section>
   </main>
 
   <footer>
-    <span id="footer-status">Sigil GUI · loopback only · auth via gui.token</span>
+    <div class="footer-inner">
+      <span>Sigil GUI · loopback only · auth via <code class="mono">gui.token</code></span>
+      <span><span id="footer-version">v?</span> · pid <span id="footer-pid">—</span></span>
+    </div>
   </footer>
+
+  <!-- ── Pair-create modal ──────────────────────────────────────── -->
+  <div id="dev-modal" class="modal" hidden>
+    <div class="modal-body" role="dialog" aria-labelledby="dev-modal-title" aria-modal="true">
+      <div class="modal-header">
+        <h3 id="dev-modal-title">Add device</h3>
+        <button class="modal-close" data-close-modal="dev-modal" aria-label="Close">×</button>
+      </div>
+      <div class="modal-content">
+        <!-- form view -->
+        <form id="dev-form">
+          <label><span>Device name</span><input type="text" id="dev-name" placeholder="laptop-b" autocomplete="off"></label>
+          <div class="row">
+            <label><span>Role</span>
+              <select id="dev-role">
+                <option value="reader">reader — read only</option>
+                <option value="writer" selected>writer — read + write</option>
+                <option value="admin">admin — full access</option>
+              </select>
+            </label>
+            <label><span>TTL (seconds)</span><input type="number" id="dev-ttl" value="600"></label>
+          </div>
+          <label><span>Namespaces <span class="muted">(comma-separated; empty = all)</span></span><input type="text" id="dev-ns" autocomplete="off"></label>
+        </form>
+
+        <!-- code result view (hidden until create succeeds) -->
+        <div id="dev-result-view" hidden>
+          <div class="code-card">
+            <div class="lbl">Pairing code</div>
+            <div class="code" id="dev-result-code">—<button class="copy-btn" data-copy="dev-result-code">copy</button></div>
+          </div>
+          <div class="code-card">
+            <div class="lbl">Master NodeID</div>
+            <div class="code mono" style="font-size: 13px;" id="dev-result-master">—<button class="copy-btn" data-copy="dev-result-master">copy</button></div>
+          </div>
+          <p class="muted" style="font-size: 12.5px; margin: 0 0 6px;">On the joining device, run:</p>
+          <div class="join-cmd" id="dev-result-cmd">—</div>
+          <button class="copy-btn" data-copy="dev-result-cmd" style="margin-top: 8px;">copy command</button>
+          <p class="muted" style="font-size: 12px; margin-top: 14px;">Expires at <span id="dev-result-expiry" class="mono">—</span></p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn ghost" data-close-modal="dev-modal" id="dev-cancel">Cancel</button>
+        <button type="button" class="btn primary" id="dev-create">Create pairing code</button>
+        <button type="button" class="btn primary" id="dev-done" hidden data-close-modal="dev-modal">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Revoke device modal ────────────────────────────────────── -->
+  <div id="revoke-modal" class="modal" hidden>
+    <div class="modal-body" role="dialog" aria-labelledby="revoke-modal-title" aria-modal="true">
+      <div class="modal-header">
+        <h3 id="revoke-modal-title">Revoke device</h3>
+        <button class="modal-close" data-close-modal="revoke-modal" aria-label="Close">×</button>
+      </div>
+      <div class="modal-content">
+        <p style="margin: 0 0 14px; color: var(--fg-2);">Revoke <strong id="revoke-target-name">—</strong>?</p>
+        <div class="radio-card-group">
+          <label class="radio-card">
+            <input type="radio" name="revoke-reason" value="paused" checked>
+            <div>
+              <div class="rc-title">Paused</div>
+              <div class="rc-desc">Temporary — the device can be re-activated later from this dashboard without re-pairing.</div>
+            </div>
+          </label>
+          <label class="radio-card danger">
+            <input type="radio" name="revoke-reason" value="compromised">
+            <div>
+              <div class="rc-title">Compromised</div>
+              <div class="rc-desc">Terminal — the keypair leaked. Re-activation is blocked; the device must re-pair with a fresh code.</div>
+            </div>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn ghost" data-close-modal="revoke-modal">Cancel</button>
+        <button type="button" class="btn danger" id="revoke-confirm">Revoke</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="/static/app.js"></script>
 </body>
