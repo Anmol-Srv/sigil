@@ -32,6 +32,7 @@ function setRoute(name) {
   if (name === 'health')   refreshHealth();
   if (name === 'settings') refreshEnv();
   if (name === 'activity') ensureActivityWs();
+  if (name === 'devices')  refreshDevices();
 }
 
 function renderDl(node, entries) {
@@ -212,6 +213,111 @@ $('#db-migrate').addEventListener('click', async () => {
   }
 });
 
+// ── Devices ───────────────────────────────────────────────────────────
+async function refreshDevices() {
+  // Devices
+  try {
+    const { devices } = await rpc('device.list', {});
+    const tbody = $('#dev-table tbody');
+    if (!devices.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="muted">no devices paired yet</td></tr>';
+    } else {
+      tbody.innerHTML = devices.map((d) => `
+        <tr>
+          <td>${escape(d.name)}</td>
+          <td><code>${escape(d.nodeId.slice(0, 16))}…</code></td>
+          <td><span class="badge ${d.role === 'admin' ? 'err' : d.role === 'writer' ? 'ok' : ''}">${escape(d.role)}</span></td>
+          <td>${escape((d.namespaces && d.namespaces.length) ? d.namespaces.join(', ') : '(all)')}</td>
+          <td>${escape(d.lastSeenAt ? new Date(d.lastSeenAt).toISOString().slice(0, 16).replace('T', ' ') : '—')}</td>
+          <td><span class="badge ${d.active ? 'ok' : 'err'}">${d.active ? 'active' : 'revoked'}</span></td>
+          <td>${d.active
+            ? `<button data-revoke="${d.id}">Revoke</button>`
+            : `<button data-activate="${d.id}">Re-activate</button>`}</td>
+        </tr>
+      `).join('');
+      tbody.querySelectorAll('button[data-revoke]').forEach((b) => {
+        b.addEventListener('click', async () => {
+          if (!confirm(`Revoke device ${b.dataset.revoke}? Future RPC calls will be rejected.`)) return;
+          await rpc('device.revoke', { id: Number(b.dataset.revoke) });
+          refreshDevices();
+        });
+      });
+      tbody.querySelectorAll('button[data-activate]').forEach((b) => {
+        b.addEventListener('click', async () => {
+          await rpc('device.activate', { id: Number(b.dataset.activate) });
+          refreshDevices();
+        });
+      });
+    }
+  } catch (err) {
+    $('#dev-table tbody').innerHTML = `<tr><td colspan="7" class="muted">${escape(err.message)}</td></tr>`;
+  }
+
+  // Pending pairing codes
+  try {
+    const { codes } = await rpc('pair.list', {});
+    const tbody = $('#dev-codes tbody');
+    if (!codes.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="muted">no codes outstanding</td></tr>';
+    } else {
+      tbody.innerHTML = codes.map((c) => {
+        const status = c.consumedBy ? `consumed by ${escape(c.consumedBy.name)}` : c.expired ? 'EXPIRED' : 'pending';
+        return `<tr>
+          <td>${c.id}</td>
+          <td>${escape(c.name)}</td>
+          <td>${escape(c.role)}</td>
+          <td>${escape(new Date(c.expiresAt).toISOString().slice(0, 16).replace('T', ' '))}</td>
+          <td>${status}</td>
+          <td>${!c.consumedBy ? `<button data-revoke-code="${c.id}">Revoke</button>` : ''}</td>
+        </tr>`;
+      }).join('');
+      tbody.querySelectorAll('button[data-revoke-code]').forEach((b) => {
+        b.addEventListener('click', async () => {
+          await rpc('pair.revoke', { id: Number(b.dataset.revokeCode) });
+          refreshDevices();
+        });
+      });
+    }
+  } catch (err) {
+    $('#dev-codes tbody').innerHTML = `<tr><td colspan="6" class="muted">${escape(err.message)}</td></tr>`;
+  }
+}
+
+function openDevModal() {
+  $('#dev-modal').hidden = false;
+  $('#dev-code-result').hidden = true;
+  $('#dev-name').focus();
+}
+function closeDevModal() { $('#dev-modal').hidden = true; }
+
+$('#dev-new').addEventListener('click', openDevModal);
+$('#dev-refresh').addEventListener('click', refreshDevices);
+$('#dev-cancel').addEventListener('click', closeDevModal);
+$('#dev-create').addEventListener('click', async () => {
+  const name = $('#dev-name').value.trim();
+  if (!name) return alert('Device name is required');
+  const role = $('#dev-role').value;
+  const ttl = Number($('#dev-ttl').value) || 600;
+  const ns = $('#dev-ns').value.trim();
+  try {
+    const data = await rpc('pair.create', {
+      name, role, ttlSeconds: ttl,
+      namespaces: ns ? ns.split(',').map((s) => s.trim()).filter(Boolean) : [],
+    });
+    const cmd = `sigil join ${data.masterNodeId || '<master-node-id>'} ${data.code} --name ${data.name}`;
+    $('#dev-code-result').textContent =
+      `code:          ${data.code}\n`
+      + `master nodeId: ${data.masterNodeId || '(iroh not running)'}\n`
+      + `expires at:    ${data.expiresAt}\n\n`
+      + `On the joining device, run:\n  ${cmd}`;
+    $('#dev-code-result').hidden = false;
+    refreshDevices();
+  } catch (err) {
+    $('#dev-code-result').textContent = `ERROR: ${err.message}`;
+    $('#dev-code-result').hidden = false;
+  }
+});
+
 // ── Bootstrap ─────────────────────────────────────────────────────────
 $$('nav a').forEach((a) => {
   a.addEventListener('click', (e) => {
@@ -220,7 +326,7 @@ $$('nav a').forEach((a) => {
   });
 });
 const initial = (window.location.hash || '#health').slice(1);
-setRoute(['health', 'kb', 'activity', 'setup', 'settings', 'methods'].includes(initial) ? initial : 'health');
+setRoute(['health', 'kb', 'devices', 'activity', 'setup', 'settings', 'methods'].includes(initial) ? initial : 'health');
 
 // Refresh health every 5s so the connection pill stays current.
 setInterval(refreshHealth, 5000);

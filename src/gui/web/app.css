@@ -164,3 +164,20 @@ tr:last-child td { border-bottom: none; }
 }
 #activity-feed .ts { color: var(--muted); font-family: ui-monospace, monospace; }
 
+/* Devices */
+table button {
+  padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border);
+  background: transparent; color: var(--fg); font-size: 12px; cursor: pointer;
+}
+table button:hover { background: var(--border); }
+
+.modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+.modal-body {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; padding: 24px; min-width: 460px; max-width: 560px;
+}
+.modal-body h3 { margin-top: 0; }
+

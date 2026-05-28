@@ -12,6 +12,7 @@
     <nav>
       <a href="#health" data-route="health" class="active">Health</a>
       <a href="#kb" data-route="kb">Knowledge Base</a>
+      <a href="#devices" data-route="devices">Devices</a>
       <a href="#activity" data-route="activity">Activity</a>
       <a href="#setup" data-route="setup">Setup</a>
       <a href="#settings" data-route="settings">Settings</a>
@@ -31,6 +32,46 @@
       <dl id="kb-pane"><dt>facts</dt><dd>—</dd></dl>
       <h3>Hot facts</h3>
       <ul id="hot-facts"></ul>
+    </section>
+
+    <section id="view-devices" class="view">
+      <h2>Paired devices</h2>
+      <p class="muted">Devices that have joined this Sigil cluster. Cryptographic identity = Ed25519 NodeID. Revoke to lock a device out without affecting its data history.</p>
+
+      <div class="actions">
+        <button id="dev-new">Create pairing code</button>
+        <button id="dev-refresh">Refresh</button>
+      </div>
+
+      <div id="dev-modal" class="modal" hidden>
+        <div class="modal-body">
+          <h3>New pairing code</h3>
+          <form id="dev-form">
+            <label><span>Device name</span><input type="text" id="dev-name" placeholder="laptop-b" autocomplete="off"></label>
+            <div class="row">
+              <label><span>Role</span><select id="dev-role"><option>reader</option><option selected>writer</option><option>admin</option></select></label>
+              <label><span>TTL (sec)</span><input type="number" id="dev-ttl" value="600"></label>
+            </div>
+            <label><span>Namespaces (comma-separated; empty = all)</span><input type="text" id="dev-ns" autocomplete="off"></label>
+            <div class="actions">
+              <button type="button" id="dev-create">Create</button>
+              <button type="button" id="dev-cancel">Cancel</button>
+            </div>
+          </form>
+          <pre id="dev-code-result" class="result" hidden></pre>
+        </div>
+      </div>
+
+      <table id="dev-table">
+        <thead><tr><th>Name</th><th>NodeID</th><th>Role</th><th>Namespaces</th><th>Last seen</th><th>Status</th><th></th></tr></thead>
+        <tbody><tr><td colspan="7" class="muted">loading…</td></tr></tbody>
+      </table>
+
+      <h3>Pending pairing codes</h3>
+      <table id="dev-codes">
+        <thead><tr><th>Code id</th><th>Name</th><th>Role</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+        <tbody><tr><td colspan="6" class="muted">loading…</td></tr></tbody>
+      </table>
     </section>
 
     <section id="view-activity" class="view">
