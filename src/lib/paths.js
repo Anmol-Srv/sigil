@@ -45,6 +45,11 @@ export const SIGIL_ACTIVE_SESSION_CURSOR = join(SIGIL_HOME, '.active-session.jso
 export const SIGIL_STOP_CURSOR = join(SIGIL_HOME, '.stop-cursor.json');
 export const SIGIL_HOOK_DEDUP = join(SIGIL_HOME, '.hook-dedup.json');
 
+// Daemon
+export const SIGIL_DAEMON_SOCK = join(SIGIL_HOME, 'sock');
+export const SIGIL_DAEMON_PID  = join(SIGIL_HOME, 'sigild.pid');
+export const SIGIL_DAEMON_LOG  = join(SIGIL_HOME, 'sigild.log');
+
 export const CLAUDE_HOME = join(HOME, '.claude');
 export const CLAUDE_SETTINGS_PATH = join(CLAUDE_HOME, 'settings.json');
 export const CLAUDE_MD_PATH = join(CLAUDE_HOME, 'CLAUDE.md');

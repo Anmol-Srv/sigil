@@ -54,6 +54,7 @@ Commands:
   migrate                  Run database migrations
   reset                    Reset the database (drops all data)
   register                 Register as a Claude Code MCP server (advanced)
+  daemon <sub>             Control the Sigil daemon (start | stop | status | logs)
 
 Options:
   --help                   Show this help message
@@ -86,7 +87,13 @@ const commands = {
   register: runRegister,
   why: runWhy,
   kind: runKind,
+  daemon: runDaemonVerb,
 };
+
+async function runDaemonVerb(args) {
+  const { runDaemon } = await import('./cli-handlers/daemon.js');
+  return runDaemon(args);
+}
 
 const handler = commands[command];
 if (!handler) {
@@ -1515,7 +1522,10 @@ Examples:
   }
 
   if (background) {
-    // Spawn detached process and return immediately
+    // Spawn detached subprocess that itself routes through the daemon.
+    // The user gets an instant return; the actual ingest happens in the
+    // daemon process anyway (the detached child just sends the RPC and
+    // exits once the call resolves).
     const { spawn } = await import('node:child_process');
     const child = spawn(
       process.execPath,
@@ -1527,51 +1537,18 @@ Examples:
     return;
   }
 
-  const { ingestDocument } = await import('./ingestion/pipeline.js');
-  const config = (await import('./config.js')).default;
-  const cortexDb = (await import('./db/cortex.js')).default;
-
-  // Ingest sequentially. Parallel ingests with shared topics ("auth",
-  // "TypeScript", "Smara") race on entity creation AND on entity-rename
-  // updates — Stage 4's insert-on-conflict handles the create race, but
-  // updateName can still hit a unique-violation when two ingests try to
-  // rename different entity rows to the same canonical name. Sequential
-  // is ~Nx slower for N facts but eliminates the contention class entirely
-  // and preserves AUDM's pairwise dedup invariants. (`sigil remember A B C`
-  // typical: 3 facts × ~1.5s = 4.5s, fine for any UX.)
-  const results = [];
-  for (const text of facts) {
-    const result = await ingestDocument({ content: text, namespace: config.defaults.namespace, classify: true });
-    results.push(result);
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+  try {
+    const { data } = await client.call('remember', { facts });
+    const parts = [];
+    if (data.added)        parts.push(`${data.added} new`);
+    if (data.updated)      parts.push(`${data.updated} updated`);
+    if (data.alreadyKnown) parts.push(`${data.alreadyKnown} already known`);
+    console.log(parts.length ? `Remembered. (${parts.join(', ')})` : 'Already known.');
+  } finally {
+    await client.close();
   }
-
-  let totalAdded = 0;
-  let totalUpdated = 0;
-  let alreadyKnown = 0;
-
-  for (const result of results) {
-    if (result.skipped || result.route === 'noise') {
-      alreadyKnown++;
-    } else {
-      totalAdded += result.facts?.added ?? 0;
-      totalUpdated += result.facts?.updated ?? 0;
-      if ((result.facts?.added ?? 0) + (result.facts?.updated ?? 0) === 0) alreadyKnown++;
-    }
-  }
-
-  // Refresh hot-context snapshot so new facts are available at next session start
-  if (totalAdded + totalUpdated > 0) {
-    const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
-    await updateContextSnapshot({ namespace: config.defaults.namespace }).catch(() => {});
-  }
-
-  await cortexDb.destroy();
-
-  const parts = [];
-  if (totalAdded)   parts.push(`${totalAdded} new`);
-  if (totalUpdated) parts.push(`${totalUpdated} updated`);
-  if (alreadyKnown) parts.push(`${alreadyKnown} already known`);
-  console.log(parts.length ? `Remembered. (${parts.join(', ')})` : 'Already known.');
 }
 
 
@@ -1811,51 +1788,44 @@ Examples:
     process.exit(0);
   }
 
-  const { search } = await import('./memory/search/hybrid.js');
-  const config = (await import('./config.js')).default;
-  const cortexDb = (await import('./db/cortex.js')).default;
-
   const nsFlag = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1];
-  const namespaces = nsFlag ? nsFlag.split(',') : [config.defaults.namespace];
+  const namespaces = nsFlag ? nsFlag.split(',') : undefined;
   const limit = Number(flags.find((f) => f.startsWith('--limit='))?.split('=')[1] || 10);
   const useGraph = flags.includes('--graph') && !flags.includes('--no-graph');
   const route = flags.includes('--route');
   const synthesize = flags.includes('--synthesize');
   const includeChunks = flags.includes('--chunks') || synthesize;
 
-  const { facts, chunks, synthesized } = await search(query, {
-    namespaces,
-    limit,
-    useGraph,
-    route,
-    synthesize,
-    includeChunks,
-  });
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+  try {
+    const { data } = await client.call('search', {
+      query, namespaces, limit, useGraph, route, synthesize, includeChunks,
+    });
 
-  if (synthesized) {
-    console.log(synthesized);
-  }
+    if (data.synthesized) console.log(data.synthesized);
 
-  if (facts.length) {
-    console.log(`\nFacts (${facts.length}):`);
-    for (const fact of facts) {
-      console.log(`  ${fact.content}${formatRelevance(fact)}`);
+    if (data.facts.length) {
+      console.log(`\nFacts (${data.facts.length}):`);
+      for (const fact of data.facts) {
+        console.log(`  ${fact.content}${formatRelevance(fact)}`);
+      }
     }
-  }
 
-  if (chunks.length) {
-    console.log(`\nChunks (${chunks.length}):`);
-    for (const chunk of chunks) {
-      const preview = chunk.content?.slice(0, 120).replace(/\n/g, ' ');
-      console.log(`  ${preview}...${formatRelevance(chunk)}`);
+    if (data.chunks.length) {
+      console.log(`\nChunks (${data.chunks.length}):`);
+      for (const chunk of data.chunks) {
+        const preview = chunk.content?.slice(0, 120).replace(/\n/g, ' ');
+        console.log(`  ${preview}...${formatRelevance(chunk)}`);
+      }
     }
-  }
 
-  if (!facts.length && !chunks.length) {
-    console.log('No results found.');
+    if (!data.facts.length && !data.chunks.length) {
+      console.log('No results found.');
+    }
+  } finally {
+    await client.close();
   }
-
-  await cortexDb.destroy();
 }
 
 // Display a meaningful relevance signal for a search hit.
@@ -1967,52 +1937,37 @@ Usage:
     process.exit(0);
   }
 
-  const { getStats } = await import('./memory/documents/store.js');
-  const { getEntityCount } = await import('./memory/entities/store.js');
-  const { getRelationCount } = await import('./memory/entities/relations.js');
-  const { getFactCount } = await import('./memory/facts/store.js');
-  const { getEntityHebbianStats } = await import('./memory/lifecycle/entity-hebbian.js');
-  const cortexDb = (await import('./db/cortex.js')).default;
-
   const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1];
 
-  const [docStats, factCount, documents, people, topics, relations, podRows, hebbian] = await Promise.all([
-    getStats(namespace),
-    getFactCount(namespace),
-    getEntityCount('document'),
-    getEntityCount('person'),
-    getEntityCount('topic'),
-    getRelationCount(),
-    cortexDb('pod').where({ status: 'active' }).select('podType').then((rows) => rows),
-    getEntityHebbianStats({ topN: 3 }).catch(() => null),
-  ]);
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+  try {
+    const { data } = await client.call('status', { namespace: namespace || null });
+    const podSummary = Object.entries(data.podsByType || {})
+      .map(([t, n]) => `${n} ${t}`)
+      .join(', ') || '—';
 
-  const podsByType = podRows.reduce((acc, r) => {
-    acc[r.podType] = (acc[r.podType] || 0) + 1;
-    return acc;
-  }, {});
-  const podSummary = Object.entries(podsByType).map(([t, n]) => `${n} ${t}`).join(', ') || '—';
-
-  console.log(`Sigil Knowledge Base${namespace ? ` (${namespace})` : ''}`);
-  console.log(`  Documents:  ${docStats.documentCount}`);
-  console.log(`  Chunks:     ${docStats.totalChunks}`);
-  console.log(`  Facts:      ${factCount} active`);
-  console.log(`  Entities:   ${documents} documents, ${people} people, ${topics} topics`);
-  console.log(`  Relations:  ${relations}`);
-  console.log(`  Pods:       ${podSummary}`);
-  if (hebbian) {
-    const avg = hebbian.avgStrength ? hebbian.avgStrength.toFixed(2) : '0';
-    const max = hebbian.maxStrength ? hebbian.maxStrength.toFixed(2) : '0';
-    console.log(`  Co-retrieval edges: ${hebbian.edgeCount} (avg ${avg}, max ${max})`);
-    if (hebbian.topPairs.length) {
-      console.log('  Top pairs by decayed strength:');
-      for (const p of hebbian.topPairs) {
-        console.log(`    ${p.aName} ↔ ${p.bName}  (decayed ${Number(p.decayed).toFixed(2)})`);
+    console.log(`Sigil Knowledge Base${data.namespace ? ` (${data.namespace})` : ''}`);
+    console.log(`  Documents:  ${data.documents}`);
+    console.log(`  Chunks:     ${data.chunks}`);
+    console.log(`  Facts:      ${data.facts} active`);
+    console.log(`  Entities:   ${data.entities.documents} documents, ${data.entities.people} people, ${data.entities.topics} topics`);
+    console.log(`  Relations:  ${data.relations}`);
+    console.log(`  Pods:       ${podSummary}`);
+    if (data.hebbian) {
+      const avg = data.hebbian.avgStrength ? data.hebbian.avgStrength.toFixed(2) : '0';
+      const max = data.hebbian.maxStrength ? data.hebbian.maxStrength.toFixed(2) : '0';
+      console.log(`  Co-retrieval edges: ${data.hebbian.edgeCount} (avg ${avg}, max ${max})`);
+      if (data.hebbian.topPairs.length) {
+        console.log('  Top pairs by decayed strength:');
+        for (const p of data.hebbian.topPairs) {
+          console.log(`    ${p.a} ↔ ${p.b}  (decayed ${Number(p.decayed).toFixed(2)})`);
+        }
       }
     }
+  } finally {
+    await client.close();
   }
-
-  await cortexDb.destroy();
 }
 
 // ─── Maintain ────────────────────────────────────────────────────────────────

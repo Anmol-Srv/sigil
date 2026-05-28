@@ -30,6 +30,7 @@ const EXTERNAL = [
 const ENTRIES = [
   { in: 'src/cli.js', out: 'cli.js', shebang: true },
   { in: 'src/server.js', out: 'server.js', shebang: true },
+  { in: 'src/daemon/index.js', out: 'daemon.js', shebang: true },
   { in: 'src/hooks/user-prompt-submit.js', out: 'hooks/user-prompt-submit.js', shebang: true },
   { in: 'src/hooks/post-tool-use.js', out: 'hooks/post-tool-use.js', shebang: true },
   { in: 'src/hooks/stop.js', out: 'hooks/stop.js', shebang: true },
