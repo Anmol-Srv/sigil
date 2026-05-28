@@ -62,6 +62,13 @@ async function run() {
       external: EXTERNAL,
       logLevel: 'warning',
       legalComments: 'none',
+      // ESM output can't synchronously `require()` a bundled CJS dep's
+      // `require("stream")` etc. — esbuild emits a shim that throws
+      // unless we hand it a real `require` via createRequire. (Surfaced
+      // by `sigil doctor` on a fresh install — see PR #9 review.)
+      banner: {
+        js: "import { createRequire as __sigilCreateRequire } from 'node:module'; const require = __sigilCreateRequire(import.meta.url);",
+      },
     });
 
     // Normalize shebang: ensure exactly one at the very top

@@ -1010,7 +1010,15 @@ Checks: Postgres connection, LLM provider, embedding provider, hook registration
     log('ok', 'Stored data', `${stats.documentCount} docs, ${stats.totalChunks} chunks, ${facts} facts`);
     await cortexDb.destroy();
   } catch (err) {
-    const msg = err.message || String(err);
+    // Unwrap AggregateError (thrown by pg under multi-address connect
+    // when every candidate fails) so the user sees ECONNREFUSED instead
+    // of just "AggregateError". Mirrors src/lib/errors.js#serializeError.
+    let msg = err.message || String(err);
+    if (err instanceof AggregateError && Array.isArray(err.errors) && err.errors.length) {
+      msg = err.errors[0].message || msg;
+    } else if (err.cause && (!msg || msg === 'AggregateError')) {
+      msg = err.cause.message || msg;
+    }
     const config = (await import('./config.js')).default;
     if (/ECONNREFUSED|connection refused|password authentication failed/i.test(msg)) {
       log('fail', 'Database', `Postgres unreachable — ${msg.split('\n')[0]}`);
@@ -1019,7 +1027,7 @@ Checks: Postgres connection, LLM provider, embedding provider, hook registration
           ? 'verify SIGIL_DATABASE_URL is valid and the provider is reachable'
           : 'check that Postgres is running and SIGIL_DB_* env vars are set in ~/.sigil/.env');
     } else {
-      log('fail', 'Database', msg);
+      log('fail', 'Database', msg.split('\n')[0]);
     }
   }
 
