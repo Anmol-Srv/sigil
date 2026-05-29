@@ -1,10 +1,17 @@
 #!/usr/bin/env node
 
 /**
- * PostToolUse hook — captures observations from Claude's tool usage.
+ * PostToolUse hook — DISABLED.
  *
- * Two-tier noise filtering + secret masking + session-level dedup.
- * Stores lightweight observations directly as facts (no LLM calls).
+ * This hook used to ingest every file edit and (filtered) bash command as an
+ * "observation" fact. In practice those became ~40% of the knowledge base
+ * ("Edited /path", "Ran: cmd") and polluted search ranking and the injected
+ * hot-context — high-volume, low-signal telemetry competing with real
+ * knowledge. Tool activity belongs in the trace/Activity log, not the
+ * semantic fact store, so capture is turned off (user decision).
+ *
+ * The summarize/dedup logic below is retained (dead) so re-enabling is a
+ * one-line change: remove the early return in main().
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -151,6 +158,12 @@ async function main() {
   const raw = Buffer.concat(chunks).toString('utf8').trim();
   if (!raw) return respond();
 
+  // ── DISABLED: tool-usage observations are no longer stored as facts.
+  // Drain stdin (done above) and return a no-op. To re-enable capture,
+  // delete this early return.
+  return respond();
+
+  // eslint-disable-next-line no-unreachable
   const input = JSON.parse(raw);
   const toolName = input.tool_name || '';
   const toolInput = input.tool_input || {};
