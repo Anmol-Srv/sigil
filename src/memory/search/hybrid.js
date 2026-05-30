@@ -31,7 +31,7 @@ const KEYWORD_WEIGHT = 0.7;
 // Entity detection only for short, name-like queries — not full sentences
 const MAX_ENTITY_QUERY_LENGTH = 60;
 
-async function search(query, { namespaces, limit = 5, minConfidence = 'medium', useGraph = false, includeChunks = false, pointInTime, expand = false, route = true, categories, synthesize = config.search.synthesize, podScope = null, ctx = {} } = {}) {
+async function search(query, { namespaces, limit = 5, minConfidence = 'medium', useGraph = false, includeChunks = false, pointInTime, expand = false, route = true, categories, synthesize = config.search.synthesize, podScope = null, applyFloor = true, ctx = {} } = {}) {
   const _t0 = Date.now();
   if (!isSearchableQuery(query)) {
     const empty = emptySearchResult();
@@ -68,6 +68,27 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
     result = await standardSearch(query, { namespaces, limit, minConfidence, useGraph, includeChunks, pointInTime, expand, categories, podIds });
   }
 
+  // Precision-first relevance floor. For auto-injection paths (hooks /
+  // hot-context, applyFloor=true) drop facts whose absolute cosine similarity
+  // is below config.memory.injectionFloor — better to inject nothing than
+  // something off-topic. Entity-matched facts (source='entity') and facts with
+  // no similarity score are exempt: they earned inclusion by name match, not
+  // semantic distance. The floor runs BEFORE access-tracking/Hebbian so dropped
+  // facts aren't reinforced (which would keep boosting off-topic facts via
+  // ACT-R). Explicit human search passes applyFloor:false to see everything.
+  let floored = null;
+  if (applyFloor && Array.isArray(result.facts) && result.facts.length) {
+    const threshold = config.memory.injectionFloor;
+    const before = result.facts.length;
+    result.facts = result.facts.filter((f) => {
+      if (f.source === 'entity') return true;
+      const sim = Number(f.similarity);
+      if (!Number.isFinite(sim)) return true;
+      return sim >= threshold;
+    });
+    floored = { threshold, dropped: before - result.facts.length, kept: result.facts.length };
+  }
+
   // Fire-and-forget access tracking + Hebbian co-retrieval edge strengthening.
   // Both run off the hot path (no await). Edge writes are O(K²) per query but K is
   // small (default top-5), so it's tens of upserts at most. Per Ogham §G.
@@ -96,7 +117,7 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
 
   result._trace = buildSearchTrace({
     query, namespaces, limit, minConfidence, useGraph, expand, route,
-    routing, matchedEntity, podScope, podIds, result, factIds,
+    routing, matchedEntity, podScope, podIds, result, factIds, floored,
     durationMs: Date.now() - _t0,
   });
 
@@ -109,7 +130,7 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
 // RRF fusion score, the ACT-R activation (frequency + recency decay), the
 // importance/confidence multipliers' net effect (final_score), the
 // post-merge normalized rrfScore, and any entity co-retrieval boost.
-function buildSearchTrace({ query, namespaces, limit, minConfidence, useGraph, expand, route, routing, matchedEntity, podScope, podIds, result, factIds, durationMs }) {
+function buildSearchTrace({ query, namespaces, limit, minConfidence, useGraph, expand, route, routing, matchedEntity, podScope, podIds, result, factIds, floored, durationMs }) {
   const num = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n * 1e4) / 1e4 : null; };
 
   const rankedFacts = (result.facts || []).map((f, i) => ({
@@ -160,6 +181,9 @@ function buildSearchTrace({ query, namespaces, limit, minConfidence, useGraph, e
       ? { id: matchedEntity.id, name: matchedEntity.name, type: matchedEntity.entityType, aliases: matchedEntity.aliases || [] }
       : null,
     podScope: { requested: podScope, resolvedIds: podIds },
+    floor: floored
+      ? { applied: true, threshold: floored.threshold, dropped: floored.dropped, kept: floored.kept, note: 'precision-first: facts below cosine floor dropped from injection' }
+      : { applied: false },
     ranking: {
       model: 'RRF(vector×1.0 + keyword×0.7) × softplus(ACT-R activation) × importance × confidence',
       facts: rankedFacts,
@@ -258,7 +282,21 @@ async function resolvePodScope(podScope, ctx = {}) {
     const uids = active
       .flatMap((a) => a.scope)
       .filter((u) => typeof u === 'string' && !u.startsWith('__virtual:'));
-    if (uids.length === 0) return [];
+    if (uids.length === 0) {
+      // Scope was requested but nothing is active. Distinguish a genuine fresh
+      // install (no pods at all → grace to global so day-one users still get
+      // memory; the relevance floor still applies, so it's global-but-floored,
+      // NOT the old global dump) from an established user in an unpod'd context
+      // (scope to nothing — precision-first, no cross-project leak). Disable
+      // the grace with SIGIL_SCOPE_GRACE=false.
+      if (process.env.SIGIL_SCOPE_GRACE !== 'false') {
+        let q = cortexDb('pod');
+        if (ctx.namespace) q = q.where({ namespace: ctx.namespace });
+        const [{ count }] = await q.count({ count: '*' });
+        if (Number(count) === 0) return null;
+      }
+      return [];
+    }
     const rows = await cortexDb('pod').whereIn('uid', uids).select('id');
     return rows.map((r) => r.id);
   }

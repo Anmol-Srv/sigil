@@ -1,0 +1,83 @@
+---
+title: Pods
+description: Pods are typed memory containers that scope retrieval, control hot-context budget allocation, and model different kinds of knowledge.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **pod** is a typed container that groups related facts. Every fact belongs to a pod. Pods control how facts are retrieved — their hot-context budget (how many facts can be injected per prompt), their decay behaviour, and their identity (what makes two facts belong to the same pod).
+
+## Built-in pod kinds
+
+| Kind | Identity | Decay | Hot-context budget |
+|---|---|---|---|
+| `claude_session` | One per Claude Code session | 90 days | 6 slots |
+| `project` | One per git root (or cwd) | Never | 4 slots |
+| `person` | One per contact you mention | Never | 4 slots (rolling 24h active) |
+| `playbook` | User-authored runbooks | Never | 3 slots (active for matching project) |
+| `vital` | Virtual — facts marked `importance=5` | Never | 6 slots (global) |
+
+**Hot-context budget** is the maximum number of facts from a given pod that can appear in a single prompt injection. Budget limits prevent any one pod from crowding out others. The total injection is ~1.5K tokens regardless of how many facts are stored.
+
+## How pods blend at retrieval time
+
+When `UserPromptSubmit` fires, retrieval blends across active pods:
+
+1. **Session pod** — the current Claude Code session. Facts from this session get priority because they're most recent.
+2. **Project pod** — the git repo you're working in. Architectural decisions, tech stack facts.
+3. **Person pods** — people mentioned in the last 24 hours of work. Contacts, ownership, context.
+4. **Playbook pods** — if a playbook matches the current project, its facts are included.
+5. **Vital facts** — any fact with `importance=5` across all pods. Always included.
+
+The hybrid search (see [Hybrid Search](/concepts/search/)) returns candidates from all layers; pod-aware blending then allocates slots from each pod budget and produces the final injected list.
+
+## Session pods
+
+A `claude_session` pod is created automatically when a new Claude Code session starts. Facts are written to it throughout the session via the `Stop` hook. When the session ends (`SessionEnd` hook), Sigil:
+
+1. Summarizes the session into the pod.
+2. Promotes facts that were retrieved frequently to higher importance.
+3. Archives the pod (it still contributes to search but no longer gets hot-context slots).
+
+Session pods decay after 90 days — recent sessions matter more than stale ones from six months ago.
+
+## Project pods
+
+A `project` pod is created on first mention of a git root. It never decays. Architecture decisions, technology choices, team conventions — these belong in the project pod and surface reliably whenever you're working in that repository.
+
+## Person pods
+
+Person pods capture context about individuals you mention: ownership, responsibilities, domain knowledge, contact info. They're active when that person has been mentioned in the last 24 hours. Facts like *"Sarah owns the billing service"* or *"Alex is the on-call lead this week"* live here.
+
+## Vital facts
+
+Any fact with `importance=5` is treated as vital. Vital facts:
+- Always occupy 6 hot-context slots globally (across all sessions and projects)
+- Never decay
+- Are included in the `~/.sigil/CLAUDE.md` hot-context snapshot
+
+Use vitals for facts you always want every agent to know: team conventions, critical infrastructure choices, non-negotiable constraints.
+
+```bash
+# Mark a fact as vital (importance=5) via CLI
+sigil remember --importance=5 "We never use Redis for anything — Postgres only"
+```
+
+## Pluggable kinds
+
+Pods are defined as contract files — no schema migrations needed. Adding a new kind means writing a JSON contract:
+
+```json
+{
+  "kind": "github_pr",
+  "identity": { "field": "pr_number", "scope": "project" },
+  "decay_days": 30,
+  "hot_context_slots": 2
+}
+```
+
+This makes it possible to add pods for Slack channels, GitHub PRs, Jira tickets, deploy environments — any context domain that benefits from scoped retrieval.
+
+<Aside type="note">
+  The pluggable pod API is stabilizing in 0.11.0. The current contract format may change before it's documented as stable.
+</Aside>

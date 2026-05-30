@@ -1,0 +1,117 @@
+---
+title: Hybrid Search
+description: How Sigil combines pgvector cosine similarity and PostgreSQL full-text BM25 into a single fused search query.
+---
+
+Sigil's retrieval pipeline runs in a **single SQL query** that fuses two search signals, re-ranks with cognitive-science-backed scoring, and returns results in ~33ms (p50 on local Postgres).
+
+## The two search signals
+
+### Vector search (pgvector cosine)
+
+Your query is embedded using your chosen provider (OpenAI, Voyage, or Ollama). The resulting vector is compared against all stored fact and chunk embeddings using pgvector's cosine distance operator (`<->`).
+
+Vector search finds *semantically similar* results — it understands that "event delivery" and "message queue" are related even if neither word appears in the stored fact.
+
+### Keyword search (PostgreSQL tsvector BM25)
+
+The same query runs against a `tsvector` index on all stored fact text. PostgreSQL's `ts_rank_cd` gives BM25-like scoring based on term frequency and inverse document frequency.
+
+Keyword search finds *exact term matches* — "LISTEN/NOTIFY" retrieves facts that mention those exact words, which vector search might miss if the embedding model doesn't treat them as distinctive.
+
+## Reciprocal Rank Fusion (RRF)
+
+RRF fuses the two ranked lists into a single ranking:
+
+```
+rrf_score(d) = Σ 1 / (k + rank_i(d))
+```
+
+where `k=60` (standard default) and `rank_i(d)` is the document's rank in list `i`. RRF is:
+
+- **Robust** — not sensitive to score scale differences between vector (0–1) and keyword (0–∞) outputs
+- **Proven** — consistently outperforms score averaging and max-score fusion in the IR literature
+- **Simple** — one formula, no learned weights to tune
+
+## ACT-R activation re-ranking
+
+After RRF, each result's score is multiplied by its **ACT-R activation**:
+
+```
+activation(f) = ln(n_retrievals) × decay(t_last_retrieved)
+```
+
+ACT-R (Adaptive Control of Thought–Rational) is a cognitive architecture from Anderson et al. that models human memory as a function of:
+
+- **Frequency** — facts retrieved often have higher activation
+- **Recency** — recent retrievals matter more than old ones (logarithmic decay)
+
+In practice: if you retrieved a fact five times last week and once six months ago, ACT-R gives it high activation. A fact retrieved once, just now, gets moderate activation. A fact never retrieved gets low activation — it exists but isn't salient.
+
+## Hebbian co-retrieval boost
+
+Facts that have been retrieved together previously get a small boost when they co-occur in results:
+
+> *"Neurons that fire together wire together."* — Hebb's rule
+
+If "auth service" and "JWT jose library" facts are consistently retrieved together, they get a co-retrieval link. Future queries about auth inject both, even if only one is a strong match for the current query.
+
+This models associative memory: context triggers related context, not just direct matches.
+
+## Pod-aware blending
+
+The re-ranked results are then allocated across pod budgets (see [Pods](/concepts/pods/)). Each pod kind has a declared hot-context slot limit. The blender:
+
+1. Iterates pods in priority order (vital → project → session → person → playbook)
+2. Takes up to `slots` facts from each pod from the ranked list
+3. Deduplicates across pods (a fact counted for session doesn't also count for project)
+
+This ensures diverse coverage — a single high-importance project pod doesn't crowd out session-specific facts that are more relevant right now.
+
+## Running in one SQL query
+
+The full pipeline — vector search, keyword search, RRF, ACT-R activation, pod attribution — runs in a single PostgreSQL CTE chain. No round-trips, no result materialization in Node.js. The SQL is in `src/memory/search/hybrid-sql.js`.
+
+```sql
+WITH
+  vector_ranked AS (
+    SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <-> $1) AS rank
+    FROM sigil_facts
+    ORDER BY embedding <-> $1 LIMIT 100
+  ),
+  keyword_ranked AS (
+    SELECT id, ROW_NUMBER() OVER (ORDER BY ts_rank_cd(tsv, query) DESC) AS rank
+    FROM sigil_facts, plainto_tsquery('english', $2) query
+    WHERE tsv @@ query
+  ),
+  rrf AS (
+    SELECT COALESCE(v.id, k.id) AS id,
+           (COALESCE(1.0 / (60 + v.rank), 0) + COALESCE(1.0 / (60 + k.rank), 0)) AS score
+    FROM vector_ranked v FULL OUTER JOIN keyword_ranked k ON v.id = k.id
+  ),
+  activated AS (
+    SELECT r.id, r.score * actR_activation(f.last_retrieved_at, f.retrieval_count) AS final_score
+    FROM rrf r JOIN sigil_facts f ON f.id = r.id
+  )
+SELECT * FROM activated
+ORDER BY final_score DESC
+LIMIT $3
+```
+
+(Simplified for readability — the actual query includes pod attribution, Hebbian boost, and temporal validity filters.)
+
+## Benchmark
+
+LongMemEval oracle split, n=100, OpenAI `text-embedding-3-large`:
+
+| Metric | Result |
+|---|---|
+| R@1 | **100%** |
+| R@3 | **100%** |
+| R@10 | **100%** |
+| p50 search latency | **33ms** |
+| p95 search latency | **61ms** |
+
+Oracle split means each query has a known correct answer. The retrieval ceiling at this scale is effectively the quality of the embedding model. Architectural differences (hybrid vs. pure vector, ACT-R vs. no re-ranking) show more clearly at 10K+ chunks where score compression makes ranking differences larger.
+
+Full methodology and reproducible scripts: [`eval/longmemeval/`](https://github.com/Anmol-Srv/sigil/tree/master/eval/longmemeval).

@@ -15,4 +15,9 @@ export function loadHookEnv() {
   if (existsSync(SIGIL_ENV_PATH) && SIGIL_ENV_PATH !== localEnv) {
     dotenvConfig({ path: SIGIL_ENV_PATH, quiet: true });
   }
+  // Agent provenance for the in-process hook path (hooks import the memory
+  // code directly and bypass the daemon, so currentAgent() reads this env
+  // var rather than the per-request ALS). These are Claude Code hooks; an
+  // explicitly-set value still wins.
+  if (!process.env.SIGIL_AGENT) process.env.SIGIL_AGENT = 'claude-code';
 }

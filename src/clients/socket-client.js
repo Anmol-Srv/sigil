@@ -76,7 +76,11 @@ export function openSocketClient({ path = SIGIL_DAEMON_SOCK, timeoutMs = 30_000 
         call(method, params) {
           if (closed) return Promise.reject(new Error('client is closed'));
           const id = randomUUID();
-          const frame = JSON.stringify({ id, method, params }) + '\n';
+          // Carry agent provenance ('claude-code' / 'codex' / 'cursor' / 'mcp'
+          // / 'cli') so the daemon can stamp created_by_agent. Set per entry
+          // point via SIGIL_AGENT; null when unknown (back-compat).
+          const agent = process.env.SIGIL_AGENT || null;
+          const frame = JSON.stringify({ id, method, params, agent }) + '\n';
           return new Promise((res, rej) => {
             const timer = setTimeout(() => {
               if (pending.delete(id)) {

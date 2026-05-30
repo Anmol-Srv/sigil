@@ -1,0 +1,55 @@
+---
+title: Windsurf
+description: Connect Sigil to Windsurf via its MCP config file.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+<span class="sigil-badge sigil-badge-manual">Manual config</span>
+
+Windsurf (by Codeium) supports MCP servers. Add Sigil to `~/.codeium/windsurf/mcp_config.json`.
+
+## Setup
+
+<Steps>
+1. Get the correct config for your machine:
+
+   ```bash
+   sigil register --print
+   ```
+
+2. Open `~/.codeium/windsurf/mcp_config.json` (create it if it doesn't exist) and add the `sigil` entry:
+
+   ```json
+   {
+     "mcpServers": {
+       "sigil": {
+         "command": "/usr/local/bin/node",
+         "args": ["/path/to/sigil/dist/server.js", "--mcp"],
+         "env": { "DOTENV_CONFIG_PATH": "/Users/you/.sigil/.env" }
+       }
+     }
+   }
+   ```
+
+3. Restart Windsurf. Sigil tools are now available in Cascade.
+</Steps>
+
+## Nudging Windsurf to use memory
+
+Add a rule to Windsurf's global rules or your project's `.windsurfrules`:
+
+```
+Before answering questions about this project's architecture, decisions, or
+preferences, call the Sigil `search` MCP tool. When the user shares a decision
+or preference worth keeping, call `ingest` to save it.
+```
+
+## CLI fallback
+
+Windsurf has terminal access. Use the Sigil CLI directly:
+
+```bash
+sigil search "event delivery setup"
+sigil remember "Windsurf found we use Drizzle with Postgres, not Prisma"
+```

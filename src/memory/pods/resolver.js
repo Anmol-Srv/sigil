@@ -125,6 +125,21 @@ async function fromSourceMetadata(metadata, namespace) {
     if (ws) attachments.push({ podId: ws.id, role: 'primary' });
   }
 
+  // Project pod from an explicit source/project root. Lets a file or connector
+  // ingest that knows which codebase it came from cluster its facts with that
+  // project (the SCOPE boundary) instead of landing in the unscoped pool.
+  // "Map a source to a space" == map it to the project pod (namespace stays
+  // single). Follow-up: have sources/file.js derive project_root per file so
+  // plain `sigil ingest <path>` auto-clusters without an explicit rule.
+  const projectRoot = metadata.project_root || metadata.source_root;
+  if (projectRoot) {
+    try {
+      const { ensureProjectPod } = await import('./kinds/project.js');
+      const pod = await ensureProjectPod({ cwd: projectRoot, namespace: ns });
+      if (pod) attachments.push({ podId: pod.id, role: 'primary' });
+    } catch { /* best-effort — metadata-derived attach never blocks ingest */ }
+  }
+
   // Person pods derived from sender — only when an entity is already
   // present (the linker will have created or matched it). This function
   // is metadata-only; the linker-driven path lives in

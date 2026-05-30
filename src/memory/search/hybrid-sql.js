@@ -39,19 +39,27 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
   const { temporalClause, categoryClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories });
   const overfetchLimit = limit * OVERFETCH;
 
-  // Optional pod-scope filter — applied identically to both CTEs. Empty
-  // array means "scope to nothing" (return no results); null/undefined
-  // means "global, no scope filter". Caller responsibility (hybrid.js
-  // search()) to resolve podScope='auto' to a real ID list before this
-  // function sees it.
-  const podScopeFilter = Array.isArray(podIds) && podIds.length > 0;
-  const podScopeClause = podScopeFilter
-    ? `AND id = ANY(
-         SELECT member_id FROM pod_membership
-         WHERE member_type = 'fact' AND pod_id = ANY(?::int[])
-       )`
-    : '';
-  const podScopeParams = podScopeFilter ? [podIds] : [];
+  // Pod-scope filter — applied identically to both CTEs. THREE distinct cases,
+  // and conflating the first two was a silent global leak:
+  //   - null / undefined  → no scope requested → global, no filter.
+  //   - []                → scope requested but resolved to NOTHING → match no
+  //                          rows (NOT global!). An agent/context with zero
+  //                          readable pods must see zero facts, not the whole
+  //                          brain. `AND FALSE` short-circuits both CTEs.
+  //   - [ids]             → membership filter to those pods.
+  // Caller (hybrid.js resolvePodScope) returns null for global, [] for
+  // scoped-empty, [ids] for scoped.
+  const podScopeRequested = Array.isArray(podIds);
+  const podScopeEmpty = podScopeRequested && podIds.length === 0;
+  const podScopeClause = !podScopeRequested
+    ? ''
+    : podScopeEmpty
+      ? 'AND FALSE'
+      : `AND id = ANY(
+           SELECT member_id FROM pod_membership
+           WHERE member_type = 'fact' AND pod_id = ANY(?::int[])
+         )`;
+  const podScopeParams = (podScopeRequested && !podScopeEmpty) ? [podIds] : [];
 
   // Params order (matches the `?` sequence below):
   //   1. vec                            -- semantic CTE: similarity select
@@ -96,6 +104,8 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
              content, category, confidence, importance, namespace, status,
              source_document_ids AS "sourceDocumentIds",
              source_section AS "sourceSection",
+             created_by_device_id AS "createdByDeviceId",
+             created_by_agent AS "createdByAgent",
              created_at,
              1 - (${embeddingDistance}) AS similarity,
              ROW_NUMBER() OVER (ORDER BY ${embeddingDistance}) AS rank_ix
@@ -116,6 +126,8 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
              content, category, confidence, importance, namespace, status,
              source_document_ids AS "sourceDocumentIds",
              source_section AS "sourceSection",
+             created_by_device_id AS "createdByDeviceId",
+             created_by_agent AS "createdByAgent",
              created_at,
              ts_rank_cd(search_vector, plainto_tsquery('english', ?)) AS keyword_rank,
              ROW_NUMBER() OVER (ORDER BY ts_rank_cd(search_vector, plainto_tsquery('english', ?)) DESC) AS rank_ix
@@ -141,6 +153,8 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
              COALESCE(s.status, k.status) AS status,
              COALESCE(s."sourceDocumentIds", k."sourceDocumentIds") AS "sourceDocumentIds",
              COALESCE(s."sourceSection", k."sourceSection") AS "sourceSection",
+             COALESCE(s."createdByDeviceId", k."createdByDeviceId") AS "createdByDeviceId",
+             COALESCE(s."createdByAgent", k."createdByAgent") AS "createdByAgent",
              COALESCE(s.created_at, k.created_at) AS created_at,
              COALESCE(s.similarity, 0) AS similarity,
              (
@@ -176,7 +190,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
       LEFT JOIN fact_lifecycle fl ON fl.fact_id = f.id
     )
     SELECT id, uid, content, category, confidence, importance, namespace, status,
-           "sourceDocumentIds", "sourceSection", similarity,
+           "sourceDocumentIds", "sourceSection", "createdByDeviceId", "createdByAgent", similarity,
            rrf_raw,
            access_count,
            last_accessed_at AS "lastAccessedAt",

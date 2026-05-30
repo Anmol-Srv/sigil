@@ -1,0 +1,103 @@
+---
+title: Memory Decay
+description: How Sigil uses ACT-R activation and Hebbian learning to keep memory fresh, relevant, and self-maintaining.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Sigil's memory isn't static. Facts grow and fade in importance over time, just like human memory — through a combination of ACT-R activation (recency × frequency) and Hebbian co-retrieval learning.
+
+## Why decay matters
+
+A memory system without decay accumulates stale facts indefinitely. A decision made in January 2024 about using Redis might contradict the February 2025 decision to switch to Postgres. Without a mechanism to down-weight or supersede old information, both facts compete for the same retrieval slots.
+
+Decay solves this by making recency and frequency part of relevance — not just semantic similarity.
+
+## ACT-R activation
+
+Sigil borrows the activation formula from the ACT-R cognitive architecture (Anderson et al., 1997):
+
+```
+A(f) = ln(Σ_i t_i^-d)
+```
+
+In Sigil's simplified form:
+
+```
+activation(f) = ln(retrieval_count + 1) × exp(-d × age_days)
+```
+
+where `d` is the decay rate (configurable, default 0.5) and `age_days` is days since last retrieval.
+
+**What this means in practice:**
+
+| Fact | Retrievals | Last retrieved | Activation |
+|---|---|---|---|
+| "We use Postgres for events" | 47 | Yesterday | **High** |
+| "JWT token TTL is 1h" | 3 | Last week | Medium |
+| "Old Redis config" | 1 | 8 months ago | **Low** |
+| "New Drizzle migration pattern" | 1 | Today | Medium |
+
+The Redis fact isn't deleted — it still exists and can be found by a specific enough query. But it won't appear in general-purpose retrieval unless the query is directly about Redis.
+
+## Temporal validity
+
+Every fact has optional `valid_from` and `valid_to` metadata:
+
+```
+valid_from: 2025-02-01
+valid_to: null   (ongoing)
+```
+
+When `valid_to` is set, the fact is excluded from retrieval after that date. This is different from decay — temporal invalidity is a hard cutoff, not a gradual down-weighting.
+
+AUDM (Add/Update/Delete/Merge) sets `valid_to` on superseded facts. When Sigil learns *"We moved from Redis to Postgres for events"*, it:
+
+1. Finds the old Redis-for-events fact
+2. Sets `valid_to = today` on the old fact
+3. Creates a new fact with `valid_from = today`
+
+Both facts persist in storage (for audit). Only the new one appears in retrieval.
+
+## Hebbian learning
+
+Facts retrieved together build co-retrieval links. The weight of the link grows with each co-occurrence:
+
+```
+hebbian_weight(a, b) += learning_rate × (1 - current_weight)
+```
+
+These links add a small boost when `a` and `b` both appear as candidates for the same query. This models associative memory — context triggers related context automatically.
+
+**Example:** Every time you ask about authentication, both the "JWT with jose" fact and the "1h token TTL" fact are retrieved together. Hebbian learning links them. A future question about "token expiry" retrieves the TTL fact strongly, and the jose library fact gets a small associative boost — even though "jose" didn't appear in the query.
+
+<Aside type="tip">
+  Hebbian links are directional and symmetric. They decay along with the facts they link — old co-retrievals fade without explicit cleanup.
+</Aside>
+
+## Importance as a override
+
+Decay can be overridden by importance. Facts with `importance=5` (vitals) never decay and always occupy hot-context slots. Use vitals for absolute constraints that should never fade:
+
+```bash
+sigil remember --importance=5 "Never use Redis — all state in Postgres"
+```
+
+For everything else, let decay work naturally. You don't need to manually curate or delete facts — the system surfaces what's relevant and quietly down-weights what's stale.
+
+## Session pod decay
+
+`claude_session` pods decay after 90 days. After that, their facts still exist and are searchable, but they no longer get hot-context slots during blending. A session from three months ago is less likely to inject its facts into today's prompt than last week's session.
+
+Project and person pods never decay. Architectural facts and team context are long-lived by nature.
+
+## Self-maintaining design
+
+The decay system is designed to be hands-off:
+
+- You don't need to delete old facts. ACT-R down-weights them automatically.
+- You don't need to mark things outdated. AUDM sets `valid_to` on superseded facts.
+- You don't need to tune Hebbian links. They build and fade on their own.
+- You don't need to manage vitals aggressively. Only use them for genuinely permanent constraints.
+
+`sigil status` shows decay statistics. `sigil why "query"` explains exactly why each retrieved fact scored the way it did — including its activation score, Hebbian boost, and pod attribution.

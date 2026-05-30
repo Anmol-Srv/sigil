@@ -1,0 +1,66 @@
+---
+title: Kiro
+description: Sigil auto-wires into Kiro via MCP and a steering rule that tells Kiro when to query memory.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<span class="sigil-badge sigil-badge-auto">Auto-wired</span>
+
+Kiro connects to Sigil via MCP with a steering rule that instructs Kiro to consult memory before answering questions about your project.
+
+## What you get
+
+- 9 Sigil MCP tools available in every Kiro session
+- A steering rule in `~/.kiro/steering/sigil.md` that prompts Kiro to search memory proactively
+- The same shared brain as Claude Code, Cursor, and Codex CLI
+
+## Setup
+
+```bash
+sigil init
+```
+
+Sigil writes to:
+- `~/.kiro/settings/mcp.json` — MCP server registration
+- `~/.kiro/steering/sigil.md` — steering rule
+
+No manual steps needed.
+
+## Steering rule
+
+The steering rule (`~/.kiro/steering/sigil.md`) tells Kiro:
+
+> Before answering questions about this project's architecture, decisions, preferences, or past context — call the Sigil `search` tool. When the user shares a decision, preference, or constraint — call `ingest` to save it.
+
+This rule is included in Kiro's context for every session where it's active.
+
+## Manual setup
+
+```bash
+sigil register --print
+```
+
+Add the output to `~/.kiro/settings/mcp.json` and create the steering file manually:
+
+```bash
+cat > ~/.kiro/steering/sigil.md << 'EOF'
+Before answering questions about architecture, decisions, preferences, or past
+context, call the Sigil `search` MCP tool. When the user shares a preference,
+decision, or constraint worth keeping, call `ingest` to save it.
+EOF
+```
+
+<Aside type="note">
+  Kiro's steering rules are active for all sessions. If you want the Sigil rule active only for specific projects, move the file to your project's `.kiro/steering/` directory instead.
+</Aside>
+
+## Capture in Kiro
+
+Kiro uses the steering rule to decide when to call `ingest`. You can also call from the terminal:
+
+```bash
+sigil remember "Kiro found that the auth service has a 50ms latency budget"
+```
+
+This saves directly to the shared brain and is available in all other agents immediately.

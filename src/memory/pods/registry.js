@@ -130,13 +130,33 @@ export async function activeKinds(ctx = {}) {
       if (Array.isArray(scope) && scope.length > 0) {
         out.push({ kind, scope });
       }
-    } catch {
+    } catch (err) {
       // A kind whose resolver throws is treated as dormant — never blocks
-      // the rest of the registry. Errors should surface via observability,
-      // not by crashing hot-context.
+      // the rest of the registry. But it is NO LONGER silent: a failing
+      // project-pod resolution silently dropped scope and collapsed search
+      // to global (the cross-project leak). Surface it to stderr (daemon log
+      // / hook stderr) and best-effort to the Activity log so a
+      // silently-global session is diagnosable.
+      process.stderr.write(`[sigil:pods] resolveActiveScope failed for kind "${kind.name}": ${err.message}\n`);
+      recordResolveFailure(kind.name, err);
     }
   }
   return out;
+}
+
+// Best-effort surfacing of a pod-resolution failure into the durable trace /
+// Activity log. Fire-and-forget, never throws, never blocks activeKinds. The
+// dynamic import keeps the pods layer free of a load-time dependency on the
+// daemon trace store (and works in CLI/hook contexts where it simply no-ops
+// on any DB error inside recordTrace).
+function recordResolveFailure(kindName, err) {
+  import('../../daemon/trace-store.js')
+    .then(({ recordTrace }) => recordTrace({
+      kind: 'lifecycle',
+      summary: `pod-resolution failed for kind "${kindName}"`,
+      detail: { kind: kindName, error: err.message },
+    }))
+    .catch(() => { /* trace store unavailable — stderr already has it */ });
 }
 
 export function validateAttrs(kind, attrs = {}) {

@@ -1,0 +1,77 @@
+---
+title: Cursor
+description: Sigil connects to Cursor via MCP, giving it access to your shared memory with no manual config after sigil init.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+<span class="sigil-badge sigil-badge-auto">Auto-wired</span>
+
+Cursor connects to Sigil via MCP (Model Context Protocol). On `sigil init`, Sigil writes its entry into `~/.cursor/mcp.json` automatically.
+
+## What you get
+
+- Access to all 9 Sigil MCP tools from inside Cursor
+- The same memory brain as Claude Code, Kiro, and Codex CLI
+- Cursor calls `search` before answering questions about your project
+
+## Setup
+
+```bash
+sigil init
+```
+
+Sigil detects Cursor on your machine and writes its MCP config to `~/.cursor/mcp.json`. No manual steps.
+
+Verify with:
+
+```bash
+sigil doctor
+```
+
+Then open Cursor → Settings → MCP and confirm `sigil` appears in the server list.
+
+## Manual setup
+
+If you need to add the config yourself:
+
+```bash
+sigil register --print
+```
+
+Copy the output JSON and add the inner `sigil: {...}` block to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "sigil": {
+      "command": "/usr/local/bin/node",
+      "args": ["/path/to/sigil/dist/server.js", "--mcp"],
+      "env": { "DOTENV_CONFIG_PATH": "/Users/you/.sigil/.env" }
+    }
+  }
+}
+```
+
+<Aside type="tip">
+  `sigil register --print` outputs the config with the correct paths for your machine. Use that output rather than copying the example above.
+</Aside>
+
+## Available MCP tools
+
+Cursor has access to all 9 Sigil tools. The most-used ones in Cursor sessions:
+
+| Tool | What it does |
+|---|---|
+| `search` | Hybrid search across all memory |
+| `search_entity` | Look up a person, project, or service by name |
+| `get_pod` | Get context for the current project pod |
+| `ingest` | Save a document or URL to the knowledge base |
+| `status` | KB statistics |
+
+## Capture in Cursor
+
+Unlike Claude Code, Cursor doesn't have hooks for automatic capture. Memory flows through the MCP tools when Cursor decides to call them. To nudge Cursor to use Sigil:
+
+- Add a note to `.cursorrules` or Cursor's system prompt: *"Before answering questions about architecture or preferences, call the Sigil `search` tool. When the user shares a decision or preference, call `ingest` to save it."*
+- Or call `sigil remember "..."` from your terminal whenever you share something worth keeping.

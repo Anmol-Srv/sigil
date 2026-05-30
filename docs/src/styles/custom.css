@@ -1,0 +1,299 @@
+/*
+ * Sigil design tokens mapped onto Starlight CSS variables.
+ * Dark-only theme. Mirrors src/gui/web/app.css.
+ *
+ * In Starlight's dark mode the gray scale runs INVERTED:
+ *   --sl-color-white  = page background (darkest)
+ *   --sl-color-black  = primary text (lightest)
+ *   gray-1 → gray-6 goes dark → light
+ */
+
+:root,
+[data-theme='dark'] {
+  /* ── Accent ─────────────────────────────────────────────────── */
+  --sl-color-accent-low:  #0b1433;   /* deep bg tint for accent areas */
+  --sl-color-accent:      #5e8cff;   /* --accent */
+  --sl-color-accent-high: #99b8ff;   /* lighter accent for text-on-dark */
+
+  /* ── Gray scale (dark-mode inverted — white=darkest, black=lightest) */
+  --sl-color-white:  #07080a;   /* --bg-canvas */
+  --sl-color-gray-1: #0f1115;   /* --bg-surface */
+  --sl-color-gray-2: #161920;   /* --bg-surface-2 */
+  --sl-color-gray-3: #2c3038;   /* --border-2 */
+  --sl-color-gray-4: #565b66;   /* --fg-4 */
+  --sl-color-gray-5: #828893;   /* --fg-3 */
+  --sl-color-gray-6: #b6bcc7;   /* --fg-2 */
+  --sl-color-black:  #e8eaee;   /* --fg */
+
+  /* ── Fonts ───────────────────────────────────────────────────── */
+  --sl-font:      ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+                  system-ui, "Segoe UI", Roboto, sans-serif;
+  --sl-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", monospace;
+
+  /* ── Layout ──────────────────────────────────────────────────── */
+  --sl-sidebar-width:  232px;
+  --sl-content-width:  48rem;
+
+  /* ── Text scale ──────────────────────────────────────────────── */
+  --sl-text-base: 0.875rem;   /* 14px — matches --t-md */
+}
+
+/* ── Sharp corners everywhere (Linear aesthetic) ───────────────── */
+:root {
+  --sl-border-radius: 0px;
+}
+
+/* ── Header ─────────────────────────────────────────────────────── */
+header.header {
+  height: 52px;
+  border-bottom: 1px solid #1f2229;
+  background: #07080a;
+}
+
+/* Tighten the logo mark */
+.site-title img {
+  width: 20px;
+  height: 20px;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────── */
+nav.sidebar {
+  border-right: 1px solid #1f2229;
+  background: #07080a;
+}
+
+/* Sidebar group labels */
+.group-label span {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #565b66;
+  font-weight: 600;
+}
+
+/* ── Code blocks ─────────────────────────────────────────────────── */
+:not(pre) > code {
+  background: #0f1115;
+  border: 1px solid #1f2229;
+  border-radius: 2px;
+  padding: 1px 5px;
+  font-size: 0.82em;
+  color: #b6bcc7;
+}
+
+/* ── Hide theme toggle (dark-only) ──────────────────────────────── */
+starlight-theme-select,
+[data-theme-toggle] {
+  display: none !important;
+}
+
+/* ── Splash (landing) page ───────────────────────────────────────── */
+.hero {
+  padding-block: 4rem;
+}
+
+.hero .tagline {
+  font-size: clamp(1.4rem, 4vw, 2.2rem);
+  line-height: 1.25;
+  font-weight: 600;
+  color: #e8eaee;
+  max-width: 36rem;
+}
+
+.hero .actions a[data-variant='primary'] {
+  background: #5e8cff;
+  color: #fff;
+  border-radius: 2px;
+  font-weight: 500;
+}
+
+.hero .actions a[data-variant='primary']:hover {
+  background: #466ce0;
+}
+
+.hero .actions a[data-variant='minimal'] {
+  border-radius: 2px;
+  color: #b6bcc7;
+  border: 1px solid #2c3038;
+}
+
+.hero .actions a[data-variant='minimal']:hover {
+  border-color: #3a3f49;
+  color: #e8eaee;
+}
+
+/* ── Content ─────────────────────────────────────────────────────── */
+.sl-markdown-content h2 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-top: 2.5rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid #1f2229;
+  color: #e8eaee;
+}
+
+.sl-markdown-content h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-top: 1.75rem;
+  color: #e8eaee;
+}
+
+.sl-markdown-content p {
+  color: #b6bcc7;
+  line-height: 1.65;
+}
+
+.sl-markdown-content a {
+  color: #5e8cff;
+  text-decoration: none;
+}
+
+.sl-markdown-content a:hover {
+  text-decoration: underline;
+}
+
+/* ── Tables ─────────────────────────────────────────────────────── */
+.sl-markdown-content table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.85rem;
+}
+
+.sl-markdown-content th {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #565b66;
+  font-weight: 600;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1f2229;
+  text-align: left;
+}
+
+.sl-markdown-content td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #1f2229;
+  color: #b6bcc7;
+  vertical-align: top;
+}
+
+.sl-markdown-content tr:last-child td {
+  border-bottom: none;
+}
+
+/* ── Asides / callouts ───────────────────────────────────────────── */
+.starlight-aside {
+  border-radius: 2px;
+  border-left-width: 2px;
+}
+
+.starlight-aside--note {
+  background: rgba(94, 140, 255, 0.08);
+  border-left-color: #5e8cff;
+}
+
+.starlight-aside--tip {
+  background: rgba(78, 196, 108, 0.08);
+  border-left-color: #4ec46c;
+}
+
+.starlight-aside--caution {
+  background: rgba(232, 169, 74, 0.08);
+  border-left-color: #e8a94a;
+}
+
+.starlight-aside--danger {
+  background: rgba(226, 100, 100, 0.08);
+  border-left-color: #e26464;
+}
+
+/* ── Stats row (landing page custom) ────────────────────────────── */
+.sigil-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 1px;
+  background: #1f2229;
+  border: 1px solid #1f2229;
+  border-radius: 2px;
+  margin: 2rem 0;
+  overflow: hidden;
+}
+
+.sigil-stat {
+  background: #0f1115;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sigil-stat-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #e8eaee;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.sigil-stat-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #565b66;
+  font-weight: 500;
+}
+
+/* ── Agent grid (landing page) ───────────────────────────────────── */
+.sigil-agents {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+  margin: 1.5rem 0;
+}
+
+.sigil-agent {
+  background: #0f1115;
+  border: 1px solid #1f2229;
+  border-radius: 2px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #b6bcc7;
+}
+
+.sigil-agent-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4ec46c;
+  flex-shrink: 0;
+}
+
+.sigil-agent-dot.manual {
+  background: #5e8cff;
+}
+
+.sigil-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sigil-badge-auto {
+  background: rgba(78, 196, 108, 0.12);
+  color: #4ec46c;
+  border: 1px solid rgba(78, 196, 108, 0.25);
+}
+
+.sigil-badge-manual {
+  background: rgba(94, 140, 255, 0.12);
+  color: #5e8cff;
+  border: 1px solid rgba(94, 140, 255, 0.25);
+}

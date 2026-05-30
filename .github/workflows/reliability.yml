@@ -1,0 +1,64 @@
+name: reliability
+
+# Two gates for the memory core:
+#   - fast: the mocked unit suite (quick signal on every push)
+#   - reliability: the REAL retrieval stack (PGlite + real schema + real Ollama
+#     embeddings) running the behavioral suites + the precision/recall/leak-rate
+#     scorecard. This is the gate that catches the mock-vs-reality bugs (scope
+#     leaks, off-topic injection, dedup) the unit suite structurally can't.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npx vitest run
+
+  reliability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+
+      - name: Start Ollama + pull embedding model
+        run: |
+          ollama serve > /tmp/ollama.log 2>&1 &
+          # wait for the API to come up
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:11434/api/tags >/dev/null && break
+            sleep 1
+          done
+          ollama pull nomic-embed-text
+
+      - name: Reliability gate (real embeddings + scorecard)
+        run: npm run test:reliability
+        env:
+          OLLAMA_HOST: http://127.0.0.1:11434
+          SIGIL_COMMIT: ${{ github.sha }}
+
+      - name: Upload scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliability-scorecard
+          path: |
+            test/reliability/scorecard.json
+            test/reliability/scorecard-history.jsonl
+          if-no-files-found: ignore

@@ -47,19 +47,21 @@ export const projectKind = {
     // file does (active-session.json.cwd). Hooks pass cwd via ctx. If
     // neither is set we have nothing to scope to.
     const cwd = ctx.cwd || (await readCwdFromCursor());
+    // No cwd is a legitimate dormant state (e.g. hot-context with no active
+    // session) — return [] quietly. But do NOT swallow lookup errors: a
+    // throwing findByExternalId used to silently return [], which collapsed
+    // the search to global scope (the cross-project leak). Let real errors
+    // propagate to registry.activeKinds, which surfaces them in the Activity
+    // log and treats the kind as dormant for this call.
     if (!cwd) return [];
-    try {
-      const ns = ctx.namespace || config.defaults.namespace;
-      const rootPath = deriveProjectRoot(cwd);
-      const pod = await podStore.findByExternalId({
-        podType: POD_TYPE,
-        externalId: rootPath,
-        namespace: ns,
-      });
-      return pod ? [pod.uid] : [];
-    } catch {
-      return [];
-    }
+    const ns = ctx.namespace || config.defaults.namespace;
+    const rootPath = deriveProjectRoot(cwd); // git toplevel, or cwd if no git
+    const pod = await podStore.findByExternalId({
+      podType: POD_TYPE,
+      externalId: rootPath,
+      namespace: ns,
+    });
+    return pod ? [pod.uid] : [];
   },
 };
 

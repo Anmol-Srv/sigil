@@ -11,6 +11,7 @@ import { appendFile, readFile, writeFile, unlink } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 
 import { SIGIL_HOOK_ERRORS_LOG, SIGIL_LAST_CLEAN_DOCTOR } from '../lib/paths.js';
+import { maskSecrets } from './secret-mask.js';
 
 export const HOOK_ERROR_LOG = SIGIL_HOOK_ERRORS_LOG;
 export const LAST_CLEAN_DOCTOR_PATH = SIGIL_LAST_CLEAN_DOCTOR;
@@ -20,7 +21,10 @@ export async function recordHookError(hook, err, input = null) {
     const entry = {
       ts: new Date().toISOString(),
       hook,
-      error: err?.message || String(err),
+      // Mask secrets in the error message — provider errors frequently echo
+      // the offending key/credential ("Invalid API key: sk-...") and this log
+      // is plaintext on disk. The input is already reduced to a hash.
+      error: maskSecrets(err?.message || String(err)),
       input_hash: input ? hashInput(input) : null,
     };
     await appendFile(HOOK_ERROR_LOG, JSON.stringify(entry) + '\n', 'utf8');

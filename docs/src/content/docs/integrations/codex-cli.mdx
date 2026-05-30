@@ -1,0 +1,64 @@
+---
+title: Codex CLI
+description: Sigil auto-wires into Codex CLI via MCP and an AGENTS.md steering instruction.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<span class="sigil-badge sigil-badge-auto">Auto-wired</span>
+
+Sigil connects to Codex CLI (OpenAI's coding agent) via MCP and an `AGENTS.md` steering file. After `sigil init`, Codex has access to the shared memory brain.
+
+## What you get
+
+- 9 Sigil MCP tools available in Codex CLI sessions
+- An `AGENTS.md` entry in `~/.codex/` that steers Codex to query memory
+- The same shared brain as Claude Code, Cursor, and Kiro
+
+## Setup
+
+```bash
+sigil init
+```
+
+Sigil writes to:
+- `~/.codex/config.toml` — MCP server entry
+- `~/.codex/AGENTS.md` — steering instruction
+
+No manual steps needed.
+
+## Manual setup
+
+```bash
+sigil register --print
+```
+
+Add the MCP entry to `~/.codex/config.toml` in TOML format:
+
+```toml
+[mcp_servers.sigil]
+command = "/usr/local/bin/node"
+args = ["/path/to/sigil/dist/server.js", "--mcp"]
+env = { DOTENV_CONFIG_PATH = "/Users/you/.sigil/.env" }
+```
+
+And add to `~/.codex/AGENTS.md`:
+
+```markdown
+Before answering questions about this project's architecture, decisions, or preferences,
+call the Sigil `search` MCP tool. When the user shares a preference, decision, or
+constraint worth keeping, call `ingest` to save it.
+```
+
+## Using Sigil from the Codex CLI directly
+
+Codex CLI also supports shell tool calls. You can use the Sigil CLI directly if Codex has shell access:
+
+```bash
+sigil search "what's our database setup"
+sigil remember "Codex discovered that queue processing uses pg-boss"
+```
+
+<Aside type="tip">
+  The CLI approach works in any Codex session even without MCP configured, as long as `sigil` is on `PATH`.
+</Aside>

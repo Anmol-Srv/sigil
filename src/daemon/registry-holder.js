@@ -13,3 +13,10 @@ export function getRegistry() {
   return current;
 }
 export function clearRegistry() { current = null; }
+
+// DB health — set by the eager startup probe and refreshed on each `status`
+// call. `healthy: null` = not yet checked. Lets the GUI/CLI show a loud
+// "Postgres unreachable" banner instead of memory silently returning empty.
+let dbHealth = { healthy: null, error: null, checkedAt: null };
+export function setDbHealth(h) { dbHealth = { healthy: null, error: null, checkedAt: null, ...h }; }
+export function getDbHealth() { return dbHealth; }

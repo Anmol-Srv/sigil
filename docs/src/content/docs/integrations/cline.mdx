@@ -1,0 +1,53 @@
+---
+title: Cline
+description: Connect Sigil to Cline (VS Code extension) via MCP settings.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+<span class="sigil-badge sigil-badge-manual">Manual config</span>
+
+Cline supports MCP servers through its VS Code extension settings. Add Sigil to the `cline_mcp_settings.json` file in your VS Code user directory.
+
+## Setup
+
+<Steps>
+1. Get the correct config for your machine:
+
+   ```bash
+   sigil register --print
+   ```
+
+2. Open Cline's MCP settings file. Its location depends on your OS:
+
+   | OS | Path |
+   |---|---|
+   | macOS | `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
+   | Windows | `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json` |
+   | Linux | `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json` |
+
+3. Add the `sigil` entry to `mcpServers`:
+
+   ```json
+   {
+     "mcpServers": {
+       "sigil": {
+         "command": "/usr/local/bin/node",
+         "args": ["/path/to/sigil/dist/server.js", "--mcp"],
+         "env": { "DOTENV_CONFIG_PATH": "/Users/you/.sigil/.env" }
+       }
+     }
+   }
+   ```
+
+4. Reload VS Code. Sigil tools are now available in Cline.
+</Steps>
+
+## CLI fallback
+
+Cline has `Bash` tool access. You can call the Sigil CLI directly from any Cline task:
+
+```bash
+sigil search "what's our database setup"
+sigil remember "Cline found that the jobs table uses row-level locking"
+```

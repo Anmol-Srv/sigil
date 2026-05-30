@@ -70,10 +70,15 @@ export async function getHotFacts({
     }
   }
 
-  // Backfill from generic recency if active kinds underflow (e.g., a
-  // fresh install with no project/session pods yet). Preserves the
-  // pre-0.10 behavior for users who haven't accumulated pod memberships.
-  if (blended.length < limit) {
+  // Precision-first backfill. Only fall back to namespace-global recency when
+  // the kind-driven blend produced NOTHING — i.e. a genuine fresh install with
+  // no pods and no vital facts. An established project that merely underflows
+  // its budget keeps a SMALL, on-project context rather than getting padded
+  // with off-project recency (that padding was the cross-project leak: a
+  // sigil session showing payment-webhook facts). Half-full-and-relevant beats
+  // full-and-polluted. Fresh installs still get something so day-one isn't
+  // empty; once any pod/vital fact exists, the blend stays scoped.
+  if (blended.length === 0) {
     const filler = await cortexDb('fact as f')
       .leftJoin('fact_lifecycle as fl', 'fl.fact_id', 'f.id')
       .where({ 'f.status': 'active', 'f.namespace': ns })

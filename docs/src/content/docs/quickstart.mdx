@@ -1,0 +1,138 @@
+---
+title: Quickstart
+description: Install Sigil and get a shared memory layer running across your AI coding agents in under 5 minutes.
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Sigil needs Postgres 13+ with the `pgvector` extension. You bring the database; `sigil init` handles everything else.
+
+## 1. Start Postgres
+
+<Tabs>
+  <TabItem label="Docker (recommended)">
+    ```bash
+    docker run -d --name sigil-pg -p 5432:5432 \
+      -e POSTGRES_PASSWORD=sigil_dev pgvector/pgvector:pg15
+    ```
+    The `pgvector/pgvector` image ships with the extension pre-installed — no extra steps.
+  </TabItem>
+  <TabItem label="Homebrew (macOS)">
+    ```bash
+    brew install postgresql@15
+    brew services start postgresql@15
+    # Then install the pgvector extension:
+    brew install pgvector
+    ```
+  </TabItem>
+  <TabItem label="Managed Postgres">
+    Any managed provider works: **Neon**, **Supabase**, **Railway**, **Render**, **AWS RDS**, **CockroachDB**.
+
+    1. Create a database and copy the connection URL.
+    2. Enable the `vector` extension (one click on Neon/Supabase; a parameter group setting on RDS).
+    3. Skip to Step 2 — pass the URL to `sigil init`.
+  </TabItem>
+</Tabs>
+
+## 2. Install Sigil
+
+```bash
+npm install -g @anmol-srv/sigil
+```
+
+## 3. Run `sigil init`
+
+```bash
+sigil init
+```
+
+The interactive wizard asks four things:
+
+1. **LLM provider** — OpenRouter, OpenAI, Anthropic, Ollama, or your Claude Code subscription.
+2. **Embedding provider** — OpenAI, Voyage, or Ollama (fully local).
+3. **Postgres connection** — local credentials or a `postgres://...` URL.
+4. **Agent detection** — Sigil auto-detects Claude Code, Codex CLI, Cursor, and Kiro and wires itself in.
+
+For non-interactive setups (CI, dotfiles):
+
+```bash
+sigil init --url "postgres://user:pass@host/sigil?sslmode=require"
+```
+
+## 4. Verify everything is wired
+
+```bash
+sigil doctor
+```
+
+You should see:
+
+```
+Sigil diagnostic
+
+  ✓ Config file: ~/.sigil/.env
+  ✓ Config validation: no provider/model mismatches
+  ✓ Database: Postgres @ localhost:5432/sigil
+  ✓ Stored data: 0 docs, 0 chunks, 0 facts
+  ✓ LLM provider: openrouter (model=google/gemini-flash-latest)
+  ✓ Embedding provider: openai / text-embedding-3-large
+  ✓ UserPromptSubmit hook: registered
+  ✓ PostToolUse hook: registered
+  ✓ Stop hook: registered
+  ✓ SessionEnd hook: registered
+  ✓ Sigil CLAUDE.md
+
+All checks passed.
+```
+
+<Aside type="tip">
+  If any hook shows as unregistered, re-run `sigil init`. It's idempotent — existing config is preserved.
+</Aside>
+
+## 5. Save your first memory
+
+```bash
+sigil remember "We use Postgres LISTEN/NOTIFY for event delivery, not Redis pubsub"
+```
+
+## 6. Open Claude Code and ask
+
+```
+What's our event delivery setup?
+```
+
+The `UserPromptSubmit` hook runs before Claude sees your prompt, retrieves the fact, and injects it as context. Claude answers correctly — without you pasting anything.
+
+---
+
+## What happens next
+
+In practice you rarely call `sigil remember` manually. The `Stop` hook runs a classifier on every Claude Code user message and auto-saves preferences, decisions, constraints, and factual claims. The `PostToolUse` hook captures observations from file edits and shell commands.
+
+Open any other wired agent (Cursor, Kiro, Codex CLI) and ask the same question — it pulls from the same memory.
+
+---
+
+## Useful commands
+
+```bash
+sigil search "JWT auth setup"        # what does the brain know?
+sigil facts --limit=20               # list recent facts
+sigil why "auth setup"               # explain the ranking
+sigil ingest ./architecture.md       # ingest a document
+sigil status                         # KB statistics
+sigil export --format=json           # export everything
+```
+
+---
+
+## Cross-machine setup
+
+Point multiple installs at the same Postgres and they share one brain:
+
+```bash
+# Machine 2 — managed Postgres URL
+sigil init --url "postgres://user:pass@ep-foo.neon.tech/sigil?sslmode=require"
+```
+
+A fact captured on your laptop surfaces in the agent running on your home server. No daemon, no sync protocol — Postgres handles consistency.

@@ -26,7 +26,7 @@ Set format="compact" for token-efficient output (one line per category, no IDs/m
         z.literal('auto'),
         z.literal('global'),
         z.array(z.string()),
-      ]).optional().describe('Pod scope: "auto" (uses active session/project/person pods), "global" (no filter), or list of pod uids/names. Default: "global".'),
+      ]).optional().describe('Pod scope: "auto" (active project/session pods — the default), "global" (whole brain, no scope), or list of pod uids/names.'),
     },
     async ({ query, limit, namespaces, minConfidence, includeChunks, useGraph, pointInTime, format, podScope }) => {
       const data = await daemonCall('search', {
@@ -37,7 +37,10 @@ Set format="compact" for token-efficient output (one line per category, no IDs/m
         includeChunks,
         useGraph,
         pointInTime,
-        podScope: podScope ?? null,
+        // Default to project scope; the MCP server runs in the project dir so
+        // cwd resolves the active project pod for 'auto'.
+        podScope: podScope ?? 'auto',
+        cwd: process.cwd(),
         route: false,
         synthesize: false,
       });
@@ -61,7 +64,10 @@ Set format="compact" for token-efficient output (one line per category, no IDs/m
         for (const f of facts) {
           const content = truncate(f.content, FACT_TRUNCATE);
           const vital = f.importance === 'vital' ? ' **[VITAL]**' : '';
-          parts.push(`- [${f.category}] ${content}${vital} _(${f.confidence}, id:${f.id})_`);
+          // Provenance: which agent wrote it + first source doc, if known.
+          const via = f.agent ? ` · via ${f.agent}` : '';
+          const doc = Array.isArray(f.sourceDocumentIds) && f.sourceDocumentIds.length ? ` · doc#${f.sourceDocumentIds[0]}` : '';
+          parts.push(`- [${f.category}] ${content}${vital} _(${f.confidence}, id:${f.id}${via}${doc})_`);
         }
       }
 

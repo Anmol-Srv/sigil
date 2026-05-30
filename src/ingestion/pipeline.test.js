@@ -47,6 +47,7 @@ vi.mock('../memory/facts/extractor.js', () => ({
 
 vi.mock('../memory/facts/store.js', () => ({
   saveFact: vi.fn().mockResolvedValue({ action: 'ADD', fact: { id: 1, uid: 'fact-new' } }),
+  supersedeStaleDocFacts: vi.fn().mockResolvedValue({ superseded: 0, dissociated: 0 }),
 }));
 
 vi.mock('../memory/entities/linker.js', () => ({

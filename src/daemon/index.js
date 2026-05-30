@@ -19,6 +19,12 @@ import { registerAll } from './handlers/index.js';
 const STARTED_AT = Date.now();
 
 export async function startDaemon({ foreground = false } = {}) {
+  // The daemon serves every agent; agent provenance must come per-request from
+  // the socket envelope (→ AsyncLocalStorage), never from a global. Scrub any
+  // SIGIL_AGENT inherited from the spawning CLI so currentAgent()'s env
+  // fallback can't misattribute another agent's writes to 'cli'.
+  delete process.env.SIGIL_AGENT;
+
   await ensureSigilHome();
 
   const existing = await detectRunningDaemon();
@@ -42,6 +48,15 @@ export async function startDaemon({ foreground = false } = {}) {
   const socket = await startSocketServer({ registry, log });
 
   const { default: config } = await import('../config.js');
+
+  // Eager DB health probe. A memory daemon that can't reach Postgres must say
+  // so LOUDLY — the old behaviour let every hook silently return empty memory,
+  // so the user kept working for hours thinking they had context. Non-fatal
+  // and non-blocking: the daemon stays up (Claude keeps working) and the flag
+  // feeds `status` → GUI banner. Skipped for lite-followers (no local DB).
+  if (config.network.mode !== 'lite-follower') {
+    probeDbHealth(log);
+  }
   let http = null;
   if (config.http.enabled) {
     try {
@@ -124,6 +139,24 @@ export async function startDaemon({ foreground = false } = {}) {
     // Print a readiness line to stdout so the auto-spawner can detect it.
     process.stdout.write('sigild ready\n');
   }
+}
+
+// Fire-and-forget Postgres reachability probe. Sets the shared dbHealth flag
+// and logs loudly on failure. Never throws, never blocks startup — a down DB
+// must not stop the daemon (so `sigil` keeps responding and the user gets a
+// clear signal rather than silent empty memory).
+async function probeDbHealth(log) {
+  try {
+    const { default: cortexDb } = await import('../db/cortex.js');
+    const { setDbHealth } = await import('./registry-holder.js');
+    try {
+      await cortexDb.raw('SELECT 1');
+      setDbHealth({ healthy: true, error: null, checkedAt: Date.now() });
+    } catch (err) {
+      setDbHealth({ healthy: false, error: err.message, checkedAt: Date.now() });
+      log(`DB UNREACHABLE: ${err.message} — memory operations will fail until Postgres is back`);
+    }
+  } catch { /* import failure — nothing we can do, leave health unknown */ }
 }
 
 function makeLogger() {

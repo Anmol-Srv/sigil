@@ -96,7 +96,7 @@ async function handleFrame(line, socket, registry, log) {
     return;
   }
 
-  const { id = null, method, params } = req || {};
+  const { id = null, method, params, agent = null } = req || {};
   if (typeof method !== 'string') {
     writeFrame(socket, {
       id,
@@ -106,7 +106,7 @@ async function handleFrame(line, socket, registry, log) {
     return;
   }
 
-  const result = await registry.dispatch(method, params, { transport: 'socket' });
+  const result = await registry.dispatch(method, params, { transport: 'socket', agent });
   writeFrame(socket, { id, ...result });
 
   if (!result.ok && process.env.SIGIL_DEBUG) {

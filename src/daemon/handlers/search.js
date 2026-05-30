@@ -20,7 +20,15 @@ export function registerSearch(registry) {
     const includeChunks = Boolean(params.includeChunks) || synthesize;
     const minConfidence = params.minConfidence;
     const pointInTime = params.pointInTime ? new Date(params.pointInTime) : undefined;
-    const podScope = params.podScope ?? null;
+    // Default to project scope ('auto'), not the whole brain. An explicit
+    // caller can still pass 'global' or a pod list. ctx carries cwd/sessionId
+    // so 'auto' can resolve the active project/session pods.
+    const podScope = params.podScope ?? 'auto';
+    // Explicit search (CLI `sigil search`, MCP) shows everything by default —
+    // the precision floor is for unprompted auto-injection (hooks), not for a
+    // human/agent who deliberately asked. Opt in with applyFloor:true.
+    const applyFloor = params.applyFloor ?? false;
+    const ctx = { cwd: params.cwd || null, sessionId: params.sessionId || null };
 
     const result = await search(query, {
       namespaces,
@@ -32,6 +40,8 @@ export function registerSearch(registry) {
       minConfidence,
       pointInTime,
       podScope,
+      applyFloor,
+      ctx,
     });
 
     const response = {
@@ -72,6 +82,12 @@ function serializeFact(f) {
     importance: f.importance ?? null,
     similarity: numOrNull(f.similarity),
     rrfScore: numOrNull(f.rrfScore),
+    // Provenance (surfaced, never a scope): which agent/device wrote it and
+    // which source documents it came from.
+    agent: f.createdByAgent ?? null,
+    device: f.createdByDeviceId ?? null,
+    sourceDocumentIds: Array.isArray(f.sourceDocumentIds) ? f.sourceDocumentIds : [],
+    sourceSection: f.sourceSection ?? null,
   };
 }
 

@@ -55,6 +55,12 @@ async function main() {
     const { search } = await import('../memory/search/hybrid.js');
     const config = (await import('../config.js')).default;
 
+    // Project-scoped, precision-first. We deliberately do NOT fall back to a
+    // global search on empty/error — that fallback was the cross-project leak
+    // (a gstack/sigil prompt pulling unrelated payment-webhook facts). The
+    // floor (applyFloor defaults true in search()) drops off-topic matches,
+    // and resolvePodScope's SIGIL_SCOPE_GRACE path already returns floored
+    // global ONLY for genuine fresh installs with zero pods. Empty beats wrong.
     let result;
     try {
       result = await search(query, {
@@ -71,39 +77,15 @@ async function main() {
         },
       });
     } catch (searchErr) {
-      // If pod-scoped search yields nothing (or errors on empty scope),
-      // fall through to a global search so the hook still surfaces facts
-      // for fresh installs / pre-pod data.
-      process.stderr.write(`[sigil:user-prompt-submit] pod-scoped search failed, retrying global: ${searchErr.message}\n`);
-      result = await search(query, {
-        namespaces: [config.defaults.namespace],
-        limit: MAX_FACTS,
-        useGraph: false,
-        route: true,
-        expand: true,
-        synthesize: false,
-        podScope: 'global',
-      });
+      // A failed scoped search injects NOTHING (never the global brain). Log
+      // for `sigil doctor`; the prompt proceeds without memory.
+      process.stderr.write(`[sigil:user-prompt-submit] scoped search failed: ${searchErr.message}\n`);
+      const cortexDb = (await import('../db/cortex.js')).default;
+      await cortexDb.destroy().catch(() => {});
+      return respond();
     }
 
-    let facts = result?.facts || [];
-
-    // If pod-scoped search returned nothing but we asked for 'auto', try
-    // global as a fallback (e.g., user just installed and has no pods yet).
-    if (facts.length === 0) {
-      try {
-        const fallback = await search(query, {
-          namespaces: [config.defaults.namespace],
-          limit: MAX_FACTS,
-          useGraph: false,
-          route: true,
-          expand: true,
-          synthesize: false,
-          podScope: 'global',
-        });
-        facts = fallback?.facts || [];
-      } catch { /* keep facts as empty */ }
-    }
+    const facts = result?.facts || [];
 
     if (!facts.length) {
       const cortexDb = (await import('../db/cortex.js')).default;

@@ -13,6 +13,11 @@ import { registerIngestTool } from './tools/ingest.js';
 import { registerListPodsTool } from './tools/list-pods.js';
 import { registerGetPodTool } from './tools/get-pod.js';
 
+// Agent provenance: writes from MCP clients (Cursor, Codex, etc.) are tagged
+// 'mcp'. The socket client forwards this in each request envelope so the
+// daemon stamps created_by_agent. An explicitly-set SIGIL_AGENT wins.
+if (!process.env.SIGIL_AGENT) process.env.SIGIL_AGENT = 'mcp';
+
 function createMcpServer() {
   const server = new McpServer({
     name: 'sigil',

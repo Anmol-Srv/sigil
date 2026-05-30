@@ -26,6 +26,11 @@ if (existsSync(globalEnv) && globalEnv !== projectEnv) {
   dotenvConfig({ path: globalEnv, quiet: true });
 }
 
+// Agent provenance: CLI-originated writes are tagged 'cli'. The socket client
+// forwards this in each request envelope so the daemon stamps created_by_agent.
+// An explicitly-set SIGIL_AGENT (e.g. a wrapper script) still wins.
+if (!process.env.SIGIL_AGENT) process.env.SIGIL_AGENT = 'cli';
+
 const [command, ...rest] = process.argv.slice(2);
 
 const HELP = `sigil — Persistent memory for your Claude sessions
@@ -1959,11 +1964,13 @@ Options:
   --synthesize        Enable LLM answer synthesis
   --chunks            Include raw chunk matches
   --no-graph          Disable graph enhancement
+  --scope             Scope to the active project/session pods (default: search everything)
 
 Examples:
   sigil search "authentication flow"
   sigil search "deploy process" --namespace=engineering
-  sigil search "API design" --limit=5`);
+  sigil search "API design" --limit=5
+  sigil search "that decision" --scope          # only this project's memory`);
     process.exit(0);
   }
 
@@ -1978,8 +1985,14 @@ Examples:
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
   const client = await connectOrStartDaemon();
   try {
+    // Explicit human search defaults to the WHOLE brain; --scope narrows to
+    // the active project/session pods (cwd lets 'auto' resolve them). This is
+    // distinct from the hook's auto-injection, which is always project-scoped
+    // + floored. No floor here — a human searching sees every match.
+    const podScope = flags.includes('--scope') ? 'auto' : 'global';
     const { data } = await client.call('search', {
       query, namespaces, limit, useGraph, route, synthesize, includeChunks,
+      podScope, cwd: process.cwd(),
     });
 
     if (data.synthesized) console.log(data.synthesized);

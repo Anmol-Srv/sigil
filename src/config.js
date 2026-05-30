@@ -131,6 +131,16 @@ const config = {
     ambiguousThreshold: Number(process.env.MEMORY_AMBIGUOUS_THRESHOLD) || 0.78,
     // Search: discard results below this cosine similarity floor
     minFactSimilarity: Number(process.env.MEMORY_MIN_FACT_SIMILARITY) || 0.45,
+    // Injection floor (precision-first): for AUTO-injection paths (hooks /
+    // hot-context), drop any fact whose absolute cosine similarity to the
+    // query is below this. Higher than minFactSimilarity on purpose — when we
+    // inject memory unprompted, "empty but honest" beats "full but off-topic"
+    // (one irrelevant injection teaches the user to ignore all of them).
+    // Explicit human search (CLI/MCP) passes applyFloor:false to bypass.
+    // Tune from the Activity log's per-search dropped-count. Cosine, not the
+    // normalized rrfScore (which is relative-to-best and always keeps the top
+    // result even for an off-topic query).
+    injectionFloor: Number(process.env.MEMORY_INJECTION_FLOOR) || 0.6,
   },
 
   search: {
