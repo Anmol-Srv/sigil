@@ -77,7 +77,20 @@ async function mergeHooks({ dryRun = false } = {}) {
   try {
     const raw = await fs.readFile(CLAUDE_SETTINGS_PATH, 'utf8');
     settings = JSON.parse(raw);
-  } catch { /* file doesn't exist or invalid — start fresh */ }
+  } catch (err) {
+    // ENOENT is fine — a fresh settings.json is the correct outcome. But a parse
+    // error means the file EXISTS with content we can't understand; starting
+    // fresh here would silently WIPE every other hook/setting the user has
+    // (gstack hooks, statusline, permissions, ...). Mirror cursor.js /
+    // codex-cli.js and refuse to touch a malformed file — surface it instead.
+    if (err.code !== 'ENOENT') {
+      return {
+        action: 'skip',
+        path: CLAUDE_SETTINGS_PATH,
+        detail: `invalid JSON — not touched (${err.message}); fix or move it, then re-run`,
+      };
+    }
+  }
 
   // Quote the shim path so a homedir with spaces still parses as one argument.
   const hook = (name) => `'${HOOK_SHIM_PATH}' ${name}`;
