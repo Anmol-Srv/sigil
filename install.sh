@@ -44,9 +44,13 @@ say ""
 # ── 1. host detection (install-relevant ONLY) ─────────────────────────────────
 OS="$(uname -s 2>/dev/null || echo unknown)"
 case "$OS" in
-  Darwin|Linux) ;;
-  *) warn "Unsupported/unknown OS '$OS'. On Windows, install with: npm install -g $PKG"
-     die "Stopping — this script targets macOS and Linux." ;;
+  Darwin|Linux) ;;  # Linux covers WSL (uname reports Linux inside WSL).
+  MINGW*|MSYS*|CYGWIN*)
+     warn "This looks like native Windows ($OS)."
+     die "Sigil is unsupported on native Windows. Install it inside WSL (Windows Subsystem for Linux):
+  https://learn.microsoft.com/windows/wsl/install" ;;
+  *) warn "Unsupported/unknown OS '$OS'."
+     die "Stopping — Sigil targets macOS, Linux, and Windows via WSL." ;;
 esac
 
 have node || die "Sigil needs Node.js $MIN_NODE_MAJOR+ but \`node\` was not found.
@@ -85,10 +89,19 @@ install_with_pnpm() {
   if ! pnpm bin -g >/dev/null 2>&1; then
     step "Configuring pnpm global bin dir (pnpm setup)…"
     pnpm setup >/dev/null 2>&1 || warn "\`pnpm setup\` reported an issue — continuing."
-    [ -n "$PNPM_HOME" ] && PATH="$PNPM_HOME:$PATH"
   fi
   step "Installing with pnpm…"
   pnpm add -g "$PKG@$VERSION"
+  # `pnpm setup` wires PATH into the shell rc, NOT this piped sh — so without help
+  # the post-install `have sigil` check + `exec sigil` handoff would fail for
+  # pnpm-only users even though the install succeeded. Resolve pnpm's global bin
+  # dir from the likely locations and prepend the one that actually holds the
+  # freshly-installed `sigil`.
+  for _d in "$(pnpm bin -g 2>/dev/null)" "$PNPM_HOME" "${XDG_DATA_HOME:-$HOME/.local/share}/pnpm" "$HOME/Library/pnpm"; do
+    if [ -n "$_d" ] && [ -x "$_d/sigil" ]; then
+      PATH="$_d:$PATH"; export PATH; break
+    fi
+  done
 }
 
 if have npm; then

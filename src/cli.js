@@ -75,6 +75,17 @@ if (command === '--help' || command === '-h') {
   process.exit(0);
 }
 
+// Native Windows is unsupported: Sigil's launcher shims and Claude Code hooks are
+// POSIX shell scripts, and the daemon/path model assumes a POSIX environment. WSL
+// (which reports process.platform === 'linux') is the supported path, so 'win32'
+// here is always native Windows. Refuse loudly instead of half-installing.
+if (process.platform === 'win32') {
+  console.error('Sigil does not support native Windows.');
+  console.error('Install and run it inside WSL (Windows Subsystem for Linux):');
+  console.error('  https://learn.microsoft.com/windows/wsl/install');
+  process.exit(1);
+}
+
 // Zero-arg launch ("npx sigil") is dispatched below through the same
 // diagnostic try/catch as every other command — see the `handler` resolution
 // near the bottom. Running it here, at module top level, used to put the
