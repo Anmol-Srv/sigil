@@ -5,7 +5,10 @@
 // pre-sigil snapshot (.sigil.bak) is captured exactly once and never clobbered.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync,
+  readdirSync, chmodSync, statSync, lstatSync, symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -40,7 +43,8 @@ describe('safeWrite', () => {
   it('leaves no temp litter behind on success', async () => {
     const p = join(DIR, 'c.json');
     await safeWrite(p, 'x');
-    expect(existsSync(`${p}.sigil.tmp.${process.pid}`)).toBe(false);
+    // Temp name carries a random suffix now — assert NO .sigil.tmp.* survives.
+    expect(readdirSync(DIR).some((f) => f.includes('.sigil.tmp.'))).toBe(false);
   });
 
   it('dry-run writes nothing to disk', async () => {
@@ -48,5 +52,29 @@ describe('safeWrite', () => {
     const r = await safeWrite(p, 'nope', { dryRun: true });
     expect(r.wrote).toBe(false);
     expect(existsSync(p)).toBe(false);
+  });
+
+  it('preserves the existing file mode (does not relax 0600 → 0644)', async () => {
+    const p = join(DIR, 'secret.json');
+    writeFileSync(p, 'before');
+    chmodSync(p, 0o600);
+
+    await safeWrite(p, 'after');
+    expect(readFileSync(p, 'utf8')).toBe('after');
+    expect(statSync(p).mode & 0o777).toBe(0o600);
+  });
+
+  it('writes through a symlinked target instead of detaching it', async () => {
+    const real = join(DIR, 'real.json');
+    const link = join(DIR, 'link.json');
+    writeFileSync(real, 'original');
+    symlinkSync(real, link);
+
+    await safeWrite(link, 'updated');
+
+    // The link must still be a symlink (not replaced by a regular file)...
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    // ...and the real file behind it carries the new content.
+    expect(readFileSync(real, 'utf8')).toBe('updated');
   });
 });
