@@ -166,7 +166,7 @@ async function launchAndOpenBrowser() {
 const commands = {
   init: runInit,
   connect: runConnect,
-  setup: runSetupVerb,
+  setup: runInit, // alias: one native onboarding flow (no separate quickstart path)
   uninstall: runUninstall,
   doctor: runDoctor,
   remember: runRemember,
@@ -214,10 +214,6 @@ async function runJoinVerb(args) {
   return runJoin(args);
 }
 
-async function runSetupVerb(args) {
-  const { runSetup } = await import('./cli-handlers/quickstart.js');
-  return runSetup(args);
-}
 
 // Zero-arg → the launch-and-open-browser flow; otherwise a named command.
 const handler = command

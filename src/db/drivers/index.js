@@ -73,9 +73,10 @@ function hasExplicitLocalEnv() {
 
 function notConfiguredError() {
   const err = new Error(
-    'Sigil has no database configured yet. Run `sigil quickstart` (zero-prerequisite '
-    + 'embedded engine) or complete setup in the GUI. Refusing to connect to a default '
-    + 'localhost:5432 — that would hit whatever Postgres happens to own that port, not Sigil\'s.',
+    'Sigil has no database configured yet. Run `sigil` to set up (the built-in '
+    + 'zero-prerequisite embedded engine) or `sigil init` in the terminal. Refusing to '
+    + 'connect to a default localhost:5432 — that would hit whatever Postgres happens to '
+    + 'own that port, not Sigil\'s.',
   );
   err.code = 'not_configured';
   return err;
