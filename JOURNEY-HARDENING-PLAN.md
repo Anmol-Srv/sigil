@@ -10,6 +10,13 @@
 > (decided, not yet built) · 🐛 confirmed bug · 🧪 verify-in-build · ⏭️ deferred.
 >
 > Started: 2026-06-05 · Branch: master · Reviewer: Claude (devex-review lenses)
+>
+> **Progress (2026-06-05):** P0 batch merged to master via **PR #10** (squash `762cf54`):
+> B5.1/B5.2 (config-write safety), B1.1/B1.2 (install hardening), B4.1/B4.4 (single onboarding
+> flow + dead-config removal) — all with regression tests. Plus a CI fix: the long-red
+> `reliability` gate now runs the real 1024-dim embedder (`mxbai-embed-large`, the production
+> default) instead of nomic-embed-text (768), so it finally tests the shipping path and passes.
+> **Remaining P0: the daemon-routing refactor (Step 6 — scoped below, with live evidence).**
 
 ---
 
@@ -343,53 +350,89 @@ contract for providers/embedders.
 
 ## STEP 6 — Steady-state hot path (read/write hooks, timeouts, caches)
 
-### What the journey looks like today
-- 4 hooks (separate processes spawned by Claude Code per turn): UserPromptSubmit (read,
-  10s budget, search+inject), PostToolUse (10s async), Stop (30s, classify+write), SessionEnd.
-- `cortex.js` builds a knex pool LAZILY, directly against the configured driver (pg server OR
-  embedded PGlite dialect). NO daemon routing — hooks open their own pool, query, `destroy()`.
-- Pool tuned for short-lived hooks (min:0; max:1 for embedded). Read hook runs `route:true`
-  (LLM query routing) synchronously in-budget. LLM response cache is in-memory only.
+### What the journey looks like today  *(revised after scoping, 2026-06-05)*
+- The daemon ALREADY exposes 27 RPCs (`rpc-registry.js` + `handlers/`), incl. the full hot path:
+  `search` (wraps `memory/search/hybrid.js`), `remember` (write + AUDM), `ingestDoc`,
+  `refreshContext`, `listFacts`, `forgetFact`, `status`. **Server side is essentially built.**
+- Agent-facing CLI verbs ALREADY route through the daemon: `remember`→`client.call('remember')`,
+  `search`→`client.call('search')`, `context`, `facts`→`listFacts`. **Already thin clients.**
+- The **4 HOOKS do NOT** — they import `cortex`/`hybrid` directly and open their own pool per turn.
+- A few **COLD CLI verbs also open `cortex` directly**: `doctor` (SELECT 1, cli.js:585), `export`,
+  `why`, `namespace`, … `cortex.js` itself has no daemon proxy.
+- `factoryReset` already runs inside the daemon (Step 8). Read hook runs `route:true` (an LLM call)
+  synchronously in-budget; LLM response cache is in-memory only.
 
 ### Findings
-🐛 **6.1 (CRITICAL, architectural) Embedded-default + hooks = single-process lock conflict.**
-PGlite holds `~/.sigil/db` per-process; the daemon owns it. Hooks import `cortex` directly with
-no daemon proxy, so each per-turn hook process tries to open the engine the daemon holds. The
-quickstart guard already encodes this conflict for the CLI — hooks have no equivalent guard.
-Net: the zero-config embedded default (now the only storage default, D4.1) cannot serve the
-auto-capture/inject hook flow, which is Sigil's core value. Postgres works only as a server. → D6.1.
-🔧 **6.2 Connection churn on the hot path.** Even in Postgres mode every hook opens→queries→
-destroys a pool within the 10s/30s budget. A warm daemon pool removes per-invocation connect cost.
-🔧 **6.3 Synchronous LLM routing in the read budget.** `route:true` puts an LLM call on the 10s
-read path (SETUP-DESIGN §8 timeout risk). Fast-path (vector+keyword in-budget, defer expansion).
-🔧 **6.4 LLM cache not persistent.** In-memory only; lost on daemon restart. Daemon-owned warm
-caches (embeddings already PG-cached; add LLM-response cache) are the biggest cold-start win.
-
-### Open decisions
-- 🔵 **D6.1 Hook DB access model** (route through daemon / releasable embedded+lock / embedded
-  GUI-only). Load-bearing for the embedded-by-default decision.
+🐛 **6.1 (CRITICAL — PROVEN LIVE) Embedded + hooks = PGlite WASM abort.** The read hook opens
+`cortex` directly; in embedded mode the daemon owns the single PGlite engine, so the hook aborts.
+**EVIDENCE:** `~/.sigil/.hook-errors.log` holds **130 read-hook failures this session**
+(10:01→13:32), all the same pod/trace/fact query chain ending in `Aborted(). Build with
+-sASSERTIONS` — PGlite's WASM engine aborting on the second opener. **Memory auto-injection
+(Sigil's core value) has been silently broken the entire session.** Not theoretical; the live
+failure mode. → D6.1.
+🟢 **6.2 (CORRECTED) Hot CLI verbs already route through the daemon.** remember/search/context/
+facts are already thin RPC clients — no churn, no conflict there. The conflict is limited to
+(a) the 4 hooks and (b) the cold direct-cortex verbs. Scope is smaller than first feared.
+🐛 **6.5 (NEW) `doctor` opens cortex directly** (cli.js:585 `cortexDb.raw('SELECT 1')`) → the
+SAME double-open conflict in embedded mode: the tool you run to diagnose can itself trigger the
+WASM abort. Doctor must read DB health via the daemon `status` RPC, not its own pool.
+🔧 **6.3 Synchronous LLM routing in the read budget** (`route:true` on the 10s path). Unchanged.
+🔧 **6.4 LLM response cache is in-memory only** (lost on daemon restart). Unchanged.
 
 ### Decisions made
-- ✅ **D6.1 Route all hook (and DB-touching CLI) access through the daemon (RPC).** The daemon
-  is the SOLE owner of the DB (the single PGlite engine in embedded mode; the warm pool in
-  Postgres mode). Hooks + the agent-invoked CLI verbs (`remember`, `search`, `context`, …,
-  which are separate Bash processes and hit the same single-process conflict) become thin RPC
-  clients. Embedded and Postgres collapse to ONE access path. Biggest workstream in the plan;
-  touches hooks + CLI + daemon. Unblocks warm caches + fast-path (6.2/6.3/6.4) for free.
+- ✅ **D6.1 Route all hook + remaining direct-cortex access through the daemon (sole DB owner).**
+  Refined after recon: the server RPCs + hot CLI verbs are DONE. The work is the 4 hooks + the
+  cold direct-cortex verbs (doctor/export/why/namespace) + a double-open guard. Embedded and
+  Postgres collapse to ONE access path; fixes 6.1, removes remaining churn, enables 6.3/6.4.
+
+### DAEMON-ROUTING REFACTOR — SCOPE (P0 #2)
+> Goal: in embedded mode, **only the daemon process opens `cortex`**. Everything else is a thin
+> RPC client. Phased so the proven-broken read hook is fixed first.
+
+**Already done (verified):** 27 daemon RPCs (search/remember/ingestDoc/refreshContext/listFacts/
+status/…); CLI remember/search/context/facts route through the daemon; factoryReset runs in-daemon.
+
+**Phase A — read hook (highest priority; fixes the 130 live aborts).**
+- Rewrite `hooks/user-prompt-submit.js`: stdin → `connectOrStartDaemon()` →
+  `client.call('search', { query, namespaces, route:true, podScope:'auto', applyFloor:true,
+  ctx:{cwd,sessionId} })` → format `additionalContext` from the response. Delete the direct
+  `hybrid.js`/`cortex` import + `cortexDb.destroy()` calls. The `search` RPC already takes these
+  exact params — minimal server work.
+- Degradation: bound connect+call to the 10s budget; on timeout/no-daemon, emit empty
+  `additionalContext` (skip injection). NEVER block the prompt, NEVER open cortex as a fallback.
+
+**Phase B — write hooks (stop, post-tool-use, session-end).**
+- Route classify+write through the `remember`/`ingestDoc` RPCs instead of importing the store/cortex.
+  Preserve `--bg`/spool semantics client-side; verify `.stop-spool.jsonl` drains via the daemon.
+
+**Phase C — cold direct-cortex verbs + doctor.**
+- `doctor`: swap the direct `cortex SELECT 1` for the daemon `status` RPC (DB health + provider +
+  embedding-lock + spool). Safe in embedded mode and richer.
+- `export`, `why`, `namespace`, etc.: route via an RPC (add a thin handler where missing) or gate
+  behind the Phase-D guard.
+
+**Phase D — the guard (make the failure impossible).**
+- In `cortex.js getPool()`: if `driver.kind==='embedded'` AND a daemon is running AND this process
+  is NOT the daemon → throw a clear redirect-to-RPC error. Mirrors the quickstart single-process
+  guard. Belt-and-suspenders so no future code reintroduces the 6.1 abort.
+
+**Phase E — latency wins (enabled by A–D; can follow).**
+- Daemon fast-path read search (vector+keyword in-budget; defer LLM route/expand; cache for next
+  turn). (6.3 / §8)  ·  Daemon-owned persistent LLM-response cache (mirror `embedding_cache`). (6.4)
+
+**Risks / watch:** daemon cold-start on a session's first hook vs the 10s budget → must skip-inject,
+not hang; `connectOrStartDaemon` must be fast+quiet from a hook; confirm pod-scope/trace writes now
+happen server-side; ensure auto-spawn from a hook doesn't itself race two daemons.
 
 ### Build items (queued)
-- 🔨 **B6.1** Daemon RPC endpoints for the hot path: `search` (read hook), `ingest`/`remember`
-  (write/stop), post-tool-use, session-end. Daemon owns all DB access.
-- 🔨 **B6.2** Refactor the 4 hooks to thin RPC clients (move in-process search/embed/classify
-  server-side). On no running daemon, auto-spawn via existing `connectOrStartDaemon`; degrade
-  gracefully (skip injection) if cold-start would blow the 10s read budget.
-- 🔨 **B6.3** Route DB-touching CLI verbs through the daemon too (same single-process reason);
-  keep direct `cortex` usage ONLY inside the daemon process.
-- 🔨 **B6.4** Daemon fast-path read search (vector+keyword in-budget; defer LLM route/expand,
-  cache result for the next turn). Implements SETUP-DESIGN §8.
-- 🔨 **B6.5** Daemon-owned persistent LLM-response cache (mirror the `embedding_cache` table).
-- 🔨 **B6.6** Add a cortex direct-open guard mirroring the quickstart guard: if the daemon owns
-  the embedded engine, a non-daemon `getPool()` must refuse/redirect, so nothing can double-open.
+- 🔨 **B6.1** Phase A: read hook → `search` RPC client + budget/skip-inject degradation. **Fixes 6.1.**
+- 🔨 **B6.2** Phase B: stop/post-tool-use/session-end → remember/ingest RPC clients; drop cortex imports.
+- 🔨 **B6.3** Phase C: `doctor` → `status` RPC; route/guard remaining cold direct-cortex verbs.
+- 🔨 **B6.4** Phase D: embedded single-process guard in `cortex.js getPool()`.
+- 🔨 **B6.5** Phase E: daemon fast-path read search (defer LLM expand). (§8)
+- 🔨 **B6.6** Phase E: daemon-owned persistent LLM-response cache.
+- 🧪 **B6.7** Regression: an embedded-mode read-hook invocation against a running daemon must NOT
+  abort (assert no new WASM-abort line in `.hook-errors.log`).
 
 ---
 
@@ -528,11 +571,14 @@ validation + `listX()`).
 ### Master build sequence (build afterward)
 
 **P0 — correctness & safety (do first):**
-1. ✅ **DONE** — **B5.1** claude-code malformed-`settings.json` wipe fix (data loss) + **B5.2**
-   atomic writes, both with regression tests + dist rebuilt. _(B5.4 broad writer audit still queued.)_
-2. **B6.1–B6.6** Daemon-routing refactor (D6.1): RPC endpoints → hooks as clients → CLI verbs →
-   double-open guard → fast-path read → persistent LLM cache. _(largest; unblocks embedded-default
-   + the whole hook hot path + caches)_
+0. ✅ **DONE (PR #10)** — reliability CI gate fixed (real 1024-dim embedder); B5.1/B5.2/B1.1/B1.2/
+   B4.1/B4.4 merged. See progress header.
+1. ✅ **DONE (PR #10)** — **B5.1** malformed-`settings.json` wipe fix + **B5.2** atomic writes,
+   with regression tests. _(B5.4 broad writer audit still queued.)_
+2. **B6.1–B6.7** Daemon-routing refactor (D6.1) — scoped in Step 6 as **Phases A–E**: read hook →
+   write hooks → doctor + cold verbs → double-open guard → fast-path + LLM cache. **Phase A is the
+   priority** (fixes 130 PROVEN WASM aborts in `.hook-errors.log`). Server RPCs + hot CLI verbs are
+   already done, so this is smaller than first scoped — mostly client-side hook rewrites + a guard.
 3. ✅ **B4.1 DONE** Remove quickstart → single native flow (D4.1) + ✅ **B4.4 DONE** delete dead
    `config.server`. _(B4.3 "no embedder" UX polish still queued.)_
 4. ✅ **DONE** — **B1.1** pnpm PATH fix + **B1.2** native-Windows refusal (D1.1).
