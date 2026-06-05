@@ -102,7 +102,7 @@ suite('reliability scorecard', () => {
     const scorecard = {
       ts: new Date().toISOString(),
       commit: process.env.GITHUB_SHA || process.env.SIGIL_COMMIT || 'local',
-      model: 'ollama:nomic-embed-text',
+      model: 'ollama:mxbai-embed-large',
       precision, recall, leakRate,
       cases: cases.length,
       gate: GATE,

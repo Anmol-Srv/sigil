@@ -45,7 +45,10 @@ jobs:
             curl -sf http://127.0.0.1:11434/api/tags >/dev/null && break
             sleep 1
           done
-          ollama pull nomic-embed-text
+          # 1024-dim model — matches Sigil's pinned EMBEDDING_DIM (the harness +
+          # production schema are vector(1024)). nomic-embed-text (768) would fail
+          # the dimension check.
+          ollama pull mxbai-embed-large
 
       - name: Reliability gate (real embeddings + scorecard)
         run: npm run test:reliability

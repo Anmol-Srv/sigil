@@ -15,8 +15,8 @@
 import { TEST_PG_URL } from './harness/pg.js';
 process.env.SIGIL_DATABASE_URL = TEST_PG_URL;
 process.env.EMBEDDING_PROVIDER = 'ollama';
-process.env.EMBEDDING_MODEL = 'nomic-embed-text';
-process.env.EMBEDDING_DIMENSIONS = '768';
+process.env.EMBEDDING_MODEL = 'mxbai-embed-large';
+process.env.EMBEDDING_DIMENSIONS = '1024';
 process.env.SIGIL_SCOPE_GRACE = 'false'; // strict scoping in the gate
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -50,8 +50,8 @@ function runHook(prompt, cwd) {
       ...process.env,
       SIGIL_DATABASE_URL: TEST_PG_URL,
       EMBEDDING_PROVIDER: 'ollama',
-      EMBEDDING_MODEL: 'nomic-embed-text',
-      EMBEDDING_DIMENSIONS: '768',
+      EMBEDDING_MODEL: 'mxbai-embed-large',
+      EMBEDDING_DIMENSIONS: '1024',
       SIGIL_SCOPE_GRACE: 'false',
     },
   });

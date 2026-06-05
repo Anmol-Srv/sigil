@@ -1,7 +1,7 @@
 // Ollama availability guard. The reliability suites run against REAL
-// embeddings (nomic-embed-text); if Ollama isn't up with that model, the
-// suites skip with a clear message rather than failing spuriously. CI runs
-// with Ollama present so the gate is real there.
+// embeddings (mxbai-embed-large, 1024-dim — matches Sigil's pinned dim); if
+// Ollama isn't up with that model, the suites skip with a clear message rather
+// than failing spuriously. CI runs with Ollama present so the gate is real there.
 
 const HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
 
@@ -13,7 +13,7 @@ export async function ollamaReady() {
     const res = await fetch(`${HOST}/api/tags`, { signal: AbortSignal.timeout(2500) });
     if (!res.ok) { cached = false; return cached; }
     const json = await res.json();
-    cached = (json.models || []).some((m) => /nomic-embed-text/.test(m.name || m.model || ''));
+    cached = (json.models || []).some((m) => /mxbai-embed-large/.test(m.name || m.model || ''));
   } catch {
     cached = false;
   }
@@ -21,5 +21,5 @@ export async function ollamaReady() {
 }
 
 export const OLLAMA_SKIP_MSG =
-  'Ollama + nomic-embed-text not available — skipping real-embedding reliability suite. '
-  + 'Install: `ollama pull nomic-embed-text` and ensure `ollama serve` is running.';
+  'Ollama + mxbai-embed-large not available — skipping real-embedding reliability suite. '
+  + 'Install: `ollama pull mxbai-embed-large` and ensure `ollama serve` is running.';

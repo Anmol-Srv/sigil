@@ -3,14 +3,14 @@
  *
  * The whole point of the reliability infra is to stop testing against mocks.
  * This spins up a fresh in-process Postgres (PGlite + the pgvector extension),
- * applies the actual src/db/migrations/*.cjs (so vector(768), tsvector, GIN,
+ * applies the actual src/db/migrations/*.cjs (so vector(1024), tsvector, GIN,
  * hnsw, every column and constraint match production), and hands back a knex
  * instance wired with the SAME camelCase<->snake_case mappers as
  * src/db/cortex.js. App code (ingest pipeline, hybrid search, fact store) runs
  * unchanged against it — no hand-rolled tables, no mocked SQL.
  *
  * Vector ops are real: the probe confirmed PGlite supports vector / halfvec /
- * hnsw, so hybrid-sql.js's `::halfvec(768)` casts and `<=>` distance run for
+ * hnsw, so hybrid-sql.js's `::halfvec(1024)` casts and `<=>` distance run for
  * real. That's exactly the layer the unit-test mocks hid.
  */
 

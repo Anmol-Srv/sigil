@@ -3,11 +3,17 @@
 // UPDATE supersedes the old row, CONTRADICT marks it contradicted, both with a
 // history trail. Real embeddings put related facts in the zone; the LLM is
 // stubbed so we test the PLUMBING deterministically (the judge's quality is a
-// separate eval). Thresholds are widened so any related pair triggers the
-// judge (set before any import so config reads them).
+// separate eval). All three AUDM thresholds are widened so any related pair
+// triggers the judge (set before any import so config reads them).
 
 process.env.MEMORY_SKIP_THRESHOLD = '0.999';
 process.env.MEMORY_AMBIGUOUS_THRESHOLD = '0.40';
+// The UPDATE/CONTRADICT supersession scan gates candidates on SUPERSEDE, not
+// AMBIGUOUS (store.js findSimilar). Widen it too — otherwise a genuine
+// contradiction the embedder rates only loosely related (mxbai-embed-large
+// scores "deploys Friday" vs "never deploy Friday" ~0.55, below the 0.72
+// default) never becomes a candidate and the verdict silently degrades to ADD.
+process.env.MEMORY_SUPERSEDE_THRESHOLD = '0.40';
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
