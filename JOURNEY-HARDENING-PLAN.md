@@ -283,9 +283,10 @@ the daemon, never open a second PGlite pool. Verify `remember`/hooks at steady-s
   on a bare machine. Honest framing required in docs (B4.3).
 
 ### Build items (queued)
-- 🔨 **B4.1** Remove quickstart: delete `cli-handlers/quickstart.js`, drop `--quickstart`
-  handling, simplify/remove the `sigil setup` chooser verb. Ensure zero-arg `sigil` + the
-  curl `exec sigil` handoff route into the single native flow. (X1 stale-code)
+- ✅ **B4.1 DONE** Removed quickstart: deleted `cli-handlers/quickstart.js` + the chooser;
+  `sigil setup` now aliases the single native flow (`runInit`); zero-arg `sigil` opens the same
+  step engine in the GUI. Fixed the not-configured DB error (referenced a removed `sigil
+  quickstart`). dist rebuilt. (PR #10)
 - 🔨 **B4.2** Keep the identity-step full-pipeline smoke test (4.3) as the canonical
   post-setup verification in the single flow.
 - 🔨 **B4.3** Embedding-step "no embedder" branch: detect early, inline two-path guidance
@@ -532,8 +533,8 @@ validation + `listX()`).
 2. **B6.1–B6.6** Daemon-routing refactor (D6.1): RPC endpoints → hooks as clients → CLI verbs →
    double-open guard → fast-path read → persistent LLM cache. _(largest; unblocks embedded-default
    + the whole hook hot path + caches)_
-3. **B4.1** Remove quickstart → single native flow (D4.1) + **B4.3** "no embedder" UX (D4.2)
-   + ✅ **B4.4 DONE** delete dead `config.server`.
+3. ✅ **B4.1 DONE** Remove quickstart → single native flow (D4.1) + ✅ **B4.4 DONE** delete dead
+   `config.server`. _(B4.3 "no embedder" UX polish still queued.)_
 4. ✅ **DONE** — **B1.1** pnpm PATH fix + **B1.2** native-Windows refusal (D1.1).
 
 **P1 — extensibility & DX:**
