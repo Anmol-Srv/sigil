@@ -145,12 +145,6 @@ const config = {
     },
   },
 
-  server: {
-    port: Number(process.env.PORT) || 4000,
-    host: process.env.HOST || '0.0.0.0',
-    logLevel: process.env.LOG_LEVEL || 'info',
-  },
-
   http: {
     enabled: env('SIGIL_HTTP_ENABLED', 'true') !== 'false',
     host: env('SIGIL_HTTP_HOST', '127.0.0.1'),
