@@ -1,26 +1,16 @@
 #!/usr/bin/env node
 
 /**
- * SessionEnd hook — synthesizes a summary fact, then closes the active
- * session pod.
+ * SessionEnd hook — closes the active session pod and (if enough facts were
+ * gathered) saves a synthesized end-of-session summary.
  *
- * Receives on stdin (JSON):
- *   { session_id, transcript_path?, reason?, summary?, cwd?, ... }
+ * All of that work — synthesis (LLM) + the DB writes — runs in the DAEMON via
+ * the `endSession` RPC. The hook is a thin client: it never opens the embedded
+ * DB itself (which, in single-process PGlite mode, would abort the WASM engine
+ * the daemon holds — finding 6.1). Best-effort: if the daemon is unreachable the
+ * `sigil maintain` staleness sweep closes any pod older than 6h as a backstop.
  *
- * Effects (in order):
- *   1. Resolve the active session pod via cursor (or skip if it doesn't
- *      match input.session_id).
- *   2. List facts already attached to the session pod. If there are
- *      enough (≥3), call the LLM to synthesize a one-fact summary using
- *      the claude_session.schema.md authoring guide. Save it via
- *      ingestDocument with classify:false and attach to all active
- *      kinds' pods (session + project, automatic via dispatcher).
- *   3. End the session pod (attrs.conclusion/summary written, ended_at
- *      stamped, cursor removed).
- *
- * If session_id is missing or the cursor doesn't match, this is a
- * no-op — hot-context staleness sweep in `sigil maintain` closes any
- * pod whose started_at is older than 6h.
+ * Receives on stdin (JSON): { session_id, transcript_path?, summary?, cwd?, ... }
  */
 
 import { loadHookEnv } from './env-loader.js';
@@ -28,8 +18,9 @@ import { maskSecrets } from './secret-mask.js';
 
 loadHookEnv();
 
-const MIN_FACTS_TO_SYNTHESIZE = 3;
-const MAX_FACTS_IN_PROMPT = 40;
+// SessionEnd is async (no user-facing latency). The daemon completes the work
+// even if this client call times out, so we bound it generously and never block.
+const END_TIMEOUT_MS = 25_000;
 
 async function main() {
   const raw = await readStdin();
@@ -37,132 +28,28 @@ async function main() {
 
   let input;
   try { input = JSON.parse(raw); } catch { return respond(); }
+  if (!input.session_id) return respond();
 
+  const { connectOrStartDaemon } = await import('../clients/auto-spawn.js');
+  let client;
   try {
-    if (!input.session_id) return respond();
-
-    const { endActiveSession, getActiveCursor } = await import('../memory/pods/active-session.js');
-    const cursor = await getActiveCursor();
-
-    // Only act if the cursor matches the session that just stopped.
-    if (!cursor || cursor.session_id !== input.session_id) return respond();
-
-    // Try synthesis BEFORE closing the pod. Best-effort: synthesis failure
-    // does not block the close. Config gate: skip synthesis (but still
-    // close the pod) when config is known-broken, so we don't waste an
-    // LLM round-trip that will 4xx.
-    try {
-      const { failClosedOnBadConfig } = await import('./error-log.js');
-      const skipSynth = await failClosedOnBadConfig('session-end', raw);
-      if (!skipSynth) {
-        await synthesizeSummary({
-          sessionPodUid: cursor.pod_uid,
-          cwd: input.cwd || cursor.cwd || null,
-          sessionId: input.session_id,
-          transcriptPath: input.transcript_path || cursor.transcript_path || null,
-        });
-      }
-    } catch (err) {
-      process.stderr.write(`[sigil:session-end] synthesis failed: ${maskSecrets(err.message)}\n`);
-    }
-
-    await endActiveSession({
-      conclusion: input.summary || input.conclusion || null,
+    client = await connectOrStartDaemon({ quiet: true, timeoutMs: END_TIMEOUT_MS });
+    await client.call('endSession', {
+      sessionId: input.session_id,
+      cwd: input.cwd || null,
+      transcriptPath: input.transcript_path || null,
       summary: input.summary || null,
+      conclusion: input.conclusion || null,
     });
   } catch (err) {
+    // Best-effort: log only. We never open the DB directly as a fallback, and a
+    // missed close self-heals via the `sigil maintain` staleness sweep.
     process.stderr.write(`[sigil:session-end] ${maskSecrets(err.message)}\n`);
-    try {
-      const { recordHookError } = await import('./error-log.js');
-      await recordHookError('session-end', err, input);
-    } catch { /* ignore */ }
   } finally {
-    try {
-      const cortexDb = (await import('../db/cortex.js')).default;
-      await cortexDb.destroy();
-    } catch { /* ignore */ }
+    if (client) await client.close().catch(() => {});
   }
 
   return respond();
-}
-
-async function synthesizeSummary({ sessionPodUid, cwd, sessionId, transcriptPath }) {
-  if (!sessionPodUid) return;
-
-  const podStore = await import('../memory/pods/store.js');
-  const podMembership = await import('../memory/pods/membership.js');
-  const sessionPod = await podStore.findByUid(sessionPodUid);
-  if (!sessionPod) return;
-
-  // Pull facts attached to this session pod via the existing listMembers
-  // helper. Sorted by attach order — most recent at the end of the array.
-  const memberRows = await podMembership.listMembers(sessionPod.id, {
-    memberType: 'fact',
-    limit: MAX_FACTS_IN_PROMPT,
-  });
-  if (memberRows.length < MIN_FACTS_TO_SYNTHESIZE) return;
-
-  // listMembers returns the join row + the fact content via the table
-  // join; verify shape and pluck content.
-  const factTexts = memberRows
-    .map((r) => r.content || r.fact_content || r.factContent)
-    .filter(Boolean);
-  if (factTexts.length < MIN_FACTS_TO_SYNTHESIZE) return;
-
-  const { promptJson } = await import('../lib/llm.js');
-  const { get, getSchemaDoc } = await import('../memory/pods/registry.js');
-  await import('../memory/pods/kinds/index.js'); // ensure registered
-
-  const kind = get('claude_session');
-  const schemaDoc = (await getSchemaDoc(kind)) || '';
-
-  const prompt = [
-    'You are writing the durable end-of-session summary for a Claude Code session.',
-    '',
-    'Schema guide (how to write facts for the claude_session kind):',
-    schemaDoc.slice(0, 2000),
-    '',
-    'Session facts gathered during this session:',
-    factTexts.map((f, i) => `  ${i + 1}. ${f}`).join('\n'),
-    '',
-    'Write ONE summary fact (60-220 chars) that captures the single most useful thing a future session in the same project would want to know about this one. Past tense. Specific. No filler. Do not repeat individual facts verbatim — synthesize the essence.',
-    '',
-    'Return JSON: { "summary": "<one-line summary fact>", "topics": ["...", "..."] }',
-  ].join('\n');
-
-  let out;
-  try {
-    out = await promptJson(prompt, { caller: 'session-end-synth' });
-  } catch {
-    return;
-  }
-  const summary = typeof out?.summary === 'string' ? out.summary.trim() : null;
-  if (!summary || summary.length < 30) return;
-
-  // Save as a fact via the regular ingestion pipeline, classify=false so
-  // the LLM extractor is skipped (we're already providing the final fact
-  // text). Attach to all active kinds' pods — dispatcher returns
-  // session + project, and the project pod gets the durable copy.
-  const { ensureActivePodsForHook } = await import('../memory/pods/hook-dispatcher.js');
-  const { podUids } = await ensureActivePodsForHook({
-    sessionId,
-    cwd,
-    transcriptPath,
-  });
-
-  const { ingestDocument } = await import('../ingestion/pipeline.js');
-  const config = (await import('../config.js')).default;
-
-  try {
-    await ingestDocument({
-      content: summary,
-      namespace: config.defaults.namespace,
-      classify: false,
-      podUids,
-    });
-  } catch (err) {
-    process.stderr.write(`[sigil:session-end] save summary failed: ${maskSecrets(err.message)}\n`);
-  }
 }
 
 async function readStdin() {

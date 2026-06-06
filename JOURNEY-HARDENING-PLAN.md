@@ -445,12 +445,16 @@ happen server-side; ensure auto-spawn from a hook doesn't itself race two daemon
   `search` RPC handler to preserve behavior. **VALIDATED live:** zero WASM aborts across runs (the
   130-abort failure mode is gone); warm daemon search &lt;0.5s; graceful empty on a scoped miss; 136
   unit tests green; dist rebuilt. _(Positive-injection demo blocked by separate DB corruption — 6.6.)_
-- 🟡 **B6.2 Phase B (stop hook DONE; 2 to go).** `stop.js` now routes the write through the daemon
-  `ingestTurn` RPC (new handler: resolves active pods + `saveFacts` server-side; same path the spool
-  replayer uses). classify stays hook-side (LLM, no DB); cursor + spool stay file-side; `cortexDb`
-  import dropped. Budget-bounded (20s) → spool on failure (AUDM dedups any replay). Validated: daemon
-  log shows ingestTurn running server-side, no WASM abort, no chunk_pkey collision. STILL TODO:
-  `post-tool-use.js` + `session-end.js` (both still open cortex directly).
+- ✅ **B6.2 Phase B DONE — no hook touches cortex.** All 3 write hooks routed:
+  - `stop.js` → `ingestTurn` RPC (resolve pods + `saveFacts` server-side; same path the spool
+    replayer uses). classify stays hook-side (LLM, no DB); cursor + spool stay file-side. Budget
+    20s → spool on failure (AUDM dedups replay). Validated live: daemon runs it, no abort/collision.
+  - `session-end.js` → `endSession` RPC (synthesize summary + close pod, all server-side incl. the
+    LLM synth). Thin client; best-effort (maintain sweeps stale pods). Routes + degrades gracefully.
+  - `post-tool-use.js` is DISABLED (no-op); removed its dead cortex-touching block + `maskSecrets`
+    import. summarize/dedup helpers kept; comment notes a re-enable must route through the daemon.
+  - Confirmed: `grep db/cortex src/hooks/` → NONE. The embedded single-process abort can no longer
+    originate from any hook. 138 unit tests green.
 - ✅ **6.6 hardened further:** `resyncSequences` now also runs on **daemon boot** (embedded-only,
   in `probeDbHealth`) so a desync self-heals on every start — not just on provision/`repair`. Server
   Postgres is skipped (doesn't desync, may be shared).

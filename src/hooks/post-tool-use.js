@@ -17,7 +17,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-import { maskSecrets } from './secret-mask.js';
 import { loadHookEnv } from './env-loader.js';
 import { SIGIL_HOME, SIGIL_HOOK_DEDUP } from '../lib/paths.js';
 
@@ -158,89 +157,13 @@ async function main() {
   const raw = Buffer.concat(chunks).toString('utf8').trim();
   if (!raw) return respond();
 
-  // ── DISABLED: tool-usage observations are no longer stored as facts.
-  // Drain stdin (done above) and return a no-op. To re-enable capture,
-  // delete this early return.
-  return respond();
-
-  // eslint-disable-next-line no-unreachable
-  const input = JSON.parse(raw);
-  const toolName = input.tool_name || '';
-  const toolInput = input.tool_input || {};
-
-  const summary = summarize(toolName, toolInput);
-  if (!summary) return respond();
-
-  // Dedup against recent same-action events
-  if (isDuplicate(summary.dedupKey)) return respond();
-
-  // Config gate — bail before any embedding call if config is known-broken
-  const { failClosedOnBadConfig } = await import('./error-log.js');
-  if (await failClosedOnBadConfig('post-tool-use', raw)) return respond();
-
-  // Mask secrets before storing
-  const masked = maskSecrets(summary.content);
-
-  try {
-    const { saveFact } = await import('../memory/facts/store.js');
-    const { embed } = await import('../ingestion/embedder.js');
-    const config = (await import('../config.js')).default;
-
-    const embedding = await embed(masked);
-
-    const saveResult = await saveFact({
-      content: masked,
-      category: 'observation',
-      confidence: 'medium',
-      importance: 'supplementary',
-      namespace: config.defaults.namespace,
-      sourceDocumentIds: [],
-      sourceSection: 'session',
-      embedding,
-    });
-
-    // Attach the observation to every active kind's pod — session, project,
-    // and anything new in 0.11.0+. Best-effort: each kind's failure is
-    // isolated; missing session_id or transient errors do not block the
-    // hook.
-    try {
-      const { ensureActivePodsForHook } = await import('../memory/pods/hook-dispatcher.js');
-      const podMembership = await import('../memory/pods/membership.js');
-      const { sessionPod, projectPod } = await ensureActivePodsForHook({
-        sessionId: input.session_id,
-        cwd: input.cwd || null,
-        transcriptPath: input.transcript_path || null,
-      });
-      const factId = saveResult?.fact?.id ?? saveResult?.existing?.id;
-      const role = saveResult?.action === 'SKIP' ? 'mention' : 'primary';
-      if (factId) {
-        for (const pod of [sessionPod, projectPod]) {
-          if (!pod) continue;
-          try {
-            await podMembership.attachFact(pod.id, factId, role);
-          } catch (err) {
-            process.stderr.write(`[sigil:post-tool-use] attach to ${pod.uid} failed: ${err.message}\n`);
-          }
-        }
-      }
-    } catch (err) {
-      process.stderr.write(`[sigil:post-tool-use] pod dispatch failed: ${err.message}\n`);
-    }
-
-    const cortexDb = (await import('../db/cortex.js')).default;
-    await cortexDb.destroy();
-  } catch (err) {
-    process.stderr.write(`[sigil:post-tool-use] ${err.message}\n`);
-    try {
-      const { recordHookError } = await import('./error-log.js');
-      await recordHookError('post-tool-use', err, input);
-    } catch { /* ignore */ }
-    try {
-      const cortexDb = (await import('../db/cortex.js')).default;
-      await cortexDb.destroy();
-    } catch { /* ignore */ }
-  }
-
+  // ── DISABLED: tool-usage observations are no longer stored as facts (they
+  // were ~40% of the KB and polluted ranking — user decision). Drain stdin
+  // (done above) and no-op. The summarize/dedup helpers above are retained so
+  // re-enabling is small — but a re-enable MUST route the save through the
+  // daemon (an ingest RPC like stop.js → ingestTurn), NOT open cortex here: a
+  // per-tool hook process opening the embedded engine the daemon holds aborts
+  // PGlite (finding 6.1).
   return respond();
 }
 

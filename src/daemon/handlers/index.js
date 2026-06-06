@@ -9,6 +9,7 @@
 import { registerPing } from './ping.js';
 import { registerRemember } from './remember.js';
 import { registerIngestTurn } from './ingest-turn.js';
+import { registerEndSession } from './end-session.js';
 import { registerSearch } from './search.js';
 import { registerStatus } from './status.js';
 import { registerSearchEntity } from './search-entity.js';
@@ -40,6 +41,7 @@ export function registerAll(registry, { startedAt }) {
   registerPing(registry, { startedAt });
   registerRemember(registry);
   registerIngestTurn(registry);
+  registerEndSession(registry);
   registerSearch(registry);
   registerStatus(registry);
   registerSearchEntity(registry);
