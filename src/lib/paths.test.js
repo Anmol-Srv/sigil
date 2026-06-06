@@ -9,14 +9,15 @@ describe('ephemeralPackageRoot', () => {
     const r = ephemeralPackageRoot('/Users/x/Library/Caches/pnpm/dlx/abc123/node_modules/@anmol-srv/sigil');
     expect(r.ephemeral).toBe(true);
     expect(r.kind).toBe('pnpm-dlx');
-    expect(r.installHint).toContain('pnpm add -g');
+    // Migrated to bash-script-only: every ephemeral refusal points at install.sh.
+    expect(r.installHint).toContain('install.sh');
   });
 
   it('flags an npx (_npx) cache path', () => {
     const r = ephemeralPackageRoot('/Users/x/.npm/_npx/deadbeef/node_modules/@anmol-srv/sigil');
     expect(r.ephemeral).toBe(true);
     expect(r.kind).toBe('npx');
-    expect(r.installHint).toContain('npm i -g');
+    expect(r.installHint).toContain('install.sh');
   });
 
   it('flags anything under the OS temp dir', () => {

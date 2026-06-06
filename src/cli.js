@@ -2008,7 +2008,8 @@ Re-run 'sigil' afterwards to set up fresh.`);
   await removeClaudeMdImport();
 
   console.log('');
-  console.log('  Reset complete. Run `sigil` to set up again.');
+  console.log('  Reset complete. Run `sigil` to set up again, or reinstall with:');
+  console.log('    curl -fsSL https://raw.githubusercontent.com/Anmol-Srv/sigil/master/install.sh | sh');
   console.log('');
   process.exit(0);
 }

@@ -44,19 +44,24 @@ const PKG_ROOT = findPackageRoot();
  * @param {string} [root=PKG_ROOT]
  * @returns {{ephemeral:boolean, kind?:'pnpm-dlx'|'npx'|'temp', installHint?:string, root:string}}
  */
+// The one blessed install path: the bash installer lands Sigil persistently on
+// PATH and hands off to first-run. Every ephemeral-runner refusal points here
+// (not `npm i -g` / `pnpm add -g`) so the guidance is a single command.
+const INSTALL_SH = 'curl -fsSL https://raw.githubusercontent.com/Anmol-Srv/sigil/master/install.sh | sh';
+
 function ephemeralPackageRoot(root = PKG_ROOT) {
   // pnpm dlx (and yarn dlx) land under a `…/dlx/<hash>/…` segment.
   if (root.includes(`${sep}dlx${sep}`)) {
-    return { ephemeral: true, kind: 'pnpm-dlx', installHint: 'pnpm add -g @anmol-srv/sigil', root };
+    return { ephemeral: true, kind: 'pnpm-dlx', installHint: INSTALL_SH, root };
   }
   // npx caches packages under `…/_npx/<hash>/…`.
   if (root.includes(`${sep}_npx${sep}`)) {
-    return { ephemeral: true, kind: 'npx', installHint: 'npm i -g @anmol-srv/sigil', root };
+    return { ephemeral: true, kind: 'npx', installHint: INSTALL_SH, root };
   }
   // Anything under the OS temp dir is throwaway (covers other one-shot runners).
   const tmp = tmpdir();
   if (tmp && (root === tmp || root.startsWith(tmp + sep))) {
-    return { ephemeral: true, kind: 'temp', installHint: 'npm i -g @anmol-srv/sigil', root };
+    return { ephemeral: true, kind: 'temp', installHint: INSTALL_SH, root };
   }
   return { ephemeral: false, root };
 }

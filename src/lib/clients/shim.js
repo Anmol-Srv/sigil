@@ -141,9 +141,9 @@ export function ephemeralInstallMessage(info) {
     "silently break memory, and every agent hook would cold-boot a heavy process",
     'from it (a runaway pileup across sessions).',
     '',
-    'Install Sigil persistently first, then set up:',
+    'Install Sigil with the official installer — it lands on your PATH and',
+    'sets up automatically (no npx/pnpx, no separate init step):',
     `  ${info.installHint}`,
-    '  sigil init',
   ].join('\n');
 }
 
