@@ -22,10 +22,16 @@ import config from '../../config.js';
 import { EMBEDDING_DIM } from '../../lib/constants.js';
 import { embedBatchOrThrow } from '../../ingestion/embedder.js';
 import { pgVector } from '../../lib/vectors.js';
+import { resyncSequences } from '../../db/migrate.js';
 
 const BATCH = 100;
 
 export function registerRepair(registry) {
+  // repair.sequences — heal a desynced serial sequence in place (finding 6.6).
+  // Runs against the daemon's pool (sole DB owner), so it's safe in embedded
+  // mode and needs no reset. No-op on a healthy DB.
+  registry.register('repair.sequences', async () => resyncSequences(cortexDb));
+
   registry.register('repair.embeddings', async (params = {}) => {
     const dryRun = Boolean(params.dryRun);
     const namespace = params.namespace || null;

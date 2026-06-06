@@ -37,6 +37,9 @@ export async function runMigrationsOn(spec) {
   const knex = knexFactory({ client: 'pg', connection, pool: { min: 1, max: 2 } });
   try {
     const [batchNo, ran] = await knex.migrate.latest({ directory: MIGRATIONS_DIR });
+    // Heal any serial sequence left behind its column's MAX(id) — a desync makes
+    // the next INSERT collide on the pkey. No-op on a healthy DB.
+    await resyncSequences(knex);
     return { batchNo, ran };
   } finally {
     await knex.destroy();
@@ -62,5 +65,53 @@ export async function migrateEmbedded() {
     pool: { min: 1, max: 1 },
   });
   const [batchNo, ran] = await knex.migrate.latest({ directory: MIGRATIONS_DIR });
+  await resyncSequences(knex);
   return { batchNo, ran };
+}
+
+/**
+ * Re-sync every serial / IDENTITY sequence to its column's MAX value. A sequence
+ * left BEHIND max(id) — e.g. after a partial data copy, a half-healed embedded
+ * dir, or a restore that inserted rows with explicit ids — makes the next INSERT
+ * collide on the primary key ("duplicate key value violates ..._pkey"). That is
+ * exactly the embedded-DB write breakage seen in the field (finding 6.6).
+ *
+ * Catalog-driven (works on Postgres and PGlite, which is real Postgres in WASM),
+ * idempotent, and a NO-OP on a healthy DB (it sets each sequence to the value it
+ * already holds) — safe to run after every migration.
+ *
+ * @param {import('knex').Knex} knex
+ * @returns {Promise<{ resynced: number }>}
+ */
+export async function resyncSequences(knex) {
+  // Every column in the public schema backed by an owned sequence (serial /
+  // GENERATED AS IDENTITY). pg_get_serial_sequence returns null for plain cols.
+  const res = await knex.raw(`
+    SELECT
+      quote_ident(t.relname) AS tbl,
+      quote_ident(a.attname) AS col,
+      pg_get_serial_sequence(quote_ident(n.nspname) || '.' || quote_ident(t.relname), a.attname) AS seq
+    FROM pg_class t
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum > 0 AND NOT a.attisdropped
+    WHERE t.relkind = 'r'
+      AND n.nspname = 'public'
+      AND pg_get_serial_sequence(quote_ident(n.nspname) || '.' || quote_ident(t.relname), a.attname) IS NOT NULL
+  `);
+  const rows = res?.rows ?? res ?? [];
+  let resynced = 0;
+  for (const r of rows) {
+    if (!r.seq) continue;
+    // setval(seq, MAX(col), is_called): with rows present, is_called=true so the
+    // next nextval() is MAX+1; on an empty table, is_called=false so it stays 1.
+    // tbl/col are catalog-derived quote_ident() values — safe to interpolate.
+    await knex.raw(
+      `SELECT setval(?,
+         COALESCE((SELECT MAX(${r.col}) FROM ${r.tbl}), 1),
+         (SELECT COUNT(*) FROM ${r.tbl}) > 0)`,
+      [r.seq],
+    );
+    resynced++;
+  }
+  return { resynced };
 }

@@ -378,16 +378,20 @@ SAME double-open conflict in embedded mode: the tool you run to diagnose can its
 WASM abort. Doctor must read DB health via the daemon `status` RPC, not its own pool.
 🔧 **6.3 Synchronous LLM routing in the read budget** (`route:true` on the 10s path). Unchanged.
 🔧 **6.4 LLM response cache is in-memory only** (lost on daemon restart). Unchanged.
-🐛 **6.6 (NEW — found during Phase A validation) Embedded DB write corruption + lost saves.**
-Surfaced once the read hook stopped aborting: (a) the 15 decision facts saved earlier via
-`sigil remember --bg` never persisted (the daemon was wedged by the abort contention then) — the DB
-now holds 1 fact; (b) the WRITE path fails with `duplicate key value violates "chunk_pkey"` — the
-`chunk` id sequence is BEHIND `max(id)` (classic sequence-desync), most likely from the self-heal
-rebuild (commit ad5d848) restoring rows without `setval`-ing the sequence. NOT Phase A (the read
-hook is clean). → DB-integrity fix: self-heal must reset sequences after a rebuild; a `sigil reset`
-clears it meanwhile. Flag for Phase B / a dedicated DB-integrity pass. ALSO: the abort contention
-degraded the *daemon's own* engine (a wedged daemon timed out at 4s; a fresh one searches in &lt;0.5s)
-— extra evidence the hook aborts poisoned shared state, not just the hook.
+✅ **6.6 (FIXED) Embedded DB write corruption — serial sequence desync.** Surfaced once the read
+hook stopped aborting: the WRITE path failed with `duplicate key value violates "chunk_pkey"`
+because a serial sequence (e.g. `chunk_id_seq`) sat BEHIND its column's `max(id)`, so the next
+auto-id INSERT collided. Confirmed by direct inspection (chunk ids {1,2} with the sequence behind
+them). **Fix:** `resyncSequences(knex)` in `db/migrate.js` — catalog-driven `setval` of every
+serial/identity sequence to `MAX(id)`; runs after EVERY migration (`migrateEmbedded` +
+`runMigrationsOn`) so a fresh provision/reset self-heals, and is exposed in-place as
+`sigil repair --sequences` (`repair.sequences` RPC) for a live DB without a reset. Idempotent,
+no-op on a healthy DB. Regression test: `src/db/migrate.test.js` (desync → heal → insert succeeds).
+After the fix the chunk insert succeeds ("1 chunks created"). Also seen: the abort contention had
+degraded the *daemon's own* engine (a wedged daemon timed out; a fresh one searches in &lt;0.5s).
+_Residual (separate, NOT 6.6): on cold Ollama models the fact-save/AUDM step can be slow (a 30s
+`remember` timeout observed) — a write-path latency item for Phase B/E, not corruption. The 15
+earlier `--bg` saves were lost when the daemon was wedged; that data is gone (re-save if needed)._
 
 ### Decisions made
 - ✅ **D6.1 Route all hook + remaining direct-cortex access through the daemon (sole DB owner).**
