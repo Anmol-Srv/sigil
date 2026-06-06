@@ -3,24 +3,21 @@
 /**
  * UserPromptSubmit hook — injects relevant Sigil facts into Claude's context.
  *
- * Reads the user's prompt from stdin (JSON from Claude Code), searches
- * Sigil with the prompt as query, and returns the top facts as
- * additionalContext for Claude.
+ * Reads the user's prompt from stdin (JSON from Claude Code), asks the DAEMON
+ * to search (it owns the DB), and returns the top facts as additionalContext.
  *
- * 0.10.0:
- *   • route + expand turned ON — the query router (which existed but was
- *     bypassed) now classifies the query and adjusts search params
- *     (categories, limit, useGraph, expand variants).
- *   • podScope='auto' — search is now scoped to active session + project
- *     + person pods via the registry, falling back to global for queries
- *     that the active scope doesn't cover.
- *   • Token budget — INJECTION_BUDGET_CHARS caps the total injected
- *     payload at ~1200 tokens (4 chars/token approx), preferred over the
- *     old fixed MAX_FACTS so retrieval-rich queries get more facts and
- *     long-fact queries don't blow the budget.
- *   • synthesize stays OFF here — synthesis adds 1-3s + an LLM call to
- *     every user message and steals the citation surface from Claude.
- *     Phase 2 will revisit if router signal warrants it.
+ * Why route through the daemon (Phase A of the daemon-routing refactor):
+ * the embedded store (PGlite) is single-process — the daemon holds it. The old
+ * behavior opened the DB directly in this per-turn hook process, which aborted
+ * the WASM engine on every prompt in embedded mode (`Aborted(). Build with
+ * -sASSERTIONS`), so memory injection silently failed. The daemon is now the
+ * sole DB owner; this hook is a thin client over the `search` RPC.
+ *
+ * Budget discipline: Claude gives this hook ~10s. We bound the whole
+ * connect+search to OVERALL_DEADLINE_MS and, on timeout / no daemon / any
+ * error, inject NOTHING rather than blocking the prompt. We never fall back to
+ * opening the DB directly (the bug we're fixing) and never fall back to the
+ * global brain (that was the cross-project leak).
  */
 
 import { maskSecrets } from './secret-mask.js';
@@ -32,6 +29,48 @@ loadHookEnv();
 const MIN_QUERY_LENGTH = 8;
 const MAX_FACTS = 20;
 const INJECTION_BUDGET_CHARS = 4800; // ~1200 tokens
+// Keep the whole connect+search comfortably under Claude's ~10s hook budget.
+// A warm daemon answers in well under 1s; the headroom is for a cold embedder
+// (e.g. first Ollama embed after model unload). OVERALL_DEADLINE_MS is the hard
+// skip-inject ceiling; CALL_TIMEOUT_MS sits at it so the overall deadline (a
+// soft skip) governs rather than the per-call timeout.
+const CALL_TIMEOUT_MS = 8_000;
+const OVERALL_DEADLINE_MS = 9_000;
+
+const TIMEOUT = Symbol('timeout');
+
+function withDeadline(ms, promise) {
+  let timer;
+  const deadline = new Promise((res) => { timer = setTimeout(() => res(TIMEOUT), ms); timer.unref?.(); });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
+// Ask the daemon to search. The daemon is the sole DB owner, so this is safe in
+// embedded (single-process PGlite) mode. Returns the search response or throws.
+async function searchViaDaemon(query, input) {
+  const { connectOrStartDaemon } = await import('../clients/auto-spawn.js');
+  let client;
+  try {
+    client = await connectOrStartDaemon({ quiet: true, timeoutMs: CALL_TIMEOUT_MS });
+    const { data } = await client.call('search', {
+      query,
+      limit: MAX_FACTS,
+      useGraph: false,    // the router promotes to true when warranted
+      route: true,
+      expand: true,
+      synthesize: false,  // synthesis steals Claude's citation surface; off here
+      podScope: 'auto',   // active session/project/person pods, not the whole brain
+      applyFloor: true,   // precision-first: drop off-topic matches (auto-injection)
+      cwd: input.cwd || null,
+      sessionId: input.session_id || null,
+      // namespaces omitted on purpose — the daemon resolves its own default
+      // namespace, which is the authoritative one.
+    });
+    return data;
+  } finally {
+    if (client) await client.close().catch(() => {});
+  }
+}
 
 async function main() {
   const chunks = [];
@@ -42,94 +81,57 @@ async function main() {
   const input = JSON.parse(raw);
   const query = input.prompt || '';
 
-  // Skip short/trivial prompts
+  // Skip short/trivial prompts.
   if (query.length < MIN_QUERY_LENGTH) return respond();
 
-  // Config gate — bail before any LLM/embedding call if config is
-  // known-broken. Saves the doomed API call and writes a specific
-  // error (with fix instructions) to .hook-errors.log instead of the
-  // generic "404 model not found" the upstream produces.
+  // Config gate — fast-bail before touching the daemon if config is
+  // known-broken, writing a specific fix to .hook-errors.log.
   if (await failClosedOnBadConfig('user-prompt-submit', raw)) return respond();
 
+  let data;
   try {
-    const { search } = await import('../memory/search/hybrid.js');
-    const config = (await import('../config.js')).default;
-
-    // Project-scoped, precision-first. We deliberately do NOT fall back to a
-    // global search on empty/error — that fallback was the cross-project leak
-    // (a gstack/sigil prompt pulling unrelated payment-webhook facts). The
-    // floor (applyFloor defaults true in search()) drops off-topic matches,
-    // and resolvePodScope's SIGIL_SCOPE_GRACE path already returns floored
-    // global ONLY for genuine fresh installs with zero pods. Empty beats wrong.
-    let result;
-    try {
-      result = await search(query, {
-        namespaces: [config.defaults.namespace],
-        limit: MAX_FACTS,
-        useGraph: false, // router promotes to true when warranted
-        route: true,
-        expand: true,
-        synthesize: false,
-        podScope: 'auto',
-        ctx: {
-          cwd: input.cwd || null,
-          sessionId: input.session_id || null,
-        },
-      });
-    } catch (searchErr) {
-      // A failed scoped search injects NOTHING (never the global brain). RECORD
-      // it (not just stderr) so `sigil doctor` can tell "recall is broken" from
-      // "recall is quiet" — an erroring search lands in the hook-error budget;
-      // a legitimately empty result (below) does not. The prompt proceeds
-      // without memory either way.
-      process.stderr.write(`[sigil:user-prompt-submit] scoped search failed: ${maskSecrets(searchErr.message)}\n`);
-      await recordHookError('user-prompt-submit', searchErr, raw).catch(() => {});
-      const cortexDb = (await import('../db/cortex.js')).default;
-      await cortexDb.destroy().catch(() => {});
-      return respond();
-    }
-
-    const facts = result?.facts || [];
-
-    if (!facts.length) {
-      // Empty scope is precision-correct (the active pod legitimately has no
-      // match), NOT an error — stay silent so it doesn't pollute the error
-      // budget. The distinction is the whole point: errors are recorded above.
-      const cortexDb = (await import('../db/cortex.js')).default;
-      await cortexDb.destroy();
-      return respond();
-    }
-
-    // Apply token budget — take facts in score order until the cumulative
-    // char count would exceed budget. Always take at least one fact even
-    // if it's over budget alone (better than no signal).
-    const chosen = [];
-    let used = 0;
-    for (const f of facts) {
-      const len = (f.content || '').length + 4; // "- " prefix + newline
-      if (chosen.length > 0 && used + len > INJECTION_BUDGET_CHARS) break;
-      chosen.push(f);
-      used += len;
-    }
-
-    const context = maskSecrets([
-      `Sigil memory (${chosen.length} relevant facts):`,
-      ...chosen.map((f) => `- ${f.content}`),
-    ].join('\n'));
-
-    const cortexDb = (await import('../db/cortex.js')).default;
-    await cortexDb.destroy();
-    return respond(context);
+    data = await withDeadline(OVERALL_DEADLINE_MS, searchViaDaemon(query, input));
   } catch (err) {
-    // Never block Claude — fail silently, but log so sigil doctor can surface it
-    process.stderr.write(`[sigil:user-prompt-submit] ${maskSecrets(err.message)}\n`);
-    await recordHookError('user-prompt-submit', err, raw);
-    try {
-      const cortexDb = (await import('../db/cortex.js')).default;
-      await cortexDb.destroy();
-    } catch { /* ignore */ }
+    // Classify. A handler-level error (SigilRpcError — e.g. a broken embedding
+    // config) means recall is BROKEN: record it so `sigil doctor` can tell
+    // "broken" from "quiet". A timeout or transient transport error (slow / a
+    // briefly-down daemon) is NOT broken — stderr only, don't pollute the error
+    // budget (keeping it meaningful is the whole point of this refactor). Either
+    // way the prompt proceeds; we NEVER open the DB directly (the abort we removed).
+    const broken = err?.name === 'SigilRpcError';
+    process.stderr.write(`[sigil:user-prompt-submit] daemon search ${broken ? 'error' : 'unavailable'}: ${maskSecrets(err.message)}\n`);
+    if (broken) await recordHookError('user-prompt-submit', err, raw).catch(() => {});
     return respond();
   }
+
+  if (data === TIMEOUT) {
+    // Budget exceeded (e.g. cold daemon start). Soft skip — NOT an error, so it
+    // doesn't pollute the error budget. Better a fast prompt than a hung one.
+    process.stderr.write('[sigil:user-prompt-submit] search exceeded budget — skipping injection\n');
+    return respond();
+  }
+
+  const facts = data?.facts || [];
+  // Empty scope is precision-correct (the active pod has no match), not an error.
+  if (!facts.length) return respond();
+
+  // Token budget — take facts in score order until the cumulative char count
+  // would exceed budget; always take at least one (some signal beats none).
+  const chosen = [];
+  let used = 0;
+  for (const f of facts) {
+    const len = (f.content || '').length + 4; // "- " prefix + newline
+    if (chosen.length > 0 && used + len > INJECTION_BUDGET_CHARS) break;
+    chosen.push(f);
+    used += len;
+  }
+
+  const context = maskSecrets([
+    `Sigil memory (${chosen.length} relevant facts):`,
+    ...chosen.map((f) => `- ${f.content}`),
+  ].join('\n'));
+
+  return respond(context);
 }
 
 function respond(additionalContext) {
@@ -139,7 +141,13 @@ function respond(additionalContext) {
       ...(additionalContext && { additionalContext }),
     },
   };
-  process.stdout.write(JSON.stringify(output));
+  // Flush, then force-exit: a daemon socket / pending call timer could otherwise
+  // keep the event loop alive past our work. The hook's job ends at this write.
+  process.stdout.write(JSON.stringify(output), () => process.exit(0));
 }
 
-main();
+main().catch((err) => {
+  // Last-resort guard: never block Claude. Best-effort log, empty response.
+  try { process.stderr.write(`[sigil:user-prompt-submit] fatal: ${maskSecrets(err?.message || String(err))}\n`); } catch { /* */ }
+  respond();
+});

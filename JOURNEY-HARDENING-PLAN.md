@@ -378,6 +378,16 @@ SAME double-open conflict in embedded mode: the tool you run to diagnose can its
 WASM abort. Doctor must read DB health via the daemon `status` RPC, not its own pool.
 🔧 **6.3 Synchronous LLM routing in the read budget** (`route:true` on the 10s path). Unchanged.
 🔧 **6.4 LLM response cache is in-memory only** (lost on daemon restart). Unchanged.
+🐛 **6.6 (NEW — found during Phase A validation) Embedded DB write corruption + lost saves.**
+Surfaced once the read hook stopped aborting: (a) the 15 decision facts saved earlier via
+`sigil remember --bg` never persisted (the daemon was wedged by the abort contention then) — the DB
+now holds 1 fact; (b) the WRITE path fails with `duplicate key value violates "chunk_pkey"` — the
+`chunk` id sequence is BEHIND `max(id)` (classic sequence-desync), most likely from the self-heal
+rebuild (commit ad5d848) restoring rows without `setval`-ing the sequence. NOT Phase A (the read
+hook is clean). → DB-integrity fix: self-heal must reset sequences after a rebuild; a `sigil reset`
+clears it meanwhile. Flag for Phase B / a dedicated DB-integrity pass. ALSO: the abort contention
+degraded the *daemon's own* engine (a wedged daemon timed out at 4s; a fresh one searches in &lt;0.5s)
+— extra evidence the hook aborts poisoned shared state, not just the hook.
 
 ### Decisions made
 - ✅ **D6.1 Route all hook + remaining direct-cortex access through the daemon (sole DB owner).**
@@ -425,7 +435,12 @@ not hang; `connectOrStartDaemon` must be fast+quiet from a hook; confirm pod-sco
 happen server-side; ensure auto-spawn from a hook doesn't itself race two daemons.
 
 ### Build items (queued)
-- 🔨 **B6.1** Phase A: read hook → `search` RPC client + budget/skip-inject degradation. **Fixes 6.1.**
+- ✅ **B6.1 DONE (Phase A)** read hook → `search` RPC client; budget-bounded (8s call / 9s overall)
+  skip-inject degradation; force-exit after stdout flush; records only `SigilRpcError` (timeouts +
+  transient = soft skip, keeping the error budget meaningful). Added `expand` passthrough to the
+  `search` RPC handler to preserve behavior. **VALIDATED live:** zero WASM aborts across runs (the
+  130-abort failure mode is gone); warm daemon search &lt;0.5s; graceful empty on a scoped miss; 136
+  unit tests green; dist rebuilt. _(Positive-injection demo blocked by separate DB corruption — 6.6.)_
 - 🔨 **B6.2** Phase B: stop/post-tool-use/session-end → remember/ingest RPC clients; drop cortex imports.
 - 🔨 **B6.3** Phase C: `doctor` → `status` RPC; route/guard remaining cold direct-cortex verbs.
 - 🔨 **B6.4** Phase D: embedded single-process guard in `cortex.js getPool()`.

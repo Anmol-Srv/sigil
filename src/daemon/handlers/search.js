@@ -16,6 +16,9 @@ export function registerSearch(registry) {
     const limit = Number.isFinite(params.limit) ? params.limit : 10;
     const useGraph    = Boolean(params.useGraph);
     const route       = Boolean(params.route);
+    // expand (query-variant expansion) is opt-in and tri-state: undefined lets
+    // search()/the router decide; the read hook passes true explicitly.
+    const expand      = params.expand !== undefined ? Boolean(params.expand) : undefined;
     const synthesize  = Boolean(params.synthesize);
     const includeChunks = Boolean(params.includeChunks) || synthesize;
     const minConfidence = params.minConfidence;
@@ -35,6 +38,7 @@ export function registerSearch(registry) {
       limit,
       useGraph,
       route,
+      expand,
       synthesize,
       includeChunks,
       minConfidence,
