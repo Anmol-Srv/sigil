@@ -21,7 +21,7 @@ import { createHash } from 'node:crypto';
 
 import { loadHookEnv } from './env-loader.js';
 import { maskSecrets } from './secret-mask.js';
-import { classifyTurn, saveFacts } from './stop-classify.js';
+import { classifyTurn } from './stop-classify.js';
 import { appendSpool } from './stop-spool.js';
 import { SIGIL_STOP_CURSOR } from '../lib/paths.js';
 
@@ -30,6 +30,10 @@ loadHookEnv();
 const MIN_MESSAGE_LENGTH = 15;
 const MAX_MESSAGE_LENGTH = 8000;
 const CURSOR_PATH = SIGIL_STOP_CURSOR;
+// The Stop hook is async (Claude has already responded), budget ~30s. Bound the
+// daemon save so a slow/wedged daemon spools the turn instead of hanging; a cold
+// spawn is capped at ~5s on top, leaving margin under the budget.
+const SAVE_TIMEOUT_MS = 20_000;
 
 async function main() {
   const raw = await readStdin();
@@ -68,31 +72,28 @@ async function main() {
 
     if (!facts.length) return respond();
 
-    // Resolve all active kinds' pods (session + project today, more in
-    // 0.11.0+). Each pod gets the new facts attached. If any individual
-    // kind fails, the others still attach — best-effort to keep hook
-    // resilience.
-    let podUids = [];
+    // Hand the classified facts to the DAEMON (the sole DB owner) to resolve the
+    // active session/project pods and save via AUDM. Routing through the daemon
+    // is what fixes the embedded single-process PGlite conflict — this per-turn
+    // hook process never opens the DB itself.
+    const { connectOrStartDaemon } = await import('../clients/auto-spawn.js');
+    let client;
     try {
-      const { ensureActivePodsForHook } = await import('../memory/pods/hook-dispatcher.js');
-      const dispatch = await ensureActivePodsForHook({
+      client = await connectOrStartDaemon({ quiet: true, timeoutMs: SAVE_TIMEOUT_MS });
+      await client.call('ingestTurn', {
+        facts,
         sessionId: input.session_id,
         cwd: input.cwd || null,
         transcriptPath: input.transcript_path || null,
       });
-      podUids = dispatch.podUids;
-    } catch (err) {
-      process.stderr.write(`[sigil:stop] pod dispatch failed: ${maskSecrets(err.message)}\n`);
+    } finally {
+      if (client) await client.close().catch(() => {});
     }
-
-    // throwOnError so a save failure (embedder/DB down) reaches the catch and
-    // gets spooled, instead of being swallowed and lost.
-    await saveFacts(facts, { podUids, throwOnError: true });
   } catch (err) {
-    // Never block Claude — but the content was memorable and we couldn't save
-    // it. Spool the raw turn for replay once the system recovers, and log so
-    // sigil doctor can surface it. markProcessed guards against reclassifying
-    // the same message; the spool is the recovery source.
+    // Never block Claude — but the content was memorable and we couldn't save it
+    // (daemon down / save failed / timed out). Spool the raw turn for replay once
+    // the system recovers, and log so sigil doctor can surface it. A timeout that
+    // the daemon nonetheless completes is harmless: AUDM dedups the replay.
     markProcessed(messageHash);
     appendSpool({
       message: userMessage,
@@ -105,12 +106,6 @@ async function main() {
     try {
       const { recordHookError } = await import('./error-log.js');
       await recordHookError('stop', err, input);
-    } catch { /* ignore */ }
-  } finally {
-    // Tear down the DB connection so Node exits cleanly
-    try {
-      const cortexDb = (await import('../db/cortex.js')).default;
-      await cortexDb.destroy();
     } catch { /* ignore */ }
   }
 

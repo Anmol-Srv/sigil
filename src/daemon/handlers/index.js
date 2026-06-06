@@ -8,6 +8,7 @@
  */
 import { registerPing } from './ping.js';
 import { registerRemember } from './remember.js';
+import { registerIngestTurn } from './ingest-turn.js';
 import { registerSearch } from './search.js';
 import { registerStatus } from './status.js';
 import { registerSearchEntity } from './search-entity.js';
@@ -38,6 +39,7 @@ import { registerRepair } from './repair.js';
 export function registerAll(registry, { startedAt }) {
   registerPing(registry, { startedAt });
   registerRemember(registry);
+  registerIngestTurn(registry);
   registerSearch(registry);
   registerStatus(registry);
   registerSearchEntity(registry);

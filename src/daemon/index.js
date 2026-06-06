@@ -258,6 +258,19 @@ async function probeDbHealth(log) {
     try {
       await cortexDb.raw('SELECT 1');
       setDbHealth({ healthy: true, error: null, checkedAt: Date.now() });
+      // Embedded-only self-heal (finding 6.6): a serial sequence left behind its
+      // column's MAX(id) makes the next INSERT collide on the pkey, silently
+      // breaking writes. Heal it on every boot. Embedded is single-process, so
+      // there's no concurrency risk; server Postgres doesn't desync and may be
+      // shared across machines, so we skip it there.
+      try {
+        const { default: config } = await import('../config.js');
+        if (config.db.mode === 'embedded') {
+          const { resyncSequences } = await import('../db/migrate.js');
+          const { resynced } = await resyncSequences(cortexDb);
+          if (resynced) log(`db: resynced ${resynced} sequence(s) to MAX(id)`);
+        }
+      } catch (e) { log(`db: sequence resync skipped — ${e.message}`); }
     } catch (err) {
       setDbHealth({ healthy: false, error: err.message, checkedAt: Date.now() });
       log(`DB UNREACHABLE: ${err.message} — memory operations will fail until Postgres is back`);
