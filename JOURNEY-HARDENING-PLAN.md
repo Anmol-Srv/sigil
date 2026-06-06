@@ -458,8 +458,23 @@ happen server-side; ensure auto-spawn from a hook doesn't itself race two daemon
 - ✅ **6.6 hardened further:** `resyncSequences` now also runs on **daemon boot** (embedded-only,
   in `probeDbHealth`) so a desync self-heals on every start — not just on provision/`repair`. Server
   Postgres is skipped (doesn't desync, may be shared).
-- 🔨 **B6.3** Phase C: `doctor` → `status` RPC; route/guard remaining cold direct-cortex verbs.
-- 🔨 **B6.4** Phase D: embedded single-process guard in `cortex.js getPool()`.
+- ✅ **B6.4 DONE (Phase D, pulled forward) — the guard.** `assertEmbeddedOpenable()` in
+  pglite-adapter's `getPGlite` (the `new PGlite` choke point): a non-daemon process that tries to
+  open the embedded engine while a daemon is running throws a clear `embedded_in_use` error
+  ("stop the daemon and retry") instead of aborting the WASM engine. The daemon marks itself
+  (`SIGIL_DAEMON_PROCESS=1`, set in daemon/index.js) and is exempt; no daemon running → direct open
+  allowed (provision/migrate/reset). One change protects ALL direct-cortex paths (cold verbs, the
+  llm-log writer, future code) from the 6.1 abort. Validated: `sigil export` with the daemon up →
+  clean error, not a crash.
+- 🟡 **B6.3 Phase C (doctor DONE; cold verbs fail-safe).** `doctor` no longer opens cortex — its DB
+  section routes through the daemon `status` RPC (health + counts) + `repair.embeddings --dry-run`
+  (corpus consistency); driver line stays config-only. Validated live (✓ DB driver / Stored data /
+  Embedding corpus, no abort). The other cold verbs (export/namespace/session/pod/maintain/migrate/
+  why) now FAIL-SAFE via the guard with a "stop the daemon" message instead of aborting — usable for
+  rare ops; routing each to work live (their own RPCs) is incremental follow-up.
+- 🔨 **B6.8 (NEW follow-up)** Route the `llm-log` writer through the daemon — any CLI process making
+  an LLM call currently writes the log via cortex directly (guard now makes it a best-effort no-op
+  instead of an abort). Low priority; the guard already made it safe.
 - 🔨 **B6.5** Phase E: daemon fast-path read search (defer LLM expand). (§8)
 - 🔨 **B6.6** Phase E: daemon-owned persistent LLM-response cache.
 - 🧪 **B6.7** Regression: an embedded-mode read-hook invocation against a running daemon must NOT

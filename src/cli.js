@@ -578,63 +578,49 @@ prove the integration actually works, not just that its files exist.`);
     log('warn', 'Config validation', `unable to run: ${err.message}`);
   }
 
-  // Database — surface which driver path is in use so a user troubleshooting
-  // a Neon outage sees "DB driver: url (neon)" rather than wondering why
-  // SIGIL_DB_HOST is empty.
+  // Database — the driver path is config-only (no DB touch); health + counts come
+  // from the daemon's `status` RPC. doctor never opens the DB directly: in
+  // embedded mode that would trip the single-process guard / abort PGlite, so the
+  // troubleshooting tool must route through the daemon like everything else.
   try {
-    const cortexDb = (await import('./db/cortex.js')).default;
     const config = (await import('./config.js')).default;
     const { selectDriver } = await import('./db/drivers/index.js');
-    const driver = selectDriver(config);
+    let driver = null;
+    try { driver = selectDriver(config); } catch { /* not configured yet */ }
+    if (driver?.kind === 'url') log('ok', 'DB driver', `URL (${driver.provider}, host=${driver.connection.host})`);
+    else if (driver?.kind === 'embedded') log('ok', 'DB driver', 'embedded PGlite (~/.sigil/db)');
+    else if (driver) log('ok', 'DB driver', `local (${config.db.host}:${config.db.port}/${config.db.database})`);
+    else log('warn', 'DB driver', 'not configured — run `sigil` to set up');
 
-    await cortexDb.raw('SELECT 1');
-    if (driver.kind === 'url') {
-      const host = driver.connection.host;
-      log('ok', 'DB driver', `URL (${driver.provider}, host=${host})`);
-    } else {
-      log('ok', 'DB driver', `local (${config.db.host}:${config.db.port}/${config.db.database})`);
-    }
-
-    const { getFactCount } = await import('./memory/facts/store.js');
-    const { getStats } = await import('./memory/documents/store.js');
-    const [facts, stats] = await Promise.all([getFactCount(), getStats()]);
-    log('ok', 'Stored data', `${stats.documentCount} docs, ${stats.totalChunks} chunks, ${facts} facts`);
-
-    // Embedding corpus consistency — must run BEFORE destroy() (shares this pool).
-    // A mixed-model corpus ranks incorrectly; point at `sigil repair embeddings`.
+    const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+    let client;
     try {
-      const { checkCorpusConsistency } = await import('./memory/facts/embedding-consistency.js');
-      const c = await checkCorpusConsistency();
-      if (c.total === 0) log('ok', 'Embedding corpus', 'empty');
-      else if (c.mixed || c.stale > 0) {
-        const hist = c.histogram.map((h) => `${h.model}:${h.count}`).join(', ');
-        log('warn', 'Embedding corpus', `mixed models (${hist}) — ${c.stale} off the current model; run \`sigil repair embeddings\` to unify`);
-      } else log('ok', 'Embedding corpus', `${c.total} facts, single model (${c.histogram[0].model})`);
-    } catch (err) {
-      log('warn', 'Embedding corpus', `check failed: ${err.message.split('\n')[0]}`);
+      client = await connectOrStartDaemon({ quiet: true });
+      const { data: status } = await client.call('status', {});
+      if (status?.db?.healthy) {
+        log('ok', 'Stored data', `${status.documents} docs, ${status.chunks} chunks, ${status.facts} facts`);
+        // Embedding-corpus consistency via the repair dry-run (no re-embedding).
+        try {
+          const { data: rep } = await client.call('repair.embeddings', { dryRun: true });
+          const f = rep?.facts?.scanned ?? 0;
+          const c = rep?.chunks?.scanned ?? 0;
+          if (f + c === 0) log('ok', 'Embedding corpus', 'consistent');
+          else log('warn', 'Embedding corpus', `${f} facts + ${c} chunks need re-embedding — run \`sigil repair embeddings\``);
+        } catch { /* corpus check is best-effort */ }
+      } else {
+        const msg = (status?.db?.error || 'unknown').split('\n')[0];
+        log('fail', 'Database', `unreachable — ${msg}`);
+        log('warn', 'Recovery',
+          config.db.url
+            ? 'verify SIGIL_DATABASE_URL is valid and the provider is reachable'
+            : 'check Postgres / SIGIL_DB_* env, or `sigil daemon logs` for the built-in DB');
+      }
+    } finally {
+      if (client) await client.close().catch(() => {});
     }
-
-    await cortexDb.destroy();
   } catch (err) {
-    // Unwrap AggregateError (thrown by pg under multi-address connect
-    // when every candidate fails) so the user sees ECONNREFUSED instead
-    // of just "AggregateError". Mirrors src/lib/errors.js#serializeError.
-    let msg = err.message || String(err);
-    if (err instanceof AggregateError && Array.isArray(err.errors) && err.errors.length) {
-      msg = err.errors[0].message || msg;
-    } else if (err.cause && (!msg || msg === 'AggregateError')) {
-      msg = err.cause.message || msg;
-    }
-    const config = (await import('./config.js')).default;
-    if (/ECONNREFUSED|connection refused|password authentication failed/i.test(msg)) {
-      log('fail', 'Database', `Postgres unreachable — ${msg.split('\n')[0]}`);
-      log('warn', 'Recovery',
-        config.db.url
-          ? 'verify SIGIL_DATABASE_URL is valid and the provider is reachable'
-          : 'check that Postgres is running and SIGIL_DB_* env vars are set in ~/.sigil/.env');
-    } else {
-      log('fail', 'Database', msg.split('\n')[0]);
-    }
+    log('fail', 'Database', `could not reach the daemon to check the DB — ${(err.message || String(err)).split('\n')[0]}`);
+    log('warn', 'Recovery', 'start it with `sigil daemon start` (or just run `sigil`), then re-run doctor');
   }
 
   // LLM + embedding providers — LIVE probe (actually call them), not just

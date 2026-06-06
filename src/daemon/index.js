@@ -41,6 +41,11 @@ export async function startDaemon({ foreground = false } = {}) {
   // Log: append-only. We don't redirect stdout/stderr globally — handlers
   // shouldn't be using them anyway, and a separate log stream is easier
   // to tail. If launched detached, the parent already redirected fds.
+  // Mark this process as THE daemon — the sole legitimate owner of the embedded
+  // PGlite engine. The single-process guard in pglite-adapter exempts us; every
+  // other process must route DB access through the daemon (finding 6.1).
+  process.env.SIGIL_DAEMON_PROCESS = '1';
+
   const log = makeLogger();
   log(`starting (pid ${process.pid}, node ${process.version})`);
 

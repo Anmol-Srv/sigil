@@ -20,6 +20,32 @@ export const PGLITE_DB_PATH = process.env.SIGIL_PGLITE_PATH || SIGIL_DB_PATH;
 let pgliteInstance = null;
 let pgliteInstancePath = null;
 
+/**
+ * Single-process guard (finding 6.1). PGlite is single-process: a second process
+ * opening the same data dir while another holds it aborts the WASM engine
+ * ("Aborted()") and poisons the holder too. Only the daemon (which sets
+ * SIGIL_DAEMON_PROCESS) may open the embedded engine; every other process must
+ * route DB access through the daemon. When NO daemon is running, a direct open is
+ * fine (solo CLI: provision/migrate/reset, or a verb before the daemon starts),
+ * so we only block when a live daemon is detected. Fail-open if we can't tell.
+ */
+async function assertEmbeddedOpenable() {
+  if (process.env.SIGIL_DAEMON_PROCESS === '1') return; // the daemon — legit owner
+  let pid = null;
+  try {
+    const { detectRunningDaemon } = await import('../daemon/lifecycle.js');
+    pid = await detectRunningDaemon();
+  } catch { return; /* can't determine — don't block */ }
+  if (!pid) return; // no daemon → safe to open the engine solo
+  const err = new Error(
+    `Sigil's daemon (pid ${pid}) holds the built-in database — it is single-process, so this `
+    + 'command cannot open it directly. Stop the daemon and retry (it restarts on next use):\n'
+    + '  sigil daemon stop',
+  );
+  err.code = 'embedded_in_use';
+  throw err;
+}
+
 async function getPGlite(dbPath) {
   // Re-open if the cached singleton is bound to a DIFFERENT path than requested
   // — e.g. a reset wiped + recreated ~/.sigil/db within this same process. The
@@ -29,6 +55,7 @@ async function getPGlite(dbPath) {
     await destroyPGlite();
   }
   if (!pgliteInstance) {
+    await assertEmbeddedOpenable();
     const { PGlite } = await import('@electric-sql/pglite');
     // Every extension Sigil's migrations CREATE must be registered here, or
     // `CREATE EXTENSION` fails ("control file not found"). Keep in sync with
