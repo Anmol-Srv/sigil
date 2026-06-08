@@ -77,6 +77,10 @@ export const SIGIL_ENV_PATH = join(SIGIL_HOME, '.env');
 // so it can't go stale across upgrades.
 export const SIGIL_CONFIG_PATH = join(SIGIL_HOME, 'config.json');
 export const SIGIL_DB_PATH = join(SIGIL_HOME, 'db');
+// F2: rotating consistent snapshots of the embedded cluster (gzipped tarballs
+// from PGlite dumpDataDir), used by F3 non-destructive recovery to restore a
+// torn on-disk cluster with bounded loss instead of wiping it.
+export const SIGIL_SNAPSHOTS_DIR = join(SIGIL_HOME, 'snapshots');
 export const SIGIL_MD_PATH = join(SIGIL_HOME, 'CLAUDE.md');
 export const SIGIL_SCHEMAS_DIR = join(SIGIL_HOME, 'schemas');
 export const SIGIL_HOOK_ERRORS_LOG = join(SIGIL_HOME, '.hook-errors.log');

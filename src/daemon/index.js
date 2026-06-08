@@ -222,6 +222,31 @@ export async function startDaemon({ foreground = false } = {}) {
     } catch { /* config/db unavailable — skip */ }
   })();
 
+  // Periodic + post-boot snapshots of the embedded cluster (F2, field-report
+  // Defect 1). A consistent dumpDataDir tarball, rotated, so F3 can restore a
+  // torn cluster with bounded loss instead of wiping it. The shutdown hook takes
+  // the cleanest snapshot; these cover a daemon that's later SIGKILL'd and never
+  // shuts down cleanly. Embedded + healthy only; best-effort; unref'd.
+  let snapshotTimer = null;
+  let bootSnapshotTimer = null;
+  (async () => {
+    try {
+      const { default: cfg } = await import('../config.js');
+      if (cfg.db.mode !== 'embedded') return;
+      const { takeSnapshot } = await import('../db/snapshots.js');
+      const { getDbHealth } = await import('./registry-holder.js');
+      const snapshotIfHealthy = async (reason) => {
+        if (!getDbHealth().healthy) return; // never overwrite a good snapshot with a bad cluster
+        try { await takeSnapshot({ reason, log }); }
+        catch (e) { log(`snapshot (${reason}) failed: ${e.message}`); }
+      };
+      bootSnapshotTimer = setTimeout(() => snapshotIfHealthy('post-boot'), 45_000);
+      bootSnapshotTimer.unref();
+      snapshotTimer = setInterval(() => snapshotIfHealthy('periodic'), 30 * 60_000);
+      snapshotTimer.unref();
+    } catch { /* config/db unavailable — skip */ }
+  })();
+
   // Lazy-init guard: handlers that touch the DB open the connection on
   // first use (see handlers/*). On shutdown we destroy the pool if it
   // was ever opened.
@@ -229,6 +254,8 @@ export async function startDaemon({ foreground = false } = {}) {
     log(`received ${signal}, shutting down`);
     clearInterval(heartbeatTimer);
     if (checkpointTimer) clearInterval(checkpointTimer);
+    if (snapshotTimer) clearInterval(snapshotTimer);
+    if (bootSnapshotTimer) clearTimeout(bootSnapshotTimer);
     try { rmSync(SIGIL_HEARTBEAT, { force: true }); } catch { /* ignore */ }
     await socket.close();
     if (http) await http.close();
@@ -247,7 +274,20 @@ export async function startDaemon({ foreground = false } = {}) {
       // there bricks the store (field-report Defect 1). Best-effort; close still runs.
       try {
         const { default: cfg } = await import('../config.js');
-        if (cfg.db.mode === 'embedded') await cortexDb.raw('CHECKPOINT');
+        if (cfg.db.mode === 'embedded') {
+          await cortexDb.raw('CHECKPOINT');
+          // CHECKPOINT succeeded → the cluster is consistent and reachable. Take
+          // the cleanest snapshot now, while the dir is quiescent (socket already
+          // closed, no concurrent writers) and before we close (F2). Bounded so a
+          // slow dump can't hang shutdown.
+          try {
+            const { takeSnapshot } = await import('../db/snapshots.js');
+            await Promise.race([
+              takeSnapshot({ reason: 'shutdown', log }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('snapshot timed out')), 8_000)),
+            ]);
+          } catch (e) { log(`shutdown snapshot failed: ${e.message}`); }
+        }
       } catch (e) { log(`shutdown checkpoint failed: ${e.message}`); }
       await cortexDb.destroy();
     } catch (err) {

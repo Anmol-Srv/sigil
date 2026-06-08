@@ -100,6 +100,19 @@ export async function destroyPGlite() {
 }
 
 /**
+ * Snapshot the embedded data dir (F2). Uses PGlite's native dumpDataDir, which
+ * produces a CONSISTENT tarball of the cluster (no torn-file risk from copying
+ * a live dir) — returns a gzipped tar as a Buffer. Runs against the live
+ * singleton (the daemon's), opening one if needed. Throws on a poisoned heap so
+ * the caller can skip the snapshot and keep the last good one.
+ */
+export async function dumpEmbeddedDataDir(dbPath = PGLITE_DB_PATH) {
+  const db = await getPGlite(dbPath);
+  const blob = await db.dumpDataDir('gzip');
+  return Buffer.from(await blob.arrayBuffer());
+}
+
+/**
  * Thin wrapper that makes PGlite look like a pg.Client to Knex.
  * Handles both string and object query configs, and both callback and promise styles.
  */
