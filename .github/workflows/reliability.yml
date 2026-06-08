@@ -35,16 +35,34 @@ jobs:
       - run: npm ci
 
       - name: Install Ollama
-        # `curl ollama.com/install.sh | sh` flakes intermittently on the runners
-        # (transient 5xx / DNS → `ollama: command not found`, exit 127). Retry with
-        # backoff and fail loudly only if it's truly unavailable after several tries.
+        # ollama.com/install.sh flakes / 504s on the runners and blocks the gate.
+        # (A naive `curl | sh` also MASKS curl's failure under `bash -e` without
+        # pipefail — sh exits 0 on empty input.) So: download the script to a file
+        # and check `ollama` actually landed, with retries; if ollama.com is down,
+        # fall back to the pinned-latest GitHub release tarball (github.com, which
+        # is independent of the ollama.com outage).
         run: |
-          for attempt in 1 2 3 4 5; do
-            if curl -fsSL https://ollama.com/install.sh | sh; then break; fi
-            echo "ollama install attempt $attempt failed; retrying in 15s..." >&2
-            sleep 15
-          done
-          command -v ollama || { echo "ollama still not installed after retries" >&2; exit 1; }
+          set -o pipefail
+          install_via_script() {
+            for attempt in 1 2 3; do
+              if curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh \
+                 && sh /tmp/ollama-install.sh && command -v ollama >/dev/null; then
+                return 0
+              fi
+              echo "install.sh attempt $attempt failed; retrying in 10s..." >&2
+              sleep 10
+            done
+            return 1
+          }
+          install_via_github() {
+            echo "ollama.com unavailable — falling back to the GitHub release binary..." >&2
+            curl -fsSL https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz -o /tmp/ollama.tgz \
+              && sudo tar -C /usr/local -xzf /tmp/ollama.tgz \
+              && command -v ollama >/dev/null
+          }
+          install_via_script || install_via_github
+          command -v ollama || { echo "ollama unavailable after install.sh + GitHub fallback" >&2; exit 1; }
+          ollama --version || true
 
       - name: Start Ollama + pull embedding model
         run: |
