@@ -673,13 +673,19 @@ validation + `listX()`).
   can't interrupt the flush. Confirmed `relaxedDurability` is NOT set (PGlite is durable-mode).
   Validated: graceful stop → cluster reopens cleanly (no `Aborted()`). _(Hard kills/crashes still
   need F2/F3 snapshots+recovery; F1 makes graceful stops safe.)_
-- 🔨 **F2 (Defect 1) Snapshots / DR.** Periodic `pg.dumpDataDir()` snapshots under
-  `~/.sigil/snapshots/`; cheap for a small store. The restore source when an open is unrecoverable.
-- 🔨 **F3 (Defect 1) Non-destructive recovery.** `ensureUsableEmbeddedDir` currently `rm -rf`s a
-  corrupt dir (DATA LOSS) and only on provision. Instead: on an unrecoverable open, restore the
-  latest snapshot (F2) before wiping; run the heal on **daemon boot**, not just provision; explore a
-  bundled WASM `pg_resetwal` (coordinate upstream with electric-sql/pglite) to force-open a torn
-  cluster with bounded loss. Add a `sigil repair db` flow that drives this.
+- ✅ **F2 DONE (Defect 1) Snapshots / DR (PR #20).** Native `pg.dumpDataDir('gzip')` consistent
+  tarballs under `~/.sigil/snapshots/` (no torn-copy risk), written atomically + rotated (keep 3).
+  Taken on clean shutdown (after CHECKPOINT, quiescent), ~45s post-boot, and every 30 min — healthy
+  only, so a bad cluster never overwrites a good snapshot. Validated live (clean stop wrote a 5.7 MB
+  tar of the real cluster). The restore source for F3.
+- ✅ **F3 DONE (Defect 1) Non-destructive recovery (PR #21).** The `rm -rf` data-loss path is gone.
+  `restoreEmbeddedDataDir()` rebuilds `~/.sigil/db` from a snapshot via PGlite `loadDataDir`, moving
+  the torn dir ASIDE (`db.corrupt-<ts>`) instead of deleting it, probe-verified before trust. Boot-time
+  heal: an unopenable embedded cluster auto-restores the latest snapshot + re-probes (one-shot, snapshot
+  required, loud). `sigil repair db` (+ repair.db RPC) lists snapshots / `--restore[=<name>]` on demand;
+  doctor points there. `ensureUsableEmbeddedDir` restores-or-moves-aside, never wipes. Validated live:
+  dump → corrupt PG_VERSION → restore recovered all rows, torn dir preserved. (Bundled `pg_resetwal`
+  to force-open a torn cluster in place is deferred — needs upstream electric-sql/pglite work.)
 - ✅ **F4 DONE (Defect 3) Recycle the poisoned WASM.** `isPgliteAbort()` detects an `Aborted()` /
   `WebAssembly.RuntimeError`; the query layer (PGliteConnection) disposes the dead singleton + tags
   the error `sigilPoisoned`; the daemon RPC dispatch catches that and calls `resetCortexPool()` so the
@@ -709,7 +715,7 @@ validation + `listX()`).
 ### Priority (report's order, adjusted for what's already done)
 1. ✅ Single-writer enforcement (Defect 2) — DONE (guard).
 2. **F1** clean shutdown + durability (prevent the brick).
-3. **F2/F3** snapshots + non-destructive recovery (survive a brick without data loss).
+3. ✅ **F2/F3** snapshots + non-destructive recovery — DONE (PR #20, #21).
 4. ✅ **F4** health-probe + recycle the WASM — DONE (PR #17).
 5. ✅ **F5** circuit-broken, concurrency-capped hooks — DONE (PR #18).
 6. **F6** bounded/deduped logging.
