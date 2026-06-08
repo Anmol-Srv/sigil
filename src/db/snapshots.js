@@ -119,3 +119,22 @@ export async function takeSnapshot({ reason = 'periodic', dir = SIGIL_SNAPSHOTS_
   log(`db: snapshot (${reason}) → ${res.name} (${formatBytes(res.bytes)}${res.pruned.length ? `, pruned ${res.pruned.length}` : ''})`);
   return res;
 }
+
+/**
+ * Restore the embedded cluster from a snapshot (F3). Picks the latest snapshot
+ * (or a named one), then hands off to the adapter's non-destructive restore
+ * (which moves the torn dir aside rather than deleting it). Returns
+ * `{ restored, from, movedAside }` or `{ restored: false, reason }`.
+ */
+export async function recoverFromSnapshot({ which = 'latest', dir = SIGIL_SNAPSHOTS_DIR, dbPath, log = () => {} } = {}) {
+  const snap = which === 'latest'
+    ? latestSnapshot(dir)
+    : listSnapshots(dir).find((s) => s.name === which || s.path === which);
+  if (!snap) return { restored: false, reason: which === 'latest' ? 'no-snapshot' : 'snapshot-not-found' };
+
+  const buffer = readSnapshot(snap.path);
+  const { restoreEmbeddedDataDir } = await import('./pglite-adapter.js');
+  const { movedAside } = await restoreEmbeddedDataDir(buffer, dbPath);
+  log(`db: restored from snapshot ${snap.name}${movedAside ? ` (torn cluster preserved at ${movedAside})` : ''}`);
+  return { restored: true, from: snap.name, movedAside };
+}

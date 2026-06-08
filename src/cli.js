@@ -613,7 +613,7 @@ prove the integration actually works, not just that its files exist.`);
         log('warn', 'Recovery',
           config.db.url
             ? 'verify SIGIL_DATABASE_URL is valid and the provider is reachable'
-            : 'check Postgres / SIGIL_DB_* env, or `sigil daemon logs` for the built-in DB');
+            : 'built-in DB unreadable — run `sigil repair db` to restore from a snapshot (`sigil daemon logs` for detail)');
       }
     } finally {
       if (client) await client.close().catch(() => {});
@@ -1797,25 +1797,35 @@ Usage:
 
 async function runRepair(args) {
   const sub = args.find((a) => !a.startsWith('--'));
-  if (args.includes('--help') || (sub && sub !== 'embeddings')) {
-    console.log(`sigil repair — Heal a corpus with missing or stale embeddings
+  if (args.includes('--help') || (sub && sub !== 'embeddings' && sub !== 'db')) {
+    console.log(`sigil repair — Heal the memory store
 
 Usage:
   sigil repair embeddings [options]
+  sigil repair db [--restore[=<snapshot>]]
 
-Re-embeds facts/chunks whose vectors are NULL (invisible to search) or were
-produced by a different embedding model than the one now configured (mixed
-corpus → meaningless ranking). Idempotent and resumable.
+repair embeddings — Re-embeds facts/chunks whose vectors are NULL (invisible to
+search) or were produced by a different embedding model than the one now
+configured (mixed corpus → meaningless ranking). Idempotent and resumable.
 
-Options:
   --dry-run         Report what would be repaired; write nothing
   --namespace=<ns>  Limit to one namespace
   --all-chunks      Re-embed every chunk (use after switching providers; chunks
                     carry no model stamp, so NULL-only is the default)
   --sequences       Re-sync serial sequences to MAX(id) — fixes a "duplicate key
-                    value violates ..._pkey" error on insert (no re-embedding)`);
+                    value violates ..._pkey" error on insert (no re-embedding)
+
+repair db — Recover the built-in (embedded) cluster from a snapshot. With no
+flag it lists snapshots and current health. --restore rebuilds ~/.sigil/db from
+the latest snapshot (or a named one); the current dir is moved aside, never
+deleted, so nothing is lost irrecoverably.
+
+  --restore           Restore from the latest snapshot
+  --restore=<name>    Restore from a specific snapshot (name from the listing)`);
     process.exit(0);
   }
+
+  if (sub === 'db') return runRepairDb(args);
 
   const dryRun = args.includes('--dry-run');
   const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1] || null;
@@ -1843,6 +1853,40 @@ Options:
       console.log(`  Chunks re-embedded: ${data.chunks.repaired} / ${data.chunks.scanned}`);
       if (data.spool) console.log(`  Stop-spool replayed: ${data.spool.drained} turns (${data.spool.replayed} facts, ${data.spool.remaining} still pending)`);
     }
+  } finally {
+    await client.close();
+  }
+}
+
+async function runRepairDb(args) {
+  const restoreArg = args.find((a) => a === '--restore' || a.startsWith('--restore='));
+  const which = restoreArg?.includes('=') ? restoreArg.split('=')[1] : 'latest';
+
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+  try {
+    if (restoreArg) {
+      const { data } = await client.call('repair.db', { action: 'restore', which });
+      console.log(`Restored the built-in database from snapshot ${data.from}.`);
+      if (data.movedAside) console.log(`  Previous (torn) cluster preserved at: ${data.movedAside}`);
+      console.log(`  Database health after restore: ${data.healthy ? 'healthy' : 'STILL UNHEALTHY'}`);
+      if (!data.healthy) console.log('  Try an older snapshot: sigil repair db  (then --restore=<name>)');
+      return;
+    }
+    const { data } = await client.call('repair.db', { action: 'status' });
+    const h = data.health || {};
+    console.log(`Built-in database: ${h.healthy ? 'healthy' : h.healthy === false ? 'UNHEALTHY' : 'unknown'}${h.error ? ` — ${String(h.error).split('\n')[0]}` : ''}`);
+    if (!data.snapshots.length) {
+      console.log('\nNo snapshots yet. One is taken on clean daemon shutdown and periodically while healthy.');
+      return;
+    }
+    console.log(`\nSnapshots (newest first), ~/.sigil/snapshots:`);
+    for (const s of data.snapshots) {
+      const mb = (s.bytes / 1024 / 1024).toFixed(1);
+      const when = new Date(s.mtimeMs).toISOString();
+      console.log(`  ${s.name}  (${mb} MB, ${when})`);
+    }
+    console.log('\nRestore the latest with:  sigil repair db --restore');
   } finally {
     await client.close();
   }

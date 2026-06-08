@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 
 import {
   snapshotName, listSnapshots, latestSnapshot, pruneSnapshots,
-  writeSnapshotBytes, readSnapshot, SNAPSHOT_KEEP,
+  writeSnapshotBytes, readSnapshot, recoverFromSnapshot, SNAPSHOT_KEEP,
 } from './snapshots.js';
 
 describe('snapshots', () => {
@@ -90,5 +90,18 @@ describe('snapshots', () => {
       });
     }
     expect(listSnapshots(dir)).toHaveLength(SNAPSHOT_KEEP);
+  });
+
+  // recoverFromSnapshot's negative paths return BEFORE touching the WASM engine,
+  // so they're unit-testable; the restore round-trip is integration-tested live.
+  it('recoverFromSnapshot reports no-snapshot when none exist', async () => {
+    const r = await recoverFromSnapshot({ which: 'latest', dir });
+    expect(r).toEqual({ restored: false, reason: 'no-snapshot' });
+  });
+
+  it('recoverFromSnapshot reports snapshot-not-found for an unknown name', async () => {
+    writeSnapshotBytes(Buffer.from('x'), { dir, date: new Date('2026-06-08T10:00:00Z') });
+    const r = await recoverFromSnapshot({ which: 'db-9999-does-not-exist.tgz', dir });
+    expect(r).toEqual({ restored: false, reason: 'snapshot-not-found' });
   });
 });
