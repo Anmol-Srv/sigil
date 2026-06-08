@@ -56,9 +56,20 @@ jobs:
           }
           install_via_github() {
             echo "ollama.com unavailable — falling back to the GitHub release binary..." >&2
-            curl -fsSL https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz -o /tmp/ollama.tgz \
-              && sudo tar -C /usr/local -xzf /tmp/ollama.tgz \
-              && command -v ollama >/dev/null
+            # The current Linux asset is ollama-linux-amd64.tar.zst (zstd), NOT a
+            # .tgz — the old .tgz URL 302s to a non-existent asset and 404s, which
+            # silently sank this fallback. Download the real asset and extract it
+            # with zstd. github.com's asset CDN is independent of ollama.com.
+            for attempt in 1 2 3; do
+              if curl -fsSL https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tar.zst -o /tmp/ollama.tar.zst \
+                 && sudo tar -C /usr/local --zstd -xf /tmp/ollama.tar.zst \
+                 && command -v ollama >/dev/null; then
+                return 0
+              fi
+              echo "github release attempt $attempt failed; retrying in 10s..." >&2
+              sleep 10
+            done
+            return 1
           }
           install_via_script || install_via_github
           command -v ollama || { echo "ollama unavailable after install.sh + GitHub fallback" >&2; exit 1; }
