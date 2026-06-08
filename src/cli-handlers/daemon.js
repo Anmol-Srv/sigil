@@ -139,11 +139,13 @@ async function cmdStop() {
     console.error(`failed to signal pid ${pid}: ${err.message}`);
     process.exit(1);
   }
-  // Wait briefly for clean exit
-  const deadline = Date.now() + 5_000;
+  // Wait for clean exit. The embedded store runs CHECKPOINT + close on SIGTERM
+  // (field-report Defect 1) — give it room so SIGKILL can't interrupt the flush and
+  // tear the checkpoint. A genuinely hung daemon still gets force-killed after this.
+  const deadline = Date.now() + 10_000;
   while (Date.now() < deadline && isPidAlive(pid)) await delay(50);
   if (isPidAlive(pid)) {
-    console.error(`sigild (pid ${pid}) did not exit within 5s — sending SIGKILL`);
+    console.error(`sigild (pid ${pid}) did not exit within 10s — sending SIGKILL`);
     try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
   }
   console.log('sigild stopped');

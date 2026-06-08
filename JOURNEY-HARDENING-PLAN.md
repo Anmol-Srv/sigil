@@ -666,10 +666,13 @@ validation + `listX()`).
 - 🔴 **Defect 5 (unbounded error log).** NOT covered (append-only, no dedup/cap/reset). (F6)
 
 ### New build items
-- 🔨 **F1 (Defect 1) Clean shutdown + durability.** Explicit `CHECKPOINT` before `pglite.close()` in
-  the daemon shutdown; ensure `sigil daemon stop`'s SIGKILL escalation (5s) can't interrupt the flush
-  (raise/decouple the window, or confirm close completed before exit). Periodic `CHECKPOINT` under
-  write load. Audit `relaxedDurability` (raises torn-checkpoint odds on NODEFS).
+- ✅ **F1 DONE (Defect 1) Clean shutdown + durability.** Daemon shutdown now runs an explicit
+  `CHECKPOINT` before `cortexDb.destroy()`/`pglite.close()` (embedded only) so the cluster is never
+  left "in production" needing WAL replay. Added a 60s periodic `CHECKPOINT` (embedded, unref'd) to
+  bound the hard-kill replay window. Widened `sigil daemon stop`'s grace window 5s→10s so SIGKILL
+  can't interrupt the flush. Confirmed `relaxedDurability` is NOT set (PGlite is durable-mode).
+  Validated: graceful stop → cluster reopens cleanly (no `Aborted()`). _(Hard kills/crashes still
+  need F2/F3 snapshots+recovery; F1 makes graceful stops safe.)_
 - 🔨 **F2 (Defect 1) Snapshots / DR.** Periodic `pg.dumpDataDir()` snapshots under
   `~/.sigil/snapshots/`; cheap for a small store. The restore source when an open is unrecoverable.
 - 🔨 **F3 (Defect 1) Non-destructive recovery.** `ensureUsableEmbeddedDir` currently `rm -rf`s a

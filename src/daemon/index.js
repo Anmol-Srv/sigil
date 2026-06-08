@@ -205,12 +205,30 @@ export async function startDaemon({ foreground = false } = {}) {
   const heartbeatTimer = setInterval(writeHeartbeat, 15_000);
   heartbeatTimer.unref();
 
+  // Periodic CHECKPOINT for the embedded store (field-report Defect 1): bounds how
+  // much WAL a hard kill (SIGKILL / crash / power loss) would need to replay,
+  // shrinking the torn-checkpoint window. Embedded only; best-effort; unref'd so it
+  // never holds the process open.
+  let checkpointTimer = null;
+  (async () => {
+    try {
+      const { default: cfg } = await import('../config.js');
+      if (cfg.db.mode !== 'embedded') return;
+      const { default: cortexDb } = await import('../db/cortex.js');
+      checkpointTimer = setInterval(() => {
+        cortexDb.raw('CHECKPOINT').catch((e) => log(`periodic checkpoint failed: ${e.message}`));
+      }, 60_000);
+      checkpointTimer.unref();
+    } catch { /* config/db unavailable — skip */ }
+  })();
+
   // Lazy-init guard: handlers that touch the DB open the connection on
   // first use (see handlers/*). On shutdown we destroy the pool if it
   // was ever opened.
   installShutdownHooks(async (signal) => {
     log(`received ${signal}, shutting down`);
     clearInterval(heartbeatTimer);
+    if (checkpointTimer) clearInterval(checkpointTimer);
     try { rmSync(SIGIL_HEARTBEAT, { force: true }); } catch { /* ignore */ }
     await socket.close();
     if (http) await http.close();
@@ -224,6 +242,13 @@ export async function startDaemon({ foreground = false } = {}) {
     }
     try {
       const { default: cortexDb } = await import('../db/cortex.js');
+      // Embedded (PGlite on NODEFS): force a clean CHECKPOINT before closing so the
+      // cluster is never left "in production" needing WAL replay — a torn checkpoint
+      // there bricks the store (field-report Defect 1). Best-effort; close still runs.
+      try {
+        const { default: cfg } = await import('../config.js');
+        if (cfg.db.mode === 'embedded') await cortexDb.raw('CHECKPOINT');
+      } catch (e) { log(`shutdown checkpoint failed: ${e.message}`); }
       await cortexDb.destroy();
     } catch (err) {
       log(`pool destroy failed: ${err.message}`);
