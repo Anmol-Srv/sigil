@@ -7,7 +7,7 @@
  */
 
 import { createRequire } from 'node:module';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync, renameSync } from 'node:fs';
 
 import { SIGIL_DB_PATH } from '../lib/paths.js';
 
@@ -110,6 +110,43 @@ export async function dumpEmbeddedDataDir(dbPath = PGLITE_DB_PATH) {
   const db = await getPGlite(dbPath);
   const blob = await db.dumpDataDir('gzip');
   return Buffer.from(await blob.arrayBuffer());
+}
+
+/**
+ * Restore the embedded cluster from a snapshot tarball (F3 / field-report
+ * Defect 1). NON-DESTRUCTIVE: the existing (torn) data dir is renamed aside to
+ * `${dbPath}.corrupt-<ts>` — never deleted — so nothing is lost irrecoverably,
+ * then the snapshot is extracted into a fresh dir via PGlite's loadDataDir, and
+ * verified with a probe query before we trust it. Disposes the live singleton
+ * first (a WASM instance whose backing files move goes inconsistent). Returns
+ * `{ movedAside }` (the path the old dir was preserved at, or null).
+ */
+export async function restoreEmbeddedDataDir(snapshotBuffer, dbPath = PGLITE_DB_PATH) {
+  await destroyPGlite(); // close any live instance before the dir moves
+
+  let movedAside = null;
+  if (existsSync(dbPath)) {
+    movedAside = `${dbPath}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    renameSync(dbPath, movedAside); // preserve the bad cluster, don't rm
+  }
+
+  const { PGlite } = await import('@electric-sql/pglite');
+  const { vector } = await import('@electric-sql/pglite/vector');
+  const { pg_trgm } = await import('@electric-sql/pglite/contrib/pg_trgm');
+  mkdirSync(dbPath, { recursive: true });
+  // loadDataDir extracts the tarball into the (now-empty) dir on init.
+  const restored = new PGlite(`file://${dbPath}`, {
+    loadDataDir: new Blob([snapshotBuffer]),
+    extensions: { vector, pg_trgm },
+  });
+  try {
+    await restored.waitReady;
+    await restored.query('select 1'); // verify the restored cluster opens
+  } finally {
+    await restored.close().catch(() => {});
+  }
+  // Leave the singleton null — the next acquireRawConnection reopens the fresh dir.
+  return { movedAside };
 }
 
 /**

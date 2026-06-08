@@ -344,8 +344,37 @@ async function probeDbHealth(log) {
     } catch (err) {
       setDbHealth({ healthy: false, error: err.message, checkedAt: Date.now() });
       log(`DB UNREACHABLE: ${err.message} — memory operations will fail until Postgres is back`);
+      // Boot-time non-destructive heal (F3, field-report Defect 1): if the
+      // EMBEDDED cluster won't open, it may be torn. Restore the latest snapshot
+      // — the torn dir is moved aside (preserved), never deleted — and re-probe.
+      // Only when a snapshot exists; a never-initialized cluster is left for
+      // provision/`sigil repair db` to handle. One-shot; never loops.
+      await tryBootRecovery(cortexDb, setDbHealth, log);
     }
   } catch { /* import failure — nothing we can do, leave health unknown */ }
+}
+
+async function tryBootRecovery(cortexDb, setDbHealth, log) {
+  try {
+    const { default: config } = await import('../config.js');
+    if (config.db.mode !== 'embedded') return;
+    const { latestSnapshot, recoverFromSnapshot } = await import('../db/snapshots.js');
+    if (!latestSnapshot()) {
+      log('db: no snapshot available — cannot auto-recover (run `sigil repair db` after fixing config)');
+      return;
+    }
+    log('db: embedded cluster unopenable — attempting non-destructive restore from latest snapshot...');
+    // Drop the dead pool + WASM instance so the dir can be moved and reopened.
+    const { resetCortexPool } = await import('../db/cortex.js');
+    await resetCortexPool();
+    const r = await recoverFromSnapshot({ log });
+    if (!r.restored) { log(`db: auto-recover skipped (${r.reason})`); return; }
+    await cortexDb.raw('SELECT 1'); // re-probe — rebuilds the pool on the fresh dir
+    setDbHealth({ healthy: true, error: null, checkedAt: Date.now() });
+    log('db: recovered — cluster healthy after snapshot restore');
+  } catch (e) {
+    log(`db: auto-recover failed — ${e.message}`);
+  }
 }
 
 function makeLogger() {

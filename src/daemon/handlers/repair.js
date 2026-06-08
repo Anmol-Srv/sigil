@@ -32,6 +32,48 @@ export function registerRepair(registry) {
   // mode and needs no reset. No-op on a healthy DB.
   registry.register('repair.sequences', async () => resyncSequences(cortexDb));
 
+  // repair.db — embedded-cluster recovery (F3). `status` lists the snapshots and
+  // current health; `restore` rebuilds ~/.sigil/db from a snapshot. Restore is
+  // NON-DESTRUCTIVE: the current (torn) dir is moved aside, never deleted. Runs
+  // in the daemon (sole DB owner): it drops the pool, swaps the dir, and reopens.
+  registry.register('repair.db', async (params = {}) => {
+    const { default: cfg } = await import('../../config.js');
+    if (cfg.db.mode !== 'embedded') {
+      const err = new Error('`repair db` applies to the built-in engine only; server Postgres is managed externally.');
+      err.code = 'not_embedded';
+      throw err;
+    }
+    const { listSnapshots, recoverFromSnapshot } = await import('../../db/snapshots.js');
+    const { getDbHealth, setDbHealth } = await import('../registry-holder.js');
+    const action = params.action || 'status';
+
+    if (action === 'status') {
+      const snapshots = listSnapshots().map((s) => ({ name: s.name, bytes: s.size, mtimeMs: s.mtimeMs }));
+      return { action, health: getDbHealth(), snapshots };
+    }
+
+    if (action === 'restore') {
+      const which = params.which || 'latest';
+      const { resetCortexPool } = await import('../../db/cortex.js');
+      await resetCortexPool(); // drop the dead pool + WASM instance before the dir moves
+      const r = await recoverFromSnapshot({ which });
+      if (!r.restored) {
+        const err = new Error(`restore failed: ${r.reason}`);
+        err.code = r.reason;
+        throw err;
+      }
+      let healthy = false; let error = null;
+      try { await cortexDb.raw('SELECT 1'); healthy = true; } // re-probe on the fresh dir
+      catch (err) { error = err.message; }
+      setDbHealth({ healthy, error, checkedAt: Date.now() });
+      return { action, restored: true, from: r.from, movedAside: r.movedAside, healthy };
+    }
+
+    const err = new Error(`unknown \`repair db\` action: ${action}`);
+    err.code = 'bad_action';
+    throw err;
+  });
+
   registry.register('repair.embeddings', async (params = {}) => {
     const dryRun = Boolean(params.dryRun);
     const namespace = params.namespace || null;

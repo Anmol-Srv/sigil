@@ -23,7 +23,12 @@ import { StepError, fromError, persistDatabase } from './shared.js';
  * crash aborts the WASM engine ("Aborted()") on the first catalog query — which
  * is exactly what a fresh bundled-DB setup hits after a GUI reset that didn't
  * clear it. Release any in-process handle, verify the dir actually opens, and
- * recreate it if not — turning that dead end into a clean rebuild.
+ * recover NON-DESTRUCTIVELY if not.
+ *
+ * Recovery never deletes data (field-report Defect 1, F3): the old path here
+ * `rm -rf`'d an unreadable dir, silently destroying everything. Now we prefer
+ * restoring the latest snapshot (F2), and when there's no snapshot we still move
+ * the dir aside rather than delete it, so the bytes survive for manual recovery.
  */
 async function ensureUsableEmbeddedDir(emit) {
   // Drop any live handle (daemon pool + PGlite singleton) bound to this dir — a
@@ -31,19 +36,33 @@ async function ensureUsableEmbeddedDir(emit) {
   const { resetCortexPool } = await import('../../db/cortex.js');
   await resetCortexPool();
   if (!existsSync(PGLITE_DB_PATH)) return;
+  let probe = null;
   try {
     const { PGlite } = await import('@electric-sql/pglite');
     const { vector } = await import('@electric-sql/pglite/vector');
     const { pg_trgm } = await import('@electric-sql/pglite/contrib/pg_trgm');
-    const probe = new PGlite(`file://${PGLITE_DB_PATH}`, { extensions: { vector, pg_trgm } });
+    probe = new PGlite(`file://${PGLITE_DB_PATH}`, { extensions: { vector, pg_trgm } });
     await probe.waitReady;
     await probe.query('select 1');
     await probe.close();
+    return; // dir is healthy
   } catch {
-    emit({ pct: 30, label: 'Existing built-in database is unreadable — recreating…' });
-    const { rm } = await import('node:fs/promises');
-    await rm(PGLITE_DB_PATH, { recursive: true, force: true });
+    if (probe) { try { await probe.close(); } catch { /* half-open */ } }
   }
+
+  // Unreadable. Prefer a snapshot restore (moves the torn dir aside, extracts a
+  // good cluster). If none exists, move the bad dir aside so migrate creates a
+  // fresh one — but the data is preserved, never silently deleted.
+  const { latestSnapshot, recoverFromSnapshot } = await import('../../db/snapshots.js');
+  if (latestSnapshot()) {
+    emit({ pct: 30, label: 'Existing database is unreadable — restoring from snapshot…' });
+    await recoverFromSnapshot({});
+    return;
+  }
+  emit({ pct: 30, label: 'Existing database is unreadable — setting it aside and recreating…' });
+  const { rename } = await import('node:fs/promises');
+  const aside = `${PGLITE_DB_PATH}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  await rename(PGLITE_DB_PATH, aside);
 }
 
 /**
