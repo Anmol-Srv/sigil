@@ -680,10 +680,13 @@ validation + `listX()`).
   latest snapshot (F2) before wiping; run the heal on **daemon boot**, not just provision; explore a
   bundled WASM `pg_resetwal` (coordinate upstream with electric-sql/pglite) to force-open a torn
   cluster with bounded loss. Add a `sigil repair db` flow that drives this.
-- 🔨 **F4 (Defect 3) Recycle the poisoned WASM.** Wrap query execution: on `Aborted()` /
-  `WebAssembly.RuntimeError`, mark the PGlite instance poisoned, dispose it, lazily recreate a fresh
-  `PGlite`. Turns the in-memory-wedge subclass from a permanent outage into a blip (the on-disk
-  subclass still needs F1–F3). Make `sigil daemon status` report DB health, not just liveness.
+- ✅ **F4 DONE (Defect 3) Recycle the poisoned WASM.** `isPgliteAbort()` detects an `Aborted()` /
+  `WebAssembly.RuntimeError`; the query layer (PGliteConnection) disposes the dead singleton + tags
+  the error `sigilPoisoned`; the daemon RPC dispatch catches that and calls `resetCortexPool()` so the
+  NEXT request rebuilds a fresh knex pool + PGlite instead of wedging for the daemon's lifetime. Turns
+  the in-memory-wedge subclass from a permanent outage into a one-request blip (on-disk corruption
+  still needs F2/F3). `sigil daemon status` now reports `database healthy/UNHEALTHY` via the status RPC
+  (health ≠ liveness). Detector unit-tested (`pglite-adapter.test.js`); status line validated live.
 - ✅ **F5 (Defect 4) Circuit breaker + concurrency cap.** DONE (PR #18). Confirmed live: a wedged
   daemon (search RPC timing out at 8s) pegged a core while `connectOrStartDaemon` mistook the dead
   ping for "no daemon" and forked a replacement on every hook/CLI call — the log showed 120
@@ -707,7 +710,7 @@ validation + `listX()`).
 1. ✅ Single-writer enforcement (Defect 2) — DONE (guard).
 2. **F1** clean shutdown + durability (prevent the brick).
 3. **F2/F3** snapshots + non-destructive recovery (survive a brick without data loss).
-4. **F4** health-probe + recycle the WASM.
+4. ✅ **F4** health-probe + recycle the WASM — DONE (PR #17).
 5. ✅ **F5** circuit-broken, concurrency-capped hooks — DONE (PR #18).
 6. **F6** bounded/deduped logging.
 7. **F7** honest diagnostics.

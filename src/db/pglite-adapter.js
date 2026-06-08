@@ -21,6 +21,19 @@ let pgliteInstance = null;
 let pgliteInstancePath = null;
 
 /**
+ * True for a PGlite WASM-heap abort (field-report Defect 3 / F4). Once the
+ * Emscripten heap `abort()`s, the module is unrecoverable and every later call
+ * returns the same error — the only fix is to dispose the instance and
+ * re-instantiate. Detect it so the query layer can recycle rather than wedge.
+ */
+export function isPgliteAbort(err) {
+  if (!err) return false;
+  if (typeof WebAssembly !== 'undefined' && WebAssembly.RuntimeError
+      && err instanceof WebAssembly.RuntimeError) return true;
+  return err.name === 'RuntimeError' || /Aborted\(\)/.test(err.message || '');
+}
+
+/**
  * Single-process guard (finding 6.1). PGlite is single-process: a second process
  * opening the same data dir while another holds it aborts the WASM engine
  * ("Aborted()") and poisons the holder too. Only the daemon (which sets
@@ -103,7 +116,7 @@ class PGliteConnection {
     // For parameterless multi-statement SQL (DDL migrations), use exec() instead.
     const isMultiStatement = !values.length && text.split(';').filter((s) => s.trim()).length > 1;
 
-    const p = isMultiStatement
+    const p = (isMultiStatement
       ? this._db.exec(text).then((results) => {
           const last = results[results.length - 1] || {};
           return {
@@ -118,7 +131,19 @@ class PGliteConnection {
           rows: result.rows,
           fields: result.fields || [],
           rowCount: result.affectedRows ?? result.rows.length,
-        }));
+        }))
+    ).catch((err) => {
+      // F4 / field-report Defect 3: an Aborted() / WebAssembly.RuntimeError means
+      // the WASM heap is dead and every later call repeats it. Dispose the singleton
+      // so the next acquireRawConnection rebuilds a fresh PGlite, and tag the error
+      // so the daemon drops the dead pooled connection (resetCortexPool in dispatch).
+      if (isPgliteAbort(err)) {
+        pgliteInstance = null;
+        pgliteInstancePath = null;
+        err.sigilPoisoned = true;
+      }
+      throw err;
+    });
 
     if (typeof callback === 'function') {
       p.then((r) => callback(null, r)).catch((e) => callback(e));
