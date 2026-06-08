@@ -680,10 +680,13 @@ validation + `listX()`).
   latest snapshot (F2) before wiping; run the heal on **daemon boot**, not just provision; explore a
   bundled WASM `pg_resetwal` (coordinate upstream with electric-sql/pglite) to force-open a torn
   cluster with bounded loss. Add a `sigil repair db` flow that drives this.
-- 🔨 **F4 (Defect 3) Recycle the poisoned WASM.** Wrap query execution: on `Aborted()` /
-  `WebAssembly.RuntimeError`, mark the PGlite instance poisoned, dispose it, lazily recreate a fresh
-  `PGlite`. Turns the in-memory-wedge subclass from a permanent outage into a blip (the on-disk
-  subclass still needs F1–F3). Make `sigil daemon status` report DB health, not just liveness.
+- ✅ **F4 DONE (Defect 3) Recycle the poisoned WASM.** `isPgliteAbort()` detects an `Aborted()` /
+  `WebAssembly.RuntimeError`; the query layer (PGliteConnection) disposes the dead singleton + tags
+  the error `sigilPoisoned`; the daemon RPC dispatch catches that and calls `resetCortexPool()` so the
+  NEXT request rebuilds a fresh knex pool + PGlite instead of wedging for the daemon's lifetime. Turns
+  the in-memory-wedge subclass from a permanent outage into a one-request blip (on-disk corruption
+  still needs F2/F3). `sigil daemon status` now reports `database healthy/UNHEALTHY` via the status RPC
+  (health ≠ liveness). Detector unit-tested (`pglite-adapter.test.js`); status line validated live.
 - 🔨 **F5 (Defect 4) Circuit breaker + concurrency cap.** After N consecutive hook DB failures,
   cooldown + skip (don't keep retrying). Single-flight / cap concurrent `claude-cli` spawns so hook
   invocations + their subprocesses can't pile up. Gate daemon auto-respawn on a health check + backoff

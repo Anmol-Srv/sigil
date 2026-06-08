@@ -160,6 +160,16 @@ async function cmdStatus() {
   try {
     const client = await openSocketClient({ timeoutMs: 2_000 });
     const { data } = await client.call('ping', {});
+    // DB health is distinct from daemon liveness (field-report Defect 3): the
+    // process can be up and the socket reachable while the embedded engine is
+    // dead. Probe it via status so a wedged DB is visible here, not hidden.
+    let dbLine = '  database  unknown';
+    try {
+      const { data: st } = await client.call('status', {});
+      dbLine = st?.db?.healthy
+        ? '  database  healthy'
+        : `  database  UNHEALTHY${st?.db?.error ? ` — ${String(st.db.error).split('\n')[0]}` : ''}`;
+    } catch (e) { dbLine = `  database  unknown — ${e.message.split('\n')[0]}`; }
     await client.close();
     console.log(`sigild: running`);
     console.log(`  pid       ${data.pid}`);
@@ -167,6 +177,7 @@ async function cmdStatus() {
     console.log(`  node      ${data.node}`);
     console.log(`  uptime    ${formatUptime(data.uptimeMs)}`);
     console.log(`  socket    ${SIGIL_DAEMON_SOCK}`);
+    console.log(dbLine);
   } catch (err) {
     console.log(`sigild: pid ${pid} alive but socket unresponsive (${err.message})`);
     process.exit(1);

@@ -46,6 +46,17 @@ export function createRegistry() {
       );
       return { ok: true, data };
     } catch (err) {
+      // Poisoned embedded WASM (field-report Defect 3 / F4): the PGlite heap
+      // aborted and every later query returns the same error. The query layer
+      // disposed the singleton + tagged the error; drop the dead knex pool too so
+      // the NEXT request acquires a fresh connection (rebuilt PGlite) instead of
+      // staying wedged for the daemon's lifetime. Best-effort; never throws.
+      if (err?.sigilPoisoned) {
+        try {
+          const { resetCortexPool } = await import('../db/cortex.js');
+          await resetCortexPool();
+        } catch { /* best-effort recycle */ }
+      }
       return { ok: false, error: serializeError(err) };
     }
   }
