@@ -35,7 +35,16 @@ jobs:
       - run: npm ci
 
       - name: Install Ollama
-        run: curl -fsSL https://ollama.com/install.sh | sh
+        # `curl ollama.com/install.sh | sh` flakes intermittently on the runners
+        # (transient 5xx / DNS → `ollama: command not found`, exit 127). Retry with
+        # backoff and fail loudly only if it's truly unavailable after several tries.
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if curl -fsSL https://ollama.com/install.sh | sh; then break; fi
+            echo "ollama install attempt $attempt failed; retrying in 15s..." >&2
+            sleep 15
+          done
+          command -v ollama || { echo "ollama still not installed after retries" >&2; exit 1; }
 
       - name: Start Ollama + pull embedding model
         run: |
@@ -47,8 +56,12 @@ jobs:
           done
           # 1024-dim model — matches Sigil's pinned EMBEDDING_DIM (the harness +
           # production schema are vector(1024)). nomic-embed-text (768) would fail
-          # the dimension check.
-          ollama pull mxbai-embed-large
+          # the dimension check. Retry the pull too — the registry can 5xx briefly.
+          for attempt in 1 2 3; do
+            if ollama pull mxbai-embed-large; then break; fi
+            echo "ollama pull attempt $attempt failed; retrying in 10s..." >&2
+            sleep 10
+          done
 
       - name: Reliability gate (real embeddings + scorecard)
         run: npm run test:reliability
