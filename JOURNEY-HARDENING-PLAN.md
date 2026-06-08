@@ -644,3 +644,61 @@ validation + `listX()`).
 
 ### Cross-cutting (every PR)
 - **X1** remove dead code as found · **X2** add the registry regression test when touching an axis.
+
+---
+
+## STEP 10 — Field report (Codex, v0.18.3): embedded durability + resilience
+
+> A real learner's install bricked after an unclean shutdown, and the recovery made it worse.
+> Six compounding defects. Cross-referenced against our sprints below. Several are already fixed
+> by the daemon-routing + guard work; the rest are added here.
+
+### Coverage vs our sprints
+- ✅ **Defect 2 (concurrent PGLite writers — the report's #1).** FIXED by the **Phase D guard**
+  (`assertEmbeddedOpenable`, #15): `sigil migrate` / any non-daemon process can't open the embedded
+  dir while the daemon holds it → `embedded_in_use` instead of a torn catalog. doctor DB label fixed.
+- 🟡 **Defect 4 (CPU/fan storm).** Mostly addressed by bounded hooks (Phase A/B: read 9s→skip-inject,
+  stop 20s→spool, session-end 25s) + read-hook LLM routing moved server-side. Gaps below (F5).
+- 🟡 **Defect 3 (wedged-but-alive).** `status` probes the DB + reports `db.healthy` ≠ liveness. Gap:
+  recycle the poisoned WASM (F4).
+- 🟡 **Defect 6 (diagnostics).** DB label fixed; doctor routed. Gaps below (F7).
+- 🔴 **Defect 1 (torn checkpoint + no recovery).** NOT covered — the actual data-loss bug. (F1–F3)
+- 🔴 **Defect 5 (unbounded error log).** NOT covered (append-only, no dedup/cap/reset). (F6)
+
+### New build items
+- 🔨 **F1 (Defect 1) Clean shutdown + durability.** Explicit `CHECKPOINT` before `pglite.close()` in
+  the daemon shutdown; ensure `sigil daemon stop`'s SIGKILL escalation (5s) can't interrupt the flush
+  (raise/decouple the window, or confirm close completed before exit). Periodic `CHECKPOINT` under
+  write load. Audit `relaxedDurability` (raises torn-checkpoint odds on NODEFS).
+- 🔨 **F2 (Defect 1) Snapshots / DR.** Periodic `pg.dumpDataDir()` snapshots under
+  `~/.sigil/snapshots/`; cheap for a small store. The restore source when an open is unrecoverable.
+- 🔨 **F3 (Defect 1) Non-destructive recovery.** `ensureUsableEmbeddedDir` currently `rm -rf`s a
+  corrupt dir (DATA LOSS) and only on provision. Instead: on an unrecoverable open, restore the
+  latest snapshot (F2) before wiping; run the heal on **daemon boot**, not just provision; explore a
+  bundled WASM `pg_resetwal` (coordinate upstream with electric-sql/pglite) to force-open a torn
+  cluster with bounded loss. Add a `sigil repair db` flow that drives this.
+- 🔨 **F4 (Defect 3) Recycle the poisoned WASM.** Wrap query execution: on `Aborted()` /
+  `WebAssembly.RuntimeError`, mark the PGlite instance poisoned, dispose it, lazily recreate a fresh
+  `PGlite`. Turns the in-memory-wedge subclass from a permanent outage into a blip (the on-disk
+  subclass still needs F1–F3). Make `sigil daemon status` report DB health, not just liveness.
+- 🔨 **F5 (Defect 4) Circuit breaker + concurrency cap.** After N consecutive hook DB failures,
+  cooldown + skip (don't keep retrying). Single-flight / cap concurrent `claude-cli` spawns so hook
+  invocations + their subprocesses can't pile up. Gate daemon auto-respawn on a health check + backoff
+  so a hook never revives the daemon into a known-abort loop.
+- 🔨 **F6 (Defect 5) Bounded, deduped logging.** Collapse repeated hook errors (count + window); cap
+  `.hook-errors.log` size. Make `llm_log` writes best-effort + rate-limited (never spam/stall the main
+  path). Reset the unacked counter on a clean `doctor` / explicit `--ack` (reflect "since last
+  healthy", not "ever").
+- 🔨 **F7 (Defect 6) Honest diagnostics.** `SIGIL_PGLITE_DEBUG=1` to surface the real `PANIC`/`FATAL`
+  behind `Aborted()`. doctor must distinguish "tables missing" from "0 docs" (a failing count reads as
+  a failure). Fix the `.env` false-positive (a complete `config.json` is healthy — don't warn). Point
+  an unreadable DB at `sigil repair db`, not the generic `sigil init`.
+
+### Priority (report's order, adjusted for what's already done)
+1. ✅ Single-writer enforcement (Defect 2) — DONE (guard).
+2. **F1** clean shutdown + durability (prevent the brick).
+3. **F2/F3** snapshots + non-destructive recovery (survive a brick without data loss).
+4. **F4** health-probe + recycle the WASM.
+5. **F5** circuit-broken, concurrency-capped hooks.
+6. **F6** bounded/deduped logging.
+7. **F7** honest diagnostics.
