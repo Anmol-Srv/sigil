@@ -684,10 +684,16 @@ validation + `listX()`).
   `WebAssembly.RuntimeError`, mark the PGlite instance poisoned, dispose it, lazily recreate a fresh
   `PGlite`. Turns the in-memory-wedge subclass from a permanent outage into a blip (the on-disk
   subclass still needs F1–F3). Make `sigil daemon status` report DB health, not just liveness.
-- 🔨 **F5 (Defect 4) Circuit breaker + concurrency cap.** After N consecutive hook DB failures,
-  cooldown + skip (don't keep retrying). Single-flight / cap concurrent `claude-cli` spawns so hook
-  invocations + their subprocesses can't pile up. Gate daemon auto-respawn on a health check + backoff
-  so a hook never revives the daemon into a known-abort loop.
+- ✅ **F5 (Defect 4) Circuit breaker + concurrency cap.** DONE (PR #18). Confirmed live: a wedged
+  daemon (search RPC timing out at 8s) pegged a core while `connectOrStartDaemon` mistook the dead
+  ping for "no daemon" and forked a replacement on every hook/CLI call — the log showed 120
+  `already running (pid N)` spawns + 69 search timeouts in one session, which lagged the whole
+  machine. Fix: (1) `connectOrStartDaemon` consults `detectRunningDaemon` (heartbeat + /healthz,
+  which survive a pegged loop) and throws a typed `SigilDaemonBusyError` instead of forking a doomed
+  competitor (the single-process DB lock means it can never win); (2) a spawn lockfile serializes
+  starts across concurrent callers, with stale-steal; (3) a shared hook circuit breaker —
+  user-prompt-submit / stop / session-end trip a short cooldown and degrade fast (skip inject /
+  spool / let the maintain sweep close the pod) instead of re-hammering a stuck daemon. Unit-tested.
 - 🔨 **F6 (Defect 5) Bounded, deduped logging.** Collapse repeated hook errors (count + window); cap
   `.hook-errors.log` size. Make `llm_log` writes best-effort + rate-limited (never spam/stall the main
   path). Reset the unacked counter on a clean `doctor` / explicit `--ack` (reflect "since last
@@ -702,6 +708,6 @@ validation + `listX()`).
 2. **F1** clean shutdown + durability (prevent the brick).
 3. **F2/F3** snapshots + non-destructive recovery (survive a brick without data loss).
 4. **F4** health-probe + recycle the WASM.
-5. **F5** circuit-broken, concurrency-capped hooks.
+5. ✅ **F5** circuit-broken, concurrency-capped hooks — DONE (PR #18).
 6. **F6** bounded/deduped logging.
 7. **F7** honest diagnostics.
