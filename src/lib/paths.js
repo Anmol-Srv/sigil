@@ -91,6 +91,11 @@ export const SIGIL_DAEMON_SOCK = join(SIGIL_HOME, 'sock');
 export const SIGIL_DAEMON_PID  = join(SIGIL_HOME, 'sigild.pid');
 export const SIGIL_DAEMON_LOG  = join(SIGIL_HOME, 'sigild.log');
 export const SIGIL_HEARTBEAT   = join(SIGIL_HOME, 'heartbeat.json');
+// F5 (respawn-storm guard): serializes daemon spawns across concurrent CLI/hook
+// processes; records a short cooldown when the daemon is found alive-but-wedged
+// so a burst of hooks degrades fast instead of each re-paying the probe cost.
+export const SIGIL_SPAWN_LOCK    = join(SIGIL_HOME, '.spawn.lock');
+export const SIGIL_DAEMON_BREAKER = join(SIGIL_HOME, '.daemon-breaker.json');
 
 // GUI
 export const SIGIL_GUI_TOKEN     = join(SIGIL_HOME, 'gui.token');

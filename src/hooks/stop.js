@@ -23,6 +23,7 @@ import { loadHookEnv } from './env-loader.js';
 import { maskSecrets } from './secret-mask.js';
 import { classifyTurn } from './stop-classify.js';
 import { appendSpool } from './stop-spool.js';
+import { breakerOpen, tripBreaker, resetBreaker } from './daemon-breaker.js';
 import { SIGIL_STOP_CURSOR } from '../lib/paths.js';
 
 loadHookEnv();
@@ -66,6 +67,22 @@ async function main() {
     return respond();
   }
 
+  // Circuit breaker (F5): a recent hook found the daemon wedged. Don't classify
+  // (an LLM call) or poke the daemon — spool the raw turn for replay once it
+  // recovers. This is what keeps a wedged daemon from being hammered every turn.
+  if (breakerOpen()) {
+    appendSpool({
+      message: userMessage,
+      sessionId: input.session_id,
+      cwd: input.cwd || null,
+      transcriptPath: input.transcript_path || null,
+      reason: 'daemon-breaker',
+    });
+    markProcessed(messageHash);
+    process.stderr.write('[sigil:stop] daemon breaker open — spooled turn for replay\n');
+    return respond();
+  }
+
   try {
     const facts = await classifyTurn(userMessage);
     markProcessed(messageHash);
@@ -86,10 +103,14 @@ async function main() {
         cwd: input.cwd || null,
         transcriptPath: input.transcript_path || null,
       });
+      resetBreaker(); // reached the daemon — clear any breaker a prior hook set
     } finally {
       if (client) await client.close().catch(() => {});
     }
   } catch (err) {
+    // An alive-but-wedged daemon trips the breaker so the next turns spool fast
+    // instead of each re-paying the save timeout against a stuck daemon.
+    if (err?.name === 'SigilDaemonBusyError') tripBreaker();
     // Never block Claude — but the content was memorable and we couldn't save it
     // (daemon down / save failed / timed out). Spool the raw turn for replay once
     // the system recovers, and log so sigil doctor can surface it. A timeout that

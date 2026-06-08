@@ -23,6 +23,7 @@
 import { maskSecrets } from './secret-mask.js';
 import { recordHookError, failClosedOnBadConfig } from './error-log.js';
 import { loadHookEnv } from './env-loader.js';
+import { breakerOpen, tripBreaker, resetBreaker } from './daemon-breaker.js';
 
 loadHookEnv();
 
@@ -88,21 +89,35 @@ async function main() {
   // known-broken, writing a specific fix to .hook-errors.log.
   if (await failClosedOnBadConfig('user-prompt-submit', raw)) return respond();
 
+  // Circuit breaker (F5): a recent hook found the daemon wedged. Skip the daemon
+  // entirely for the cooldown rather than re-paying the probe on every prompt —
+  // that pile-on is what caused the CPU storm. Hot-context from CLAUDE.md still
+  // covers the user during the window.
+  if (breakerOpen()) {
+    process.stderr.write('[sigil:user-prompt-submit] daemon breaker open — skipping injection\n');
+    return respond();
+  }
+
   let data;
   try {
     data = await withDeadline(OVERALL_DEADLINE_MS, searchViaDaemon(query, input));
   } catch (err) {
     // Classify. A handler-level error (SigilRpcError — e.g. a broken embedding
     // config) means recall is BROKEN: record it so `sigil doctor` can tell
-    // "broken" from "quiet". A timeout or transient transport error (slow / a
-    // briefly-down daemon) is NOT broken — stderr only, don't pollute the error
-    // budget (keeping it meaningful is the whole point of this refactor). Either
-    // way the prompt proceeds; we NEVER open the DB directly (the abort we removed).
+    // "broken" from "quiet". An alive-but-wedged daemon (SigilDaemonBusyError)
+    // trips the breaker so the next prompts skip fast. A timeout or transient
+    // transport error (slow / a briefly-down daemon) is NOT broken — stderr only,
+    // don't pollute the error budget. Either way the prompt proceeds; we NEVER
+    // open the DB directly (the abort we removed).
+    if (err?.name === 'SigilDaemonBusyError') tripBreaker();
     const broken = err?.name === 'SigilRpcError';
     process.stderr.write(`[sigil:user-prompt-submit] daemon search ${broken ? 'error' : 'unavailable'}: ${maskSecrets(err.message)}\n`);
     if (broken) await recordHookError('user-prompt-submit', err, raw).catch(() => {});
     return respond();
   }
+
+  // Reached the daemon — clear any breaker a prior hook left open.
+  resetBreaker();
 
   if (data === TIMEOUT) {
     // Budget exceeded (e.g. cold daemon start). Soft skip — NOT an error, so it

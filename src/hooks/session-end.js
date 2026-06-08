@@ -15,6 +15,7 @@
 
 import { loadHookEnv } from './env-loader.js';
 import { maskSecrets } from './secret-mask.js';
+import { breakerOpen, tripBreaker, resetBreaker } from './daemon-breaker.js';
 
 loadHookEnv();
 
@@ -30,6 +31,13 @@ async function main() {
   try { input = JSON.parse(raw); } catch { return respond(); }
   if (!input.session_id) return respond();
 
+  // Circuit breaker (F5): if a recent hook found the daemon wedged, don't poke it
+  // — the `sigil maintain` staleness sweep closes the pod as a backstop.
+  if (breakerOpen()) {
+    process.stderr.write('[sigil:session-end] daemon breaker open — skipping (maintain sweep will close the pod)\n');
+    return respond();
+  }
+
   const { connectOrStartDaemon } = await import('../clients/auto-spawn.js');
   let client;
   try {
@@ -41,9 +49,12 @@ async function main() {
       summary: input.summary || null,
       conclusion: input.conclusion || null,
     });
+    resetBreaker(); // reached the daemon — clear any breaker a prior hook set
   } catch (err) {
     // Best-effort: log only. We never open the DB directly as a fallback, and a
-    // missed close self-heals via the `sigil maintain` staleness sweep.
+    // missed close self-heals via the `sigil maintain` staleness sweep. An
+    // alive-but-wedged daemon trips the breaker so other hooks degrade fast.
+    if (err?.name === 'SigilDaemonBusyError') tripBreaker();
     process.stderr.write(`[sigil:session-end] ${maskSecrets(err.message)}\n`);
   } finally {
     if (client) await client.close().catch(() => {});
