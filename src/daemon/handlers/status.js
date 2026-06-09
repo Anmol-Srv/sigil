@@ -16,15 +16,29 @@ export function registerStatus(registry) {
     // rather than memory silently appearing empty.
     let dbHealthy = true;
     let dbError = null;
+    let dbSchema = 'ready';
     try {
       await cortexDb.raw('SELECT 1');
+      // Honest diagnostics (F7): a reachable DB whose tables don't exist is NOT
+      // the same as a down DB or an empty one. Without this, getStats() below
+      // throws an opaque "relation \"document\" does not exist" that reads as a
+      // generic failure; instead report "schema not initialized" with the real
+      // remedy (run migrations), distinct from "0 docs" (healthy + empty).
+      const tbl = await cortexDb('information_schema.tables')
+        .where({ table_schema: 'public', table_name: 'document' })
+        .first();
+      if (!tbl) {
+        dbHealthy = false;
+        dbSchema = 'missing';
+        dbError = 'schema not initialized (no tables) — run `sigil migrate`';
+      }
     } catch (err) {
       dbHealthy = false;
       dbError = err.message;
     }
     try {
       const { setDbHealth } = await import('../registry-holder.js');
-      setDbHealth({ healthy: dbHealthy, error: dbError, checkedAt: Date.now() });
+      setDbHealth({ healthy: dbHealthy, error: dbError, schema: dbSchema, checkedAt: Date.now() });
     } catch { /* holder unavailable outside daemon */ }
 
     // Provider health from the boot probe (cached — no live provider call per
@@ -38,7 +52,7 @@ export function registerStatus(registry) {
     if (!dbHealthy) {
       return {
         namespace,
-        db: { healthy: false, error: dbError },
+        db: { healthy: false, error: dbError, schema: dbSchema },
         providers,
         documents: 0,
         chunks: 0,
@@ -70,7 +84,7 @@ export function registerStatus(registry) {
 
     return {
       namespace,
-      db: { healthy: true, error: null },
+      db: { healthy: true, error: null, schema: 'ready' },
       providers,
       documents: docStats.documentCount,
       chunks: docStats.totalChunks,

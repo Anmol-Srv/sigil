@@ -34,6 +34,21 @@ export function isPgliteAbort(err) {
 }
 
 /**
+ * Honest diagnostics (F7 / field-report Defect 6). PGlite surfaces a heap abort
+ * as a bare `Aborted(). Build with -sASSERTIONS for more info` — the real
+ * Postgres PANIC/FATAL behind it is swallowed. Setting SIGIL_PGLITE_DEBUG=1..5
+ * raises PGlite's debug level so that underlying log line is printed, turning an
+ * opaque abort into an actionable cause. Returns undefined (PGlite's default)
+ * when unset/invalid so normal runs stay quiet.
+ */
+export function pgliteDebugLevel() {
+  const raw = process.env.SIGIL_PGLITE_DEBUG;
+  if (!raw) return undefined;
+  const n = raw === '1' || raw.toLowerCase() === 'true' ? 1 : Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= 5 ? n : undefined;
+}
+
+/**
  * Single-process guard (finding 6.1). PGlite is single-process: a second process
  * opening the same data dir while another holds it aborts the WASM engine
  * ("Aborted()") and poisons the holder too. Only the daemon (which sets
@@ -77,7 +92,11 @@ async function getPGlite(dbPath) {
     const { vector } = await import('@electric-sql/pglite/vector');
     const { pg_trgm } = await import('@electric-sql/pglite/contrib/pg_trgm');
     mkdirSync(dbPath, { recursive: true });
-    pgliteInstance = new PGlite(`file://${dbPath}`, { extensions: { vector, pg_trgm } });
+    const debug = pgliteDebugLevel();
+    pgliteInstance = new PGlite(`file://${dbPath}`, {
+      extensions: { vector, pg_trgm },
+      ...(debug ? { debug } : {}), // SIGIL_PGLITE_DEBUG → surface the real PANIC/FATAL behind Aborted()
+    });
     await pgliteInstance.waitReady;
     pgliteInstancePath = dbPath;
   }

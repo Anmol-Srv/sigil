@@ -711,16 +711,21 @@ validation + `listX()`).
   suppressed count) so a wedged DB can't spam the daemon log; the insert was already fire-and-forget.
   Unacked counter is "since last clean doctor"; added `sigil doctor --ack` to acknowledge without a
   full pass.
-- 🔨 **F7 (Defect 6) Honest diagnostics.** `SIGIL_PGLITE_DEBUG=1` to surface the real `PANIC`/`FATAL`
-  behind `Aborted()`. doctor must distinguish "tables missing" from "0 docs" (a failing count reads as
-  a failure). Fix the `.env` false-positive (a complete `config.json` is healthy — don't warn). Point
-  an unreadable DB at `sigil repair db`, not the generic `sigil init`.
+- ✅ **F7 DONE (Defect 6) Honest diagnostics.** `SIGIL_PGLITE_DEBUG=1..5` raises PGlite's debug level
+  so the real Postgres `PANIC`/`FATAL` behind `Aborted()` is printed (doctor's recovery hint tells the
+  user to set it + restart). The `status` RPC now distinguishes "schema not initialized (no tables)"
+  from "0 docs" via an `information_schema` probe before counting — so an unmigrated DB reads as
+  "run `sigil migrate`", not an opaque `relation "document" does not exist`. doctor's config check
+  reads `config.json` (the source of truth), killing the `.env`-not-found false-positive. The
+  unreadable-DB pointer to `sigil repair db` landed with F3.
 
 ### Priority (report's order, adjusted for what's already done)
 1. ✅ Single-writer enforcement (Defect 2) — DONE (guard).
-2. **F1** clean shutdown + durability (prevent the brick).
-3. ✅ **F2/F3** snapshots + non-destructive recovery — DONE (PR #20, #21).
-4. ✅ **F4** health-probe + recycle the WASM — DONE (PR #17).
+2. ✅ **F1** clean shutdown + durability — DONE (PR #16).
+3. ✅ **F2/F3** snapshots + non-destructive recovery — DONE (PR #20, #22).
+4. ✅ **F4** health-probe + recycle the WASM — DONE (PR #19).
 5. ✅ **F5** circuit-broken, concurrency-capped hooks — DONE (PR #18).
-6. **F6** bounded/deduped logging.
-7. **F7** honest diagnostics.
+6. ✅ **F6** bounded/deduped logging — DONE (PR #23).
+7. ✅ **F7** honest diagnostics — DONE (PR #24).
+
+All seven field-report defects are now closed.
