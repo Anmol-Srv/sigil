@@ -234,7 +234,7 @@ if (command !== 'doctor' && command !== 'export' && command !== 'register') {
     const { getUnackedErrorCount } = await import('./hooks/error-log.js');
     const count = await getUnackedErrorCount();
     if (count > 0) {
-      process.stderr.write(`⚠ Sigil: ${count} unacked hook error${count > 1 ? 's' : ''} — run \`sigil doctor\` for details\n`);
+      process.stderr.write(`⚠ Sigil: ${count} unacked hook issue${count > 1 ? 's' : ''} — run \`sigil doctor\` for details\n`);
     }
   } catch { /* never let the warning break the command */ }
 }
@@ -537,11 +537,23 @@ async function runDoctor(args) {
 
 Usage:
   sigil doctor [--deep]
+  sigil doctor --ack
 
 Checks: Postgres connection, LLM provider, embedding provider, hook registration, hook error budget.
 --deep also round-trips each connector (spawns the MCP server / runs a hook) to
-prove the integration actually works, not just that its files exist.`);
+prove the integration actually works, not just that its files exist.
+--ack acknowledges the current hook errors (silences the warning) without
+running the checks — use when you've seen them and don't want a full pass.`);
     process.exit(0);
+  }
+
+  // Explicit acknowledgement: stamp the clean marker so the proactive warning
+  // suppresses, without running checks (F6). The counter is "since last ack".
+  if (args.includes('--ack')) {
+    const { markDoctorClean } = await import('./hooks/error-log.js');
+    await markDoctorClean();
+    console.log('Acknowledged current hook errors — the warning will return only if new ones arrive.');
+    return;
   }
 
   const deep = args.includes('--deep');
@@ -690,20 +702,22 @@ prove the integration actually works, not just that its files exist.`);
     const { readRecentHookErrors, getUnackedErrorCount, HOOK_ERROR_LOG } = await import('./hooks/error-log.js');
     const recent = await readRecentHookErrors(100);
     const unackedCount = await getUnackedErrorCount();
+    // `recent` is collapsed into distinct {hook, error, count} groups; counts
+    // below are distinct issues, not raw line volume (F6).
+    const fmt = (e) => {
+      const times = e.count > 1 ? ` ×${e.count}` : '';
+      return `    ${e.lastTs || e.ts}  [${e.hook}]${times}  ${(e.error || '').split('\n')[0].slice(0, 160)}`;
+    };
     if (recent.length === 0) {
       log('ok', 'Hook errors', `none in ${HOOK_ERROR_LOG}`);
     } else if (unackedCount > 5) {
-      log('fail', 'Hook errors', `${unackedCount} unacked errors since last clean doctor (budget: ≤5) — see ${HOOK_ERROR_LOG}`);
-      for (const e of recent.slice(-5)) {
-        console.log(`    ${e.ts}  [${e.hook}]  ${(e.error || '').split('\n')[0].slice(0, 160)}`);
-      }
+      log('fail', 'Hook errors', `${unackedCount} unacked issues since last clean doctor (budget: ≤5) — see ${HOOK_ERROR_LOG}`);
+      for (const e of recent.slice(-5)) console.log(fmt(e));
     } else if (unackedCount > 0) {
-      log('warn', 'Hook errors', `${unackedCount} unacked / ${recent.length} total — see ${HOOK_ERROR_LOG}`);
-      for (const e of recent.slice(-3)) {
-        console.log(`    ${e.ts}  [${e.hook}]  ${(e.error || '').split('\n')[0].slice(0, 160)}`);
-      }
+      log('warn', 'Hook errors', `${unackedCount} unacked / ${recent.length} distinct — see ${HOOK_ERROR_LOG}`);
+      for (const e of recent.slice(-3)) console.log(fmt(e));
     } else {
-      log('ok', 'Hook errors', `${recent.length} historical errors, all acked`);
+      log('ok', 'Hook errors', `${recent.length} distinct historical errors, all acked`);
     }
   } catch (err) {
     log('warn', 'Hook errors', `unreadable: ${err.message}`);

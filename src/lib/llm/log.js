@@ -21,6 +21,25 @@ function calcCost(model, inputTokens, outputTokens) {
   return (inputTokens * rates.input + outputTokens * rates.output) / 1_000_000;
 }
 
+// Rate-limit llm_log write-failure logging (F6, field-report Defect 5). The
+// insert is best-effort and fire-and-forget (never stalls the caller); but when
+// the DB is wedged EVERY call's insert fails, and the old per-failure
+// console.error spammed the daemon log. Collapse: log at most once per window
+// with a suppressed-since count.
+const WRITE_FAIL_WINDOW_MS = 60_000;
+let lastWriteFailLog = 0;
+let suppressedWriteFails = 0;
+
+function noteWriteFailure(msg) {
+  suppressedWriteFails += 1;
+  const now = Date.now();
+  if (now - lastWriteFailLog < WRITE_FAIL_WINDOW_MS) return; // within window — stay quiet
+  const extra = suppressedWriteFails > 1 ? ` (${suppressedWriteFails} failures in the last minute)` : '';
+  console.error(`[llm-log] write failed${extra}: ${msg}`);
+  lastWriteFailLog = now;
+  suppressedWriteFails = 0;
+}
+
 function logCall({ provider, model, caller, input, response, inputTokens, outputTokens, cost, durationMs, status, error }) {
   cortexDb('llm_log')
     .insert({
@@ -36,7 +55,7 @@ function logCall({ provider, model, caller, input, response, inputTokens, output
       status,
       error: error?.slice(0, 2000),
     })
-    .catch((err) => console.error('[llm-log] Write failed:', err.message));
+    .catch((err) => noteWriteFailure(err.message));
 }
 
 // Extract an HTTP status from a provider error. Providers throw structured

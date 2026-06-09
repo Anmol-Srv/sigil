@@ -703,10 +703,14 @@ validation + `listX()`).
   starts across concurrent callers, with stale-steal; (3) a shared hook circuit breaker —
   user-prompt-submit / stop / session-end trip a short cooldown and degrade fast (skip inject /
   spool / let the maintain sweep close the pod) instead of re-hammering a stuck daemon. Unit-tested.
-- 🔨 **F6 (Defect 5) Bounded, deduped logging.** Collapse repeated hook errors (count + window); cap
-  `.hook-errors.log` size. Make `llm_log` writes best-effort + rate-limited (never spam/stall the main
-  path). Reset the unacked counter on a clean `doctor` / explicit `--ack` (reflect "since last
-  healthy", not "ever").
+- ✅ **F6 DONE (Defect 5) Bounded, deduped logging.** `.hook-errors.log` collapses repeated identical
+  errors (same hook + message) into one `{error, count}` group at read time — doctor + the proactive
+  warning now show distinct ISSUES, not raw line volume (validated live: 77 lines / today's storm →
+  "3 unacked / 4 distinct", with the `fetch failed` burst shown as `×75`). The log is size-capped
+  (trim to newest 300 lines past 256 KB). `llm_log` write failures are rate-limited (≤1 log/min +
+  suppressed count) so a wedged DB can't spam the daemon log; the insert was already fire-and-forget.
+  Unacked counter is "since last clean doctor"; added `sigil doctor --ack` to acknowledge without a
+  full pass.
 - 🔨 **F7 (Defect 6) Honest diagnostics.** `SIGIL_PGLITE_DEBUG=1` to surface the real `PANIC`/`FATAL`
   behind `Aborted()`. doctor must distinguish "tables missing" from "0 docs" (a failing count reads as
   a failure). Fix the `.env` false-positive (a complete `config.json` is healthy — don't warn). Point
