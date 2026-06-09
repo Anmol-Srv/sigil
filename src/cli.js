@@ -566,10 +566,15 @@ running the checks — use when you've seen them and don't want a full pass.`);
 
   console.log('\nSigil diagnostic\n');
 
-  // Config location
+  // Config location. config.json is the source of truth (the legacy ~/.sigil/.env
+  // is migrated into it then renamed away), so a complete config.json is healthy
+  // and its ABSENT .env is NOT a problem (F7: kill the .env false-positive). Only
+  // warn when neither exists — that's a genuinely un-set-up install.
+  const { SIGIL_CONFIG_PATH } = await import('./lib/paths.js');
   const globalEnv = join(homedir(), '.sigil', '.env');
-  if (existsSync(globalEnv)) log('ok', 'Config file', globalEnv);
-  else log('warn', 'Config file', `${globalEnv} not found — run 'sigil init'`);
+  if (existsSync(SIGIL_CONFIG_PATH)) log('ok', 'Config file', SIGIL_CONFIG_PATH);
+  else if (existsSync(globalEnv)) log('ok', 'Config file', `${globalEnv} (legacy — migrates to config.json on next daemon start)`);
+  else log('warn', 'Config file', `no config.json — run 'sigil init'`);
 
   // Config validator — catches provider/model mismatches that would
   // otherwise produce silent hook failures. Runs synchronously first
@@ -619,13 +624,19 @@ running the checks — use when you've seen them and don't want a full pass.`);
           if (f + c === 0) log('ok', 'Embedding corpus', 'consistent');
           else log('warn', 'Embedding corpus', `${f} facts + ${c} chunks need re-embedding — run \`sigil repair embeddings\``);
         } catch { /* corpus check is best-effort */ }
+      } else if (status?.db?.schema === 'missing') {
+        // Honest diagnostics (F7): reachable but not migrated — distinct state
+        // and a distinct remedy. NOT "unreachable", NOT "restore a snapshot".
+        log('fail', 'Database', 'reachable but schema not initialized (no tables)');
+        log('warn', 'Recovery', 'run `sigil migrate` to create the tables (or complete setup in the GUI)');
       } else {
         const msg = (status?.db?.error || 'unknown').split('\n')[0];
         log('fail', 'Database', `unreachable — ${msg}`);
         log('warn', 'Recovery',
           config.db.url
             ? 'verify SIGIL_DATABASE_URL is valid and the provider is reachable'
-            : 'built-in DB unreadable — run `sigil repair db` to restore from a snapshot (`sigil daemon logs` for detail)');
+            : 'built-in DB unreadable — run `sigil repair db` to restore from a snapshot'
+              + ' (for the underlying cause behind `Aborted()`, set SIGIL_PGLITE_DEBUG=1 and `sigil daemon restart`)');
       }
     } finally {
       if (client) await client.close().catch(() => {});
