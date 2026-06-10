@@ -36,6 +36,7 @@ import { registerDevice } from './device.js';
 import { registerTrace } from './trace.js';
 import { registerSetup } from './setup.js';
 import { registerRepair } from './repair.js';
+import { registerLlmLog } from './llm-log.js';
 
 export function registerAll(registry, { startedAt }) {
   registerPing(registry, { startedAt });
@@ -68,4 +69,5 @@ export function registerAll(registry, { startedAt }) {
   registerTrace(registry);
   registerSetup(registry);
   registerRepair(registry);
+  registerLlmLog(registry);
 }

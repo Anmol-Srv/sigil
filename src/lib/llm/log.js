@@ -1,4 +1,5 @@
 import cortexDb from '../../db/cortex.js';
+import config from '../../config.js';
 
 // Approximate cost per 1M tokens by model
 const COST_PER_M = {
@@ -40,22 +41,58 @@ function noteWriteFailure(msg) {
   suppressedWriteFails = 0;
 }
 
-function logCall({ provider, model, caller, input, response, inputTokens, outputTokens, cost, durationMs, status, error }) {
-  cortexDb('llm_log')
-    .insert({
-      provider,
-      model,
-      caller,
-      input: input?.slice(0, 10000),
-      response: response?.slice(0, 10000),
-      inputTokens,
-      outputTokens,
-      cost,
-      durationMs,
-      status,
-      error: error?.slice(0, 2000),
-    })
-    .catch((err) => noteWriteFailure(err.message));
+// Decide whether an llm_log write must route through the daemon (B6.8 /
+// field-report Defect 6 follow-up). The embedded engine is single-process: only
+// the daemon may open it, so a CLI/hook process (the stop-hook classifier, a
+// doctor probe) that writes directly hits the single-process guard and the row
+// is lost. Server Postgres is multi-connection, so any process writes directly.
+// Pure for testability.
+export function shouldRouteLlmLog(dbMode, isDaemonProcess) {
+  return dbMode === 'embedded' && !isDaemonProcess;
+}
+
+function routeThroughDaemon() {
+  let mode;
+  try { mode = config.db?.mode; } catch { /* config unreadable — write direct */ }
+  return shouldRouteLlmLog(mode, process.env.SIGIL_DAEMON_PROCESS === '1');
+}
+
+function buildRow({ provider, model, caller, input, response, inputTokens, outputTokens, cost, durationMs, status, error }) {
+  return {
+    provider,
+    model,
+    caller,
+    input: input?.slice(0, 10000),
+    response: response?.slice(0, 10000),
+    inputTokens,
+    outputTokens,
+    cost,
+    durationMs,
+    status,
+    error: error?.slice(0, 2000),
+  };
+}
+
+// Send the row to the daemon's llmLog RPC. Connects to the EXISTING daemon only
+// (never auto-spawns one just to log telemetry); if none is running the row is
+// dropped — it's best-effort cost tracking, never worth blocking or spawning for.
+async function routeLlmLogToDaemon(row) {
+  try {
+    const { openSocketClient } = await import('../../clients/socket-client.js');
+    const client = await openSocketClient({ timeoutMs: 3_000 });
+    try { await client.call('llmLog', row); } finally { await client.close().catch(() => {}); }
+  } catch (err) {
+    noteWriteFailure(err.message); // rate-limited; a down daemon shouldn't spam
+  }
+}
+
+function logCall(fields) {
+  const row = buildRow(fields);
+  if (routeThroughDaemon()) {
+    routeLlmLogToDaemon(row); // fire-and-forget; never awaited on the hot path
+    return;
+  }
+  cortexDb('llm_log').insert(row).catch((err) => noteWriteFailure(err.message));
 }
 
 // Extract an HTTP status from a provider error. Providers throw structured

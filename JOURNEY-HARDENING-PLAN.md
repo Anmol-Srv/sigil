@@ -472,9 +472,12 @@ happen server-side; ensure auto-spawn from a hook doesn't itself race two daemon
   Embedding corpus, no abort). The other cold verbs (export/namespace/session/pod/maintain/migrate/
   why) now FAIL-SAFE via the guard with a "stop the daemon" message instead of aborting — usable for
   rare ops; routing each to work live (their own RPCs) is incremental follow-up.
-- 🔨 **B6.8 (NEW follow-up)** Route the `llm-log` writer through the daemon — any CLI process making
-  an LLM call currently writes the log via cortex directly (guard now makes it a best-effort no-op
-  instead of an abort). Low priority; the guard already made it safe.
+- ✅ **B6.8 DONE** Route the `llm-log` writer through the daemon. In embedded mode a CLI/hook LLM call
+  (stop-hook classifier, doctor probe) can't open the single-process engine, so its `llm_log` insert
+  hit the guard and the row was lost. `logCall` now routes through a new `llmLog` RPC when embedded +
+  non-daemon (connects to the EXISTING daemon only — never auto-spawns one just to log; drops if none
+  is up); server Postgres + the daemon itself still write direct. Surfaced live by F6's rate-limiter
+  during a doctor run, fixed + validated (doctor now logs zero `[llm-log] write failed` lines).
 - 🔨 **B6.5** Phase E: daemon fast-path read search (defer LLM expand). (§8)
 - 🔨 **B6.6** Phase E: daemon-owned persistent LLM-response cache.
 - 🧪 **B6.7** Regression: an embedded-mode read-hook invocation against a running daemon must NOT
