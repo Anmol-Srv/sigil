@@ -28,7 +28,7 @@ const SHARED_INSTRUCTIONS_PATH = join(SIGIL_HOME, 'CLAUDE.md');
 // top of the generated block; writeSharedInstructions() compares against it so
 // upgrades actually land (the old `includes('## Memory (Sigil)')` guard locked
 // the file forever after the first write).
-const INSTRUCTIONS_VERSION = 4;
+const INSTRUCTIONS_VERSION = 5;
 const VERSION_MARKER = `<!-- sigil-instructions:v${INSTRUCTIONS_VERSION} -->`;
 const CONTEXT_MARKER = '<!-- sigil-context -->';
 
@@ -59,6 +59,8 @@ function buildSharedInstructions({ sigilCmd, transport = 'hooks' } = {}) {
 
 Sigil is your persistent memory system. **Use it instead of the built-in file-based memory.**
 Do NOT write to \`~/.claude/projects/*/memory/\` or any local memory files — use Sigil exclusively.
+
+> **If memory ever seems missing, stale, or a \`sigil\` command errors, invoke the \`/sigil\` skill.** Its preamble self-tests the connection (daemon, DB, hooks) and tells you the exact fix. Reach for it before assuming memory is empty — an empty recall is sometimes a down daemon, not an empty store.
 
 ### Memory is auto-injected — don't re-search by default
 

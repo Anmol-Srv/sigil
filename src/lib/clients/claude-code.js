@@ -1,11 +1,14 @@
 /**
  * Claude Code client integration.
  *
- * Installs three things into the user's ~/.claude/ directory:
- *   1. ~/.sigil/CLAUDE.md           — shared instructions (delegated to instructions.js)
- *   2. ~/.claude/CLAUDE.md          — adds one @import line pointing at (1)
- *   3. ~/.claude/settings.json      — merges 4 hook entries (UserPromptSubmit,
- *                                     PostToolUse, Stop, SessionEnd)
+ * Installs four things into the user's ~/.claude/ directory:
+ *   1. ~/.sigil/CLAUDE.md              — shared instructions (delegated to instructions.js)
+ *   2. ~/.claude/CLAUDE.md             — adds one @import line pointing at (1)
+ *   3. ~/.claude/settings.json         — merges 4 hook entries (UserPromptSubmit,
+ *                                        PostToolUse, Stop, SessionEnd)
+ *   4. ~/.claude/skills/sigil/SKILL.md — the `/sigil` skill: a preamble that
+ *                                        self-tests the live connection + guides
+ *                                        the user (delegated to skill.js)
  *
  * Each function is idempotent: re-running sigil init detects prior writes
  * and either skips or merges cleanly.
@@ -18,6 +21,7 @@ import { existsSync } from 'node:fs';
 import { safeWrite } from '../safe-write.js';
 import { detectInstalled } from './detect.js';
 import { writeSharedInstructions, SHARED_INSTRUCTIONS_PATH } from './instructions.js';
+import { writeSigilSkill, removeSigilSkill, SIGIL_SKILL_PATH } from './skill.js';
 import { HOOK_SHIM_PATH, writeLauncherShim } from './shim.js';
 
 const CLAUDE_HOME = join(homedir(), '.claude');
@@ -192,6 +196,13 @@ async function install({ dryRun = false } = {}) {
   const hooksResult = await mergeHooks({ dryRun });
   if (hooksResult) actions.push(hooksResult);
 
+  // The /sigil skill — a gstack-style preamble that self-tests the connection
+  // and guides the user. Claude-Code-only (skills are a Claude Code feature).
+  const skillResult = await writeSigilSkill({ dryRun });
+  if (skillResult) {
+    actions.push({ action: skillResult.action, path: skillResult.path, detail: `${skillResult.bytes ?? 0} bytes` });
+  }
+
   return { actions };
 }
 
@@ -264,6 +275,13 @@ async function verify({ deep = false } = {}) {
     }
   }
 
+  // The /sigil skill (preamble self-test + guidance). Less critical than hooks —
+  // memory still works without it — but a healthy install ships it, so flag its
+  // absence as drift `sigil init` will repair.
+  if (!existsSync(SIGIL_SKILL_PATH)) {
+    return { installed: false, reason: '/sigil skill missing — run `sigil init`' };
+  }
+
   // Deep: actually run the UserPromptSubmit hook with a synthetic payload and
   // confirm it returns cleanly — catches a hook that crashes at runtime even
   // though its file exists (bad config, MODULE_NOT_FOUND in a dep, etc.).
@@ -331,6 +349,10 @@ async function uninstall({ dryRun = false } = {}) {
       actions.push({ action: 'skip', path: CLAUDE_SETTINGS_PATH, detail: 'no sigil hooks to remove' });
     }
   }
+
+  // Remove the /sigil skill.
+  const skillRemoval = await removeSigilSkill({ dryRun });
+  if (skillRemoval) actions.push(skillRemoval);
 
   return { actions };
 }
