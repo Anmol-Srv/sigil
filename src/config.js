@@ -124,6 +124,28 @@ const config = {
 
     get maxRetries() { return Number(process.env.LLM_MAX_RETRIES) || 3; },
     get cliTimeout() { return Number(process.env.LLM_CLI_TIMEOUT) || 120000; },
+
+    // Managed-session engine (warm tmux workers; see src/lib/llm/session/).
+    // Opt-in in v1: a NEW subsystem, so default OFF — when disabled the
+    // managed-session provider transparently uses the one-shot claude-cli path,
+    // so nothing breaks. Enable to amortize agentic cold-start across many
+    // ingest calls. Only meaningful on a host with `tmux` and the `claude` CLI.
+    managedSession: {
+      get enabled() { return process.env.SIGIL_MANAGED_SESSION === 'true'; },
+      // Workers per source type. 1 = strictly serial per engine (matches the
+      // "one session per source type" model); raise to lift the serial-latency
+      // ceiling. Bounded RAM = poolSize × live agent processes per type.
+      get poolSize() { return Math.max(1, Number(process.env.SIGIL_MANAGED_POOL_SIZE) || 1); },
+      // Recycle a worker once it has processed ~this many tokens (the "context
+      // cap" / budget-window reset). Caps cross-task context bleed + memory creep.
+      get tokenBudget() { return Number(process.env.SIGIL_MANAGED_TOKEN_BUDGET) || 60000; },
+      // Dead-man timeout per task → one-shot fallback + recycle. Defaults to the
+      // same bound the one-shot CLI uses.
+      get taskTimeoutMs() { return Number(process.env.SIGIL_MANAGED_TASK_TIMEOUT) || Number(process.env.LLM_CLI_TIMEOUT) || 120000; },
+      // How often the daemon sweeps BUSY workers for a wedged interactive dialog
+      // (catches a stuck auth/trust prompt before its dead-man timeout fires).
+      get healthProbeMs() { return Number(process.env.SIGIL_MANAGED_HEALTH_PROBE_MS) || 15000; },
+    },
     // HTTP request timeout for network LLM providers/embedders (OpenAI,
     // OpenRouter, Voyage). Without it a hung connection blocks the daemon or a
     // hook indefinitely. 60s leaves headroom for large JSON completions while

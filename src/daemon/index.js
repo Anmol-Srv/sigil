@@ -145,6 +145,22 @@ export async function startDaemon({ foreground = false } = {}) {
     })();
   }
 
+  // Managed-session engine (warm tmux workers; opt-in via SIGIL_MANAGED_SESSION).
+  // Best-effort + non-blocking: any failure (no tmux, spawn error) just leaves
+  // LLM calls on the proven one-shot path. Skipped for lite-followers, whose LLM
+  // work runs on master. Started after the socket server is up so workers can
+  // call back over RPC immediately.
+  if (config.network.mode !== 'lite-follower') {
+    (async () => {
+      try {
+        const { initSessionManager } = await import('../lib/llm/session/index.js');
+        await initSessionManager({ config, log });
+      } catch (err) {
+        log(`managed-session init failed: ${err.message}`);
+      }
+    })();
+  }
+
   // Iroh: warm up the endpoint when network is enabled so the NodeID
   // is registered with relays + discoverable before the first pair
   // request arrives. Failure is non-fatal — solo mode keeps working.
@@ -257,6 +273,14 @@ export async function startDaemon({ foreground = false } = {}) {
     if (snapshotTimer) clearInterval(snapshotTimer);
     if (bootSnapshotTimer) clearTimeout(bootSnapshotTimer);
     try { rmSync(SIGIL_HEARTBEAT, { force: true }); } catch { /* ignore */ }
+    // Kill warm tmux workers + stop the health sweep before tearing down the
+    // socket, so no worker is left holding a half-open RPC connection.
+    try {
+      const { shutdownSessionManager } = await import('../lib/llm/session/index.js');
+      await shutdownSessionManager();
+    } catch (err) {
+      log(`managed-session shutdown failed: ${err.message}`);
+    }
     await socket.close();
     if (http) await http.close();
     if (netEnabled) {

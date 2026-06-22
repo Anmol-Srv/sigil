@@ -41,6 +41,9 @@ const ENTRIES = [
   { in: 'src/hooks/post-tool-use.js', out: 'hooks/post-tool-use.js', shebang: true },
   { in: 'src/hooks/stop.js', out: 'hooks/stop.js', shebang: true },
   { in: 'src/hooks/session-end.js', out: 'hooks/session-end.js', shebang: true },
+  // Managed-session worker MCP server — spawned by a warm worker via
+  // --mcp-config, so it must exist as a standalone runnable entry in dist/.
+  { in: 'src/mcp/worker-server.js', out: 'mcp/worker-server.js', shebang: true },
 ];
 
 async function run() {
@@ -48,6 +51,7 @@ async function run() {
   if (existsSync(DIST)) await rm(DIST, { recursive: true });
   await mkdir(DIST, { recursive: true });
   await mkdir(join(DIST, 'hooks'), { recursive: true });
+  await mkdir(join(DIST, 'mcp'), { recursive: true });
 
   console.log('Building Sigil bundles...\n');
 

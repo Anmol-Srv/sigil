@@ -10,7 +10,14 @@ const PROVIDERS = {
   openrouter: () => import('./providers/openrouter.js'),
   'claude-cli': () => import('./providers/claude-cli.js'),
   ollama: () => import('./providers/ollama.js'),
+  // Internal routing provider — selected by llm.js (not the init picker) when
+  // SIGIL_MANAGED_SESSION=true and the resolved provider is claude-cli. Excluded
+  // from listProvidersForSetup so it never appears in `sigil init`.
+  'managed-session': () => import('./providers/managed-session.js'),
 };
+
+// Providers that exist only as internal routing targets — never user-pickable.
+const INTERNAL_PROVIDERS = new Set(['managed-session']);
 
 const EMBEDDERS = {
   ollama: () => import('./embedders/ollama.js'),
@@ -152,15 +159,17 @@ function resetDetection() {
 // `{ chat, meta, setup }`; this list discovers it automatically.
 async function listProvidersForSetup() {
   const entries = await Promise.all(
-    Object.entries(PROVIDERS).map(async ([id, load]) => {
-      const mod = await load();
-      if (!mod.meta || typeof mod.setup !== 'function') {
-        throw new Error(
-          `Provider "${id}" is missing the init contract — expected exports: meta, setup`,
-        );
-      }
-      return { ...mod.meta, setup: mod.setup };
-    }),
+    Object.entries(PROVIDERS)
+      .filter(([id]) => !INTERNAL_PROVIDERS.has(id))
+      .map(async ([id, load]) => {
+        const mod = await load();
+        if (!mod.meta || typeof mod.setup !== 'function') {
+          throw new Error(
+            `Provider "${id}" is missing the init contract — expected exports: meta, setup`,
+          );
+        }
+        return { ...mod.meta, setup: mod.setup };
+      }),
   );
   return entries;
 }

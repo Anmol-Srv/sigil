@@ -17,7 +17,7 @@ import { estimateTokens } from '../log.js';
  * fall back to the bare name so a PATH that *does* contain it still works.
  */
 let resolvedClaudePath = null;
-function resolveClaudeBin() {
+export function resolveClaudeBin() {
   if (resolvedClaudePath) return resolvedClaudePath;
   if (config.llm.cliPath) return (resolvedClaudePath = config.llm.cliPath);
   const home = homedir();

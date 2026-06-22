@@ -122,6 +122,34 @@ else
   exit 0
 fi
 
+# ── 3b. optional: tmux for the managed-session engine ─────────────────────────
+# Sigil's managed-session engine (SIGIL_MANAGED_SESSION=true) keeps a warm
+# `claude`/`codex` worker alive inside tmux to avoid re-paying agentic cold-start
+# per LLM call. tmux is OPTIONAL: without it the engine silently uses the
+# one-shot path. Best-effort install on macOS/Linux; never fatal. (Native
+# Windows has no tmux — the engine falls back there by design.)
+ensure_tmux() {
+  have tmux && return 0
+  say "Installing tmux (optional — powers the warm managed-session engine)..."
+  case "$OS" in
+    Darwin) have brew && brew install tmux >/dev/null 2>&1 ;;
+    Linux)
+      if   have apt-get; then sudo apt-get install -y tmux >/dev/null 2>&1
+      elif have dnf;     then sudo dnf install -y tmux     >/dev/null 2>&1
+      elif have yum;     then sudo yum install -y tmux     >/dev/null 2>&1
+      elif have pacman;  then sudo pacman -S --noconfirm tmux >/dev/null 2>&1
+      elif have apk;     then sudo apk add tmux            >/dev/null 2>&1
+      fi ;;
+  esac
+  if have tmux; then
+    step "tmux ready: $(command -v tmux)"
+  else
+    warn "tmux not installed — the managed-session engine will use the one-shot path."
+    warn "To enable it later: install tmux, then set SIGIL_MANAGED_SESSION=true."
+  fi
+}
+ensure_tmux
+
 # ── 4. hand off to the SHARED Node first-run flow ─────────────────────────────
 # Zero-arg `sigil` opens the browser dashboard (the marketed experience) and
 # auto-falls back to the terminal `sigil init` wizard when headless — both drive
