@@ -34,3 +34,6 @@ test/reliability/.last-run.json
 
 # local benchmarking lane — untracked (downloaded datasets + per-run output)
 benchmarks/
+
+# generated demo/marketing output (brag video + composition) — never committed
+brag-output/
