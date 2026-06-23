@@ -38,12 +38,22 @@ import { estimateTokens } from '../log.js';
 
 const DEFAULTS = {
   poolSize: 1,
-  tokenBudget: 60_000,     // recycle a worker once it has processed ~this many tokens
-  taskTimeoutMs: 120_000,  // dead-man timeout per task → fallback + recycle
+  tokenBudget: 60_000,        // recycle a worker once it has processed ~this many tokens
+  taskTimeoutMs: 120_000,     // dead-man timeout per task → fallback + recycle
+  firstTaskTimeoutMs: 10_000, // boot handshake window: re-nudge once, then recycle
+  maxBootFailures: 3,         // consecutive boot failures before yielding to one-shot
 };
 
 // Worker lifecycle states. Recycle is only ever entered from READY (never
 // mid-BUSY), so a token-budget trip can't kill a worker with a live task.
+//
+// ── Boot handshake ──────────────────────────────────────────────────────────
+//   spawnWorker ── tmux launch + warm-up nudge ──▶ BOOTING (NOT dispatchable)
+//        │  boot timer (firstTaskTimeoutMs): silent? re-nudge once, then recycle
+//        ▼  worker's FIRST get_task() lands  ── proof the pane is live ──
+//   READY ──▶ dispatch real work. We never nudge a task into a pane that has
+//   not finished booting (finding-1 fix: a lost cold-boot nudge no longer costs
+//   a full dead-man timeout — it costs one ~10s boot retry).
 const STATE = { BOOTING: 'booting', READY: 'ready', BUSY: 'busy', UNHEALTHY: 'unhealthy' };
 
 export class SessionManager {
@@ -69,6 +79,8 @@ export class SessionManager {
     this.pools = { ...(deps.pools || {}) };
     this.tokenBudget = deps.tokenBudget ?? DEFAULTS.tokenBudget;
     this.taskTimeoutMs = deps.taskTimeoutMs ?? DEFAULTS.taskTimeoutMs;
+    this.firstTaskTimeoutMs = deps.firstTaskTimeoutMs ?? DEFAULTS.firstTaskTimeoutMs;
+    this.maxBootFailures = deps.maxBootFailures ?? DEFAULTS.maxBootFailures;
     this.timers = deps.timers || {
       set: (ms, cb) => setTimeout(cb, ms),
       clear: (h) => clearTimeout(h),
@@ -78,10 +90,11 @@ export class SessionManager {
     this.writeFileFn = deps.writeFileFn || writeFile;
     this.mkdirFn = deps.mkdirFn || mkdir;
 
-    this.workers = new Map();   // workerId → worker
-    this.queues = new Map();    // sourceType → [task]
-    this.pending = new Map();   // reqId → pending
-    this.seq = 0;               // monotonic worker-id counter
+    this.workers = new Map();      // workerId → worker
+    this.queues = new Map();       // sourceType → [task]
+    this.pending = new Map();      // reqId → pending
+    this.bootFailures = new Map(); // sourceType → consecutive boot-failure count
+    this.seq = 0;                  // monotonic worker-id counter
     this.started = false;
   }
 
@@ -104,6 +117,7 @@ export class SessionManager {
   async stop() {
     this.started = false;
     for (const w of this.workers.values()) {
+      if (w.bootTimer) { this.timers.clear(w.bootTimer); w.bootTimer = null; }
       const driver = this.safeDriver(w.sourceType);
       const name = driver ? driver.sessionName(w.id) : `sigil-${w.id}`;
       await this.tmux.killSession(name);
@@ -165,9 +179,24 @@ export class SessionManager {
 
   // ── Worker-facing API (called by the worker MCP tools via daemon RPC) ───────
 
-  /** The worker pulls its assigned task. Empty when it has none (idle nudge). */
+  /**
+   * The worker pulls its assigned task. Empty when it has none (idle nudge).
+   *
+   * This call doubles as the BOOT HANDSHAKE: the very first get_task from a
+   * BOOTING worker is proof its pane is live, so we flip it READY, cancel the
+   * boot timer, reset the source type's boot-failure streak, and dispatch any
+   * queued work to it now (which may set currentReqId before we return below —
+   * so a freshly-booted worker can get real work on this very poll).
+   */
   getTask(workerId) {
     const w = this.workers.get(workerId);
+    if (w && w.state === STATE.BOOTING) {
+      if (w.bootTimer) { this.timers.clear(w.bootTimer); w.bootTimer = null; }
+      w.state = STATE.READY;
+      this.bootFailures.set(w.sourceType, 0);
+      this.log(`worker ${w.id} booted (get_task handshake) — ready`);
+      this.dispatch(w.sourceType);
+    }
     if (!w || !w.currentReqId) return { empty: true };
     const p = this.pending.get(w.currentReqId);
     if (!p || p.settled) return { empty: true };
@@ -301,11 +330,11 @@ export class SessionManager {
     }
   }
 
-  /** Spawn one warm worker for a source type. */
+  /** Spawn one warm worker for a source type. Stays BOOTING until it handshakes. */
   async spawnWorker(sourceType) {
     const driver = this.getDriver(sourceType);
     const id = `${sourceType}-${this.seq++}`;
-    const worker = { id, sourceType, state: STATE.BOOTING, currentReqId: null, tokensUsed: 0 };
+    const worker = { id, sourceType, state: STATE.BOOTING, currentReqId: null, tokensUsed: 0, bootTimer: null, bootRetried: false };
     this.workers.set(id, worker);
 
     const model = this.pools[`${sourceType}:model`] || undefined;
@@ -317,12 +346,62 @@ export class SessionManager {
     }
     await this.tmux.newSession(driver.sessionName(id), argv);
 
-    // v1: no init handshake (interactive claude emits no parseable ready line).
-    // The dead-man timeout + health sweep cover a slow/broken boot; treat the
-    // session as READY once tmux has launched it.
-    worker.state = STATE.READY;
-    this.dispatch(sourceType);
+    // Boot handshake: nudge once so a cold `claude` boots and calls get_task,
+    // and arm a short boot timer. We do NOT mark READY or dispatch here — the
+    // worker proves its pane is live by calling get_task (see getTask). If the
+    // boot nudge was swallowed by a still-booting pane, onBootDeadline re-nudges
+    // once before giving up, so a lost cold-boot keystroke costs ~one boot
+    // window, never a full dead-man timeout.
+    worker.bootTimer = this.timers.set(this.firstTaskTimeoutMs, () => this.onBootDeadline(id));
+    Promise.resolve(driver.nudge(this.tmux, driver.sessionName(id)))
+      .catch((err) => { this.log(`boot nudge ${id} failed: ${err.message}`); this.onBootDeadline(id); });
     return worker;
+  }
+
+  /**
+   * Boot timer fired: the worker has not called get_task yet. Re-nudge once (the
+   * boot keystroke was likely swallowed by a still-booting pane), then on a
+   * second miss give up on this worker and recycle it.
+   */
+  async onBootDeadline(workerId) {
+    const w = this.workers.get(workerId);
+    if (!w || w.state !== STATE.BOOTING) return; // booted (or gone) in the meantime
+    if (w.bootTimer) { this.timers.clear(w.bootTimer); w.bootTimer = null; }
+
+    if (!w.bootRetried) {
+      w.bootRetried = true;
+      this.log(`worker ${w.id} silent after ${this.firstTaskTimeoutMs}ms — re-nudging once`);
+      const driver = this.safeDriver(w.sourceType);
+      if (driver) {
+        Promise.resolve(driver.nudge(this.tmux, driver.sessionName(w.id))).catch(() => {});
+      }
+      w.bootTimer = this.timers.set(this.firstTaskTimeoutMs, () => this.onBootDeadline(workerId));
+      return;
+    }
+    this.log(`worker ${w.id} failed to boot — recycling`);
+    await this.recycleBoot(w);
+  }
+
+  /**
+   * Recycle a worker that never booted, with a circuit breaker: after
+   * maxBootFailures consecutive boot failures for a source type, STOP
+   * respawning so a broken `claude` can't become a tight respawn storm. With no
+   * worker left, submit() sees hasWorkers()===false and uses the one-shot path —
+   * the engine yields cleanly to the proven fallback instead of thrashing.
+   */
+  async recycleBoot(w) {
+    const driver = this.safeDriver(w.sourceType);
+    if (driver) await this.tmux.killSession(driver.sessionName(w.id));
+    this.workers.delete(w.id);
+
+    const fails = (this.bootFailures.get(w.sourceType) || 0) + 1;
+    this.bootFailures.set(w.sourceType, fails);
+
+    if (this.started && fails < this.maxBootFailures) {
+      await this.spawnWorker(w.sourceType).catch((e) => this.log(`respawn ${w.sourceType} failed: ${e.message}`));
+    } else if (fails >= this.maxBootFailures) {
+      this.log(`managed-session: ${w.sourceType} worker failed to boot ${fails}× — staying on one-shot for this source type`);
+    }
   }
 
   /** Run the fallback and wrap into the uniform result shape (no pending entry). */

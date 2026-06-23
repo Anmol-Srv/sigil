@@ -61,6 +61,8 @@ function makeManager(overrides = {}) {
     fallback,
     pools: overrides.pools || { claude: 1 },
     tokenBudget: overrides.tokenBudget ?? 60_000,
+    firstTaskTimeoutMs: overrides.firstTaskTimeoutMs ?? 10_000,
+    maxBootFailures: overrides.maxBootFailures ?? 3,
     timers,
     writeFileFn: async () => {},
     mkdirFn: async () => {},
@@ -197,16 +199,21 @@ describe('SessionManager — recycle + health', () => {
 
 describe('SessionManager — pool + boot', () => {
   it('dispatches concurrent tasks across a pool of N workers', async () => {
-    const { mgr, driver } = makeManager({ pools: { claude: 2 } });
+    const { mgr } = makeManager({ pools: { claude: 2 } });
     await mgr.start();
     expect(mgr.stats().workers).toHaveLength(2);
+    const ids = mgr.stats().workers.map((w) => w.id);
+
+    // Workers boot (handshake) shortly after daemon start, BEFORE ingest tasks
+    // arrive — their first get_task readies them.
+    for (const id of ids) expect(mgr.getTask(id)).toEqual({ empty: true });
+    expect(mgr.stats().workers.every((w) => w.state === 'ready')).toBe(true);
 
     const p1 = mgr.submit({ sourceType: 'claude', prompt: 'one' });
     const p2 = mgr.submit({ sourceType: 'claude', prompt: 'two' });
-    expect(driver.nudges).toHaveLength(2); // both workers busy at once
+    expect(mgr.stats().workers.filter((w) => w.state === 'busy')).toHaveLength(2); // both busy at once
 
-    // both workers are now BUSY; resolve each via its assigned worker
-    const ids = mgr.stats().workers.map((w) => w.id);
+    // each worker holds one task; resolve via its assigned worker
     for (const id of ids) {
       const t = mgr.getTask(id);
       if (!t.empty) mgr.submitResult(id, t.reqId, `r:${t.prompt}`);
@@ -222,9 +229,13 @@ describe('SessionManager — pool + boot', () => {
 
     const p1 = mgr.submit({ sourceType: 'claude', prompt: 'first' });
     const p2 = mgr.submit({ sourceType: 'claude', prompt: 'second' });
+
+    // The worker boots on its first get_task, which dispatches `first` to it and
+    // leaves `second` queued behind the now-busy worker.
+    const t1 = mgr.getTask(wid);
+    expect(t1.prompt).toBe('first');
     expect(mgr.stats().queued.claude).toBe(1); // second waits
 
-    const t1 = mgr.getTask(wid);
     mgr.submitResult(wid, t1.reqId, 'r1');
     await p1;
     // releasing the worker dispatches the queued task to the same worker
@@ -241,5 +252,71 @@ describe('SessionManager — pool + boot', () => {
     await mgr.start();
     expect(tmux.killed).toContain('sigil-stale-9');
     expect(tmux.killed).not.toContain('my-editor');
+  });
+});
+
+describe('SessionManager — boot handshake (finding-1 fix)', () => {
+  it('starts a worker BOOTING and does not dispatch real work until its first get_task', async () => {
+    const { mgr, driver } = makeManager();
+    await mgr.start();
+    const wid = mgr.stats().workers[0].id;
+
+    // Booting: a warm-up nudge was sent, but the worker is NOT dispatchable yet.
+    expect(mgr.stats().workers[0].state).toBe('booting');
+    expect(driver.nudges).toEqual([`sigil-${wid}`]); // the boot nudge only
+
+    // A task submitted now just queues — we never nudge it into a cold pane.
+    mgr.submit({ sourceType: 'claude', prompt: 'extract' });
+    expect(mgr.stats().queued.claude).toBe(1);
+    expect(mgr.stats().workers[0].state).toBe('booting');
+
+    // The handshake: the worker's first get_task flips it READY and the queued
+    // task is dispatched on this very poll.
+    const t = mgr.getTask(wid);
+    expect(t.prompt).toBe('extract');
+    expect(mgr.stats().workers[0].state).toBe('busy');
+  });
+
+  it('re-nudges once when the boot keystroke is swallowed, then recovers on get_task', async () => {
+    const { mgr, driver, timers, tmux } = makeManager();
+    await mgr.start();
+    const wid = mgr.stats().workers[0].id;
+    expect(driver.nudges).toHaveLength(1); // boot nudge
+
+    await timers.fireLast(); // boot timer fires: worker still silent → re-nudge once
+    expect(driver.nudges).toHaveLength(2);     // re-nudged
+    expect(tmux.killed).toHaveLength(0);       // not recycled yet
+    expect(mgr.stats().workers[0].state).toBe('booting');
+
+    // The re-nudge lands: the worker handshakes and is usable.
+    expect(mgr.getTask(wid)).toEqual({ empty: true });
+    expect(mgr.stats().workers[0].state).toBe('ready');
+  });
+
+  it('recycles a worker that never boots after one retry', async () => {
+    const { mgr, tmux, timers } = makeManager();
+    await mgr.start();
+    const wid0 = mgr.stats().workers[0].id;
+
+    await timers.fireLast(); // 1st boot deadline → re-nudge
+    await timers.fireLast(); // 2nd boot deadline → give up + recycle
+
+    expect(tmux.killed).toContain(`sigil-${wid0}`);
+    const ids = mgr.stats().workers.map((w) => w.id);
+    expect(ids).not.toContain(wid0);
+    expect(ids).toHaveLength(1); // a fresh worker respawned
+  });
+
+  it('stops respawning after maxBootFailures, yielding to the one-shot path', async () => {
+    const { mgr, timers, fallbackCalls } = makeManager({ maxBootFailures: 1 });
+    await mgr.start();
+
+    await timers.fireLast(); // re-nudge
+    await timers.fireLast(); // give up → recycleBoot: fails=1, not < 1 → no respawn
+
+    expect(mgr.hasWorkers('claude')).toBe(false); // pool yielded
+    const r = await mgr.submit({ sourceType: 'claude', prompt: 'x' });
+    expect(r.viaFallback).toBe(true); // one-shot path
+    expect(fallbackCalls).toHaveLength(1);
   });
 });

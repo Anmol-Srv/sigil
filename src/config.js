@@ -124,6 +124,15 @@ const config = {
 
     get maxRetries() { return Number(process.env.LLM_MAX_RETRIES) || 3; },
     get cliTimeout() { return Number(process.env.LLM_CLI_TIMEOUT) || 120000; },
+    // Hard ceiling on CONCURRENT `claude` CLI processes spawned by THIS process.
+    // The blowup this caps: a user once hit 1600+ live `claude` sessions when an
+    // ingest fan-out (and fallback storms) spawned one process per call with no
+    // bound — pinning RAM/tokens. Every `claude` spawn (one-shot path, managed-
+    // session fallback, hook classify) routes through one semaphore, so excess
+    // calls QUEUE instead of forking. Per-process: the daemon is the process that
+    // fans out, so its singleton gate is what matters; short-lived hooks spawn ≤1
+    // anyway. Default 4 keeps throughput while making the 1600 case impossible.
+    get maxClaudeProcs() { return Math.max(1, Number(process.env.SIGIL_MAX_CLAUDE_PROCS) || 4); },
 
     // Managed-session engine (warm tmux workers; see src/lib/llm/session/).
     // Opt-in in v1: a NEW subsystem, so default OFF — when disabled the
@@ -142,6 +151,10 @@ const config = {
       // Dead-man timeout per task → one-shot fallback + recycle. Defaults to the
       // same bound the one-shot CLI uses.
       get taskTimeoutMs() { return Number(process.env.SIGIL_MANAGED_TASK_TIMEOUT) || Number(process.env.LLM_CLI_TIMEOUT) || 120000; },
+      // Boot handshake window: how long to wait for a freshly-spawned worker's
+      // first get_task before re-nudging once, then recycling. Keeps a lost
+      // cold-boot keystroke to a short retry instead of a full dead-man timeout.
+      get firstTaskTimeoutMs() { return Number(process.env.SIGIL_MANAGED_FIRST_TASK_TIMEOUT) || 10000; },
       // How often the daemon sweeps BUSY workers for a wedged interactive dialog
       // (catches a stuck auth/trust prompt before its dead-man timeout fires).
       get healthProbeMs() { return Number(process.env.SIGIL_MANAGED_HEALTH_PROBE_MS) || 15000; },

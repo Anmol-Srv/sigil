@@ -37,6 +37,22 @@ const CLI_MODEL_MAP = {
 // a captured pane.
 const NUDGE = 'SIGIL_NEXT';
 
+// Built-in slash command that resets the conversation context but keeps the
+// process warm. We send it BEFORE each task so a worker never carries entities,
+// facts, or state from a previous task into the next — HARD per-task isolation,
+// not just the soft "ignore prior tasks" instruction in the system prompt.
+// Safe under `claude --bare`: --bare is minimal mode (skip hooks/LSP/plugins);
+// it does NOT disable slash commands (that needs --disable-slash-commands, which
+// we never pass), and /clear is a built-in. The --append-system-prompt prime
+// survives /clear, so the worker keeps its protocol across the reset.
+const CLEAR = '/clear';
+
+/** Whether to /clear between tasks. Escape hatch if /clear ever misbehaves in a
+ *  given claude build: SIGIL_MANAGED_CLEAR=false reverts to prompt-ordering only. */
+function clearBetweenTasks() {
+  return process.env.SIGIL_MANAGED_CLEAR !== 'false';
+}
+
 // Pane signatures that mean the worker is blocked on an interactive prompt and
 // will NEVER call back on its own. Hitting any of these = recycle now.
 const BLOCKING_PATTERNS = [
@@ -52,9 +68,9 @@ const BLOCKING_PATTERNS = [
 ];
 
 // Standing instruction. Lives in --append-system-prompt (NOT a chat message) so
-// it survives any context reset and can never be de-primed. Orders strict
-// per-task independence — the one mitigation for the cross-task contamination we
-// accept by recycling on a token budget rather than clearing per task.
+// it survives any context reset (incl. the /clear we send between tasks) and can
+// never be de-primed. Orders strict per-task independence as defense-in-depth on
+// top of the hard /clear reset — belt and suspenders against cross-task bleed.
 const SYSTEM_PROMPT = [
   "You are Sigil's headless worker. You run inside a long-lived session and",
   'process a stream of INDEPENDENT tasks (fact extraction, classification, JSON',
@@ -131,8 +147,15 @@ export const claudeDriver = {
     };
   },
 
-  /** Trigger one task. The worker pulls + submits over MCP after this lands. */
+  /**
+   * Trigger one task. We first /clear the worker's context (hard per-task
+   * isolation — no entity/state bleed from the previous task), then send the
+   * nudge so the worker pulls + submits the next task over MCP. /clear is a
+   * client-side reset (no inference, negligible cost) and the appended system
+   * prompt survives it, so the worker keeps its protocol.
+   */
   async nudge(tmux, name) {
+    if (clearBetweenTasks()) await tmux.sendKeys(name, CLEAR);
     await tmux.sendKeys(name, NUDGE);
   },
 
@@ -146,4 +169,4 @@ export const claudeDriver = {
   },
 };
 
-export { NUDGE, SYSTEM_PROMPT, BLOCKING_PATTERNS, CLI_MODEL_MAP };
+export { NUDGE, CLEAR, SYSTEM_PROMPT, BLOCKING_PATTERNS, CLI_MODEL_MAP };

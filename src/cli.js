@@ -1802,6 +1802,19 @@ Usage:
     console.log(`  Entities:   ${data.entities.documents} documents, ${data.entities.people} people, ${data.entities.topics} topics`);
     console.log(`  Relations:  ${data.relations}`);
     console.log(`  Pods:       ${podSummary}`);
+    // Live agent-process gauges. The Claude-procs line is the hard cap that
+    // prevents the 1600-session blowup — show it whenever the daemon reports it.
+    if (data.claudeProcs) {
+      const { active, waiting, limit } = data.claudeProcs;
+      console.log(`  Claude procs: ${active}/${limit} active${waiting ? `, ${waiting} queued` : ''}`);
+    }
+    if (data.managedSession?.enabled) {
+      const ms = data.managedSession;
+      const byState = (ms.workers || []).reduce((a, w) => { a[w.state] = (a[w.state] || 0) + 1; return a; }, {});
+      const stateSummary = Object.entries(byState).map(([s, n]) => `${n} ${s}`).join(', ') || 'none';
+      const queued = Object.values(ms.queued || {}).reduce((a, n) => a + n, 0);
+      console.log(`  Managed session: ${(ms.workers || []).length} workers (${stateSummary}), ${queued} queued, ${ms.pending} pending`);
+    }
     if (data.hebbian) {
       const avg = data.hebbian.avgStrength ? data.hebbian.avgStrength.toFixed(2) : '0';
       const max = data.hebbian.maxStrength ? data.hebbian.maxStrength.toFixed(2) : '0';

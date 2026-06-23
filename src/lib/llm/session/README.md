@@ -46,6 +46,11 @@ never parse a flaky TUI pane.
 
 - **Correlation** — every task carries a `reqId`; `submit_result` echoes it.
 - **Idempotent** — a duplicate/late `submit_result` is ignored (resolve-once).
+- **Boot handshake** — a freshly-spawned worker stays `BOOTING` until its first
+  `get_task` proves the pane is live; real work is never nudged into a still-
+  booting pane. A lost cold-boot keystroke costs one ~10s re-nudge, not a full
+  dead-man timeout. After `maxBootFailures` consecutive boot failures the pool
+  yields to the one-shot path instead of thrashing.
 - **Dead-man timeout** — a worker that never calls back (wedged auth/trust
   dialog, crash, or a forgotten tool call) has its task completed via the
   one-shot fallback and the worker recycled. The engine can never be worse than
@@ -53,9 +58,16 @@ never parse a flaky TUI pane.
 - **Active health sweep** — `probeHealth()` scans BUSY workers for a blocking
   dialog and recycles them *before* the dead-man timeout, killing the silent-
   stall window.
-- **Bounded context bleed** — workers recycle on a token budget; the driver
-  system prompt orders strict per-task independence.
-- **Bounded RAM** — at most `poolSize` live processes per source type.
+- **Hard per-task isolation** — the driver sends `/clear` before each task, so a
+  worker carries no entities/state from the previous task (the system-prompt
+  independence order is defense-in-depth on top). Token-budget recycle remains
+  as a RAM backstop. Disable the reset with `SIGIL_MANAGED_CLEAR=false`.
+- **Bounded process count** — two layers: at most `poolSize` warm workers per
+  source type, AND a process-wide semaphore (`SIGIL_MAX_CLAUDE_PROCS`) that caps
+  *every* `claude` spawn — warm fallback, default one-shot, and hook classify
+  alike. This is the hard fix for the 1600-concurrent-session blowup: excess
+  calls queue instead of forking, whether the managed engine is on, off, or
+  degraded. Live gauge: `sigil status` → `Claude procs: active/limit`.
 
 ## Files
 
@@ -74,11 +86,14 @@ never parse a flaky TUI pane.
 
 | Env var | Default | Meaning |
 |---------|---------|---------|
-| `SIGIL_MANAGED_SESSION` | `false` | Master switch. |
+| `SIGIL_MANAGED_SESSION` | `false` | Master switch (warm-worker engine). |
 | `SIGIL_MANAGED_POOL_SIZE` | `1` | Workers per source type (concurrency). |
-| `SIGIL_MANAGED_TOKEN_BUDGET` | `60000` | Recycle a worker after ~this many tokens. |
+| `SIGIL_MANAGED_TOKEN_BUDGET` | `60000` | Recycle a worker after ~this many tokens (RAM backstop). |
 | `SIGIL_MANAGED_TASK_TIMEOUT` | `LLM_CLI_TIMEOUT` (120000) | Dead-man timeout per task. |
+| `SIGIL_MANAGED_FIRST_TASK_TIMEOUT` | `10000` | Boot-handshake window: re-nudge once, then recycle. |
 | `SIGIL_MANAGED_HEALTH_PROBE_MS` | `15000` | Health-sweep interval. |
+| `SIGIL_MANAGED_CLEAR` | `true` | `/clear` between tasks for hard isolation. Set `false` to disable. |
+| `SIGIL_MAX_CLAUDE_PROCS` | `4` | **Global** hard cap on concurrent `claude` spawns (applies even when the engine is OFF). |
 
 ## Adding a driver (codex / opencode / hermes)
 

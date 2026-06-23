@@ -84,6 +84,7 @@ export async function initSessionManager({ config, log = () => {} } = {}) {
     workerServer,
     tokenBudget: ms.tokenBudget,
     taskTimeoutMs: ms.taskTimeoutMs,
+    firstTaskTimeoutMs: ms.firstTaskTimeoutMs,
     log,
   });
 

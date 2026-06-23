@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 
 import config from '../../../config.js';
 import { estimateTokens } from '../log.js';
+import { createSemaphore } from '../concurrency-gate.js';
 
 /**
  * Resolve the `claude` binary to an absolute path.
@@ -59,7 +60,27 @@ const CLI_MODEL_MAP = {
   'claude-opus-4-6': 'opus',
 };
 
+// Process-wide hard cap on CONCURRENT `claude` spawns. EVERY spawn path funnels
+// through this one gate — the one-shot provider below, the managed-session
+// fallback (session/index.js → chat()), and the stop-hook classifier — so a
+// burst of calls QUEUES instead of forking 1600 processes. Limit is read live
+// from config, so SIGIL_MAX_CLAUDE_PROCS (and tests) take effect without a
+// restart. See concurrency-gate.js for the why.
+const claudeGate = createSemaphore(() => config.llm.maxClaudeProcs);
+
+/** Live gauge of the claude-spawn gate (for `sigil status` / diagnostics). */
+export function claudeProcStats() {
+  return { active: claudeGate.active, waiting: claudeGate.waiting, limit: claudeGate.limit };
+}
+
+/** Spawn one `claude` process, bounded by the concurrency gate. */
 function spawnClaude(args, input) {
+  // Acquire a slot FIRST; the per-process timeout below starts only after a slot
+  // is free, so a task waiting in the queue never burns its own dead-man clock.
+  return claudeGate.run(() => rawSpawnClaude(args, input));
+}
+
+function rawSpawnClaude(args, input) {
   const timeout = config.llm.cliTimeout || 120_000;
 
   const bin = resolveClaudeBin();
@@ -96,6 +117,12 @@ function spawnClaude(args, input) {
       resolve({ stdout, stderr, code });
     });
 
+    // A child that exits before we finish writing (bad flags, instant failure,
+    // killed) makes stdin EPIPE. That error lands on the stdin stream, NOT on
+    // `proc`, so without this handler it surfaces as an unhandled rejection that
+    // can crash the daemon. Swallow it — `proc.on('close')` still delivers the
+    // real exit code, so chat() reports the genuine failure.
+    proc.stdin.on('error', () => {});
     proc.stdin.write(input);
     proc.stdin.end();
   });

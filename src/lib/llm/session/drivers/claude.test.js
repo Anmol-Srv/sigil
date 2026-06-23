@@ -6,7 +6,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 
 beforeAll(() => { process.env.LLM_CLI_PATH = '/usr/bin/true'; });
 
-const { claudeDriver, NUDGE, SYSTEM_PROMPT } = await import('./claude.js');
+const { claudeDriver, NUDGE, CLEAR, SYSTEM_PROMPT } = await import('./claude.js');
 
 describe('claudeDriver.buildLaunch', () => {
   const built = () => claudeDriver.buildLaunch({
@@ -53,11 +53,27 @@ describe('claudeDriver.buildLaunch', () => {
 });
 
 describe('claudeDriver.nudge', () => {
-  it('sends the trigger token into the pane', async () => {
+  const collectingTmux = (sent) => ({ sendKeys: async (name, text) => sent.push({ name, text }) });
+
+  it('/clears the context then sends the trigger (hard per-task isolation)', async () => {
+    const prev = process.env.SIGIL_MANAGED_CLEAR;
+    delete process.env.SIGIL_MANAGED_CLEAR; // default ON
     const sent = [];
-    const fakeTmux = { sendKeys: async (name, text) => sent.push({ name, text }) };
-    await claudeDriver.nudge(fakeTmux, 'sigil-claude-0');
+    await claudeDriver.nudge(collectingTmux(sent), 'sigil-claude-0');
+    expect(sent).toEqual([
+      { name: 'sigil-claude-0', text: CLEAR },
+      { name: 'sigil-claude-0', text: NUDGE },
+    ]);
+    if (prev === undefined) delete process.env.SIGIL_MANAGED_CLEAR; else process.env.SIGIL_MANAGED_CLEAR = prev;
+  });
+
+  it('SIGIL_MANAGED_CLEAR=false reverts to prompt-ordering only (no /clear)', async () => {
+    const prev = process.env.SIGIL_MANAGED_CLEAR;
+    process.env.SIGIL_MANAGED_CLEAR = 'false';
+    const sent = [];
+    await claudeDriver.nudge(collectingTmux(sent), 'sigil-claude-0');
     expect(sent).toEqual([{ name: 'sigil-claude-0', text: NUDGE }]);
+    if (prev === undefined) delete process.env.SIGIL_MANAGED_CLEAR; else process.env.SIGIL_MANAGED_CLEAR = prev;
   });
 });
 

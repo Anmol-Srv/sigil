@@ -49,11 +49,30 @@ export function registerStatus(registry) {
       providers = getProviderHealth();
     } catch { /* holder unavailable outside daemon */ }
 
+    // Live agent-process gauges — independent of DB health. `claudeProcs` is the
+    // global concurrency gate that caps live `claude` spawns (the hard fix for
+    // the 1600-session blowup): active/waiting/limit makes saturation visible
+    // instead of silent. `managedSession` is the warm-worker engine snapshot,
+    // present only when it is running in this daemon.
+    let claudeProcs = null;
+    let managedSession = null;
+    try {
+      const { claudeProcStats } = await import('../../lib/llm/providers/claude-cli.js');
+      claudeProcs = claudeProcStats();
+    } catch { /* provider unavailable */ }
+    try {
+      const { getSessionManager } = await import('../../lib/llm/session/index.js');
+      const mgr = getSessionManager();
+      managedSession = mgr ? { enabled: true, ...mgr.stats() } : { enabled: false };
+    } catch { /* holder unavailable outside daemon */ }
+
     if (!dbHealthy) {
       return {
         namespace,
         db: { healthy: false, error: dbError, schema: dbSchema },
         providers,
+        claudeProcs,
+        managedSession,
         documents: 0,
         chunks: 0,
         facts: 0,
@@ -86,6 +105,8 @@ export function registerStatus(registry) {
       namespace,
       db: { healthy: true, error: null, schema: 'ready' },
       providers,
+      claudeProcs,
+      managedSession,
       documents: docStats.documentCount,
       chunks: docStats.totalChunks,
       facts: factCount,
