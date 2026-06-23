@@ -28,7 +28,7 @@ const SIGIL_SKILL_PATH = join(CLAUDE_SKILL_DIR, 'SKILL.md');
 // Bump when the skill text changes in a way existing installs should pick up.
 // The marker sits right under the frontmatter; writeSigilSkill() compares
 // against it so re-running init actually re-writes an out-of-date skill.
-const SKILL_VERSION = 1;
+const SKILL_VERSION = 2;
 const SKILL_MARKER = `<!-- sigil-skill:v${SKILL_VERSION} -->`;
 
 /** Build the SKILL.md content. `sigilCmd` is the shim path the preamble calls. */
@@ -96,8 +96,17 @@ Map what the preamble printed to one action:
   unreachable Ollama, wrong model).
 - **All green** → memory is live. Proceed normally and use it (below).
 
-State the verdict in one line ("Sigil is live — N facts, DB healthy" or "Sigil is
-down: <reason> → <fix>"), don't dump the raw output unless something failed.
+### Before you report — self-check
+- [ ] Mapped every non-green line to a fix above (never report "healthy" while doctor shows a DOWN line).
+- [ ] Reporting the ONE-LINE verdict + the single next action — not pasting raw \`doctor\`/\`status\` output.
+- [ ] If down: named the specific cause AND the exact command, so the user can act without re-reading.
+
+State the verdict in one line, then stop. **The failure this prevents:** dumping 30 lines of
+\`doctor\` output and making the user diagnose it themselves.
+
+- GOOD: "Sigil is live — 214 facts, DB healthy, all 4 hooks wired. Auto-recall is on."
+- GOOD: "Sigil is down: daemon up but DB unreachable (Postgres refused on :5432). Fix: start Postgres, then \`sigil migrate\`."
+- BAD: "Here's the doctor output: [30 lines]. Looks like there might be some issues."
 
 ## Using Sigil once it's verified
 

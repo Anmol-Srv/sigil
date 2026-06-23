@@ -28,7 +28,7 @@ const SHARED_INSTRUCTIONS_PATH = join(SIGIL_HOME, 'CLAUDE.md');
 // top of the generated block; writeSharedInstructions() compares against it so
 // upgrades actually land (the old `includes('## Memory (Sigil)')` guard locked
 // the file forever after the first write).
-const INSTRUCTIONS_VERSION = 5;
+const INSTRUCTIONS_VERSION = 6;
 const VERSION_MARKER = `<!-- sigil-instructions:v${INSTRUCTIONS_VERSION} -->`;
 const CONTEXT_MARKER = '<!-- sigil-context -->';
 
@@ -57,19 +57,16 @@ function buildSharedInstructions({ sigilCmd, transport = 'hooks' } = {}) {
   return `${VERSION_MARKER}
 ## Memory (Sigil)
 
-Sigil is your persistent memory system. **Use it instead of the built-in file-based memory.**
-Do NOT write to \`~/.claude/projects/*/memory/\` or any local memory files — use Sigil exclusively.
+Sigil is your persistent, cross-project memory. **Use it instead of the built-in file-based memory** — never write to \`~/.claude/projects/*/memory/\`.
 
-> **If memory ever seems missing, stale, or a \`sigil\` command errors, invoke the \`/sigil\` skill.** Its preamble self-tests the connection (daemon, DB, hooks) and tells you the exact fix. Reach for it before assuming memory is empty — an empty recall is sometimes a down daemon, not an empty store.
+**IRON LAW: the recall already happened — read it before you reach for anything.** A UserPromptSubmit hook searched Sigil for this exact prompt and injected the top facts as a \`Sigil memory (N relevant facts)\` block at the top of the conversation; a Top-20 hot-context snapshot also rides in via \`@~/.sigil/CLAUDE.md\`. **The failure this prevents:** re-running \`sigil search\` on the user's own query burns a round-trip and re-fetches what is already in front of you.
 
-### Memory is auto-injected — don't re-search by default
+> If memory seems missing, stale, or a \`sigil\` command errors, invoke **\`/sigil\`** — its self-test tells daemon-down from empty-store apart and names the exact fix. An empty recall is sometimes a dead daemon, not an empty brain. Don't guess; run \`/sigil\`.
 
-Two hooks do the work for you before you ever see a prompt:
-
-- **UserPromptSubmit hook**: runs hybrid search against Sigil on every user message and injects the top-K relevant facts into your context as \`additionalContext\` at the top of the conversation. The injected block is labelled \`Sigil memory (N relevant facts)\` — when you see that block, those facts are already loaded; you do NOT need to call \`sigil search\` to retrieve them.
-- **Top-20 hot-context**: a snapshot of the user's most-important / most-recently-accessed facts is always loaded into the session via \`@~/.sigil/CLAUDE.md\` in the Claude config. Treat it as always-available background context.
-
-**The right reflex:** read the injected \`Sigil memory\` block first, answer from it, then call \`sigil search\` ONLY if the injection clearly missed something specific.
+### Before you answer — 15-second self-check
+- [ ] Read the injected \`Sigil memory\` block first; answer from it.
+- [ ] A stored fact shaped the answer? Name it in one clause so the user sees their context applied (examples below).
+- [ ] Something specific still missing from the block? THEN \`! ${cmd} search "..."\` to drill in — not before.
 
 Concretely, you SHOULD call \`! ${cmd} search "..."\` when:
 - The user asks a drill-down question and you need facts the auto-injection didn't surface ("tell me more about the postmortem")
