@@ -37,3 +37,7 @@ benchmarks/
 
 # generated demo/marketing output (brag video + composition) — never committed
 brag-output/
+
+# agent tooling state (gstack / skills) — local-only, not repo content
+.agents/
+skills-lock.json
