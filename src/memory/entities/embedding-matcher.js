@@ -2,6 +2,7 @@ import cortexDb from '../../db/cortex.js';
 import { prompt as llmPrompt } from '../../lib/llm.js';
 import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
+import { safeParseEntityTypes } from './store.js';
 
 const EMBEDDING_THRESHOLD = 0.85;
 
@@ -24,15 +25,7 @@ async function findEmbeddingMatch(name, embedding, { namespace, threshold = EMBE
     LIMIT ?
   `, [vec, namespace, name, vec, threshold, vec, limit]);
 
-  return rows.map((r) => {
-    let types;
-    try {
-      types = r.entityTypes ? JSON.parse(r.entityTypes) : [r.entityType];
-    } catch {
-      types = [r.entityType];
-    }
-    return { ...r, types };
-  });
+  return rows.map((r) => ({ ...r, types: safeParseEntityTypes(r) }));
 }
 
 // Returns { same: bool, rename: bool, reason: string }.

@@ -4,6 +4,17 @@ import cortexDb from '../../db/cortex.js';
 import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
 
+/**
+ * Parse an entity row's `entityTypes` JSON column into an array, falling back to
+ * the singular `entityType` when the column is absent or malformed.
+ */
+function safeParseEntityTypes(entity) {
+  if (entity.entityTypes) {
+    try { return JSON.parse(entity.entityTypes); } catch { /* fall through */ }
+  }
+  return [entity.entityType];
+}
+
 async function insertEntity({ name, entityType, description, namespace, externalId, embedding }) {
   const uid = `ent-${nanoid(16)}`;
 
@@ -139,12 +150,7 @@ async function updateEntityTypes(entityId, newType) {
   const entity = await findById(entityId);
   if (!entity) return;
 
-  let types;
-  try {
-    types = entity.entityTypes ? JSON.parse(entity.entityTypes) : [entity.entityType];
-  } catch {
-    types = [entity.entityType];
-  }
+  const types = safeParseEntityTypes(entity);
 
   if (!types.includes(newType)) {
     types.push(newType);
@@ -179,4 +185,5 @@ export {
   searchByName,
   pushAlias,
   updateName,
+  safeParseEntityTypes,
 };

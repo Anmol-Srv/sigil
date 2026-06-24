@@ -18,23 +18,15 @@
  */
 import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PKG_ROOT, MIGRATIONS_DIR } from '../lib/paths.js';
+import { getSigilVersion } from '../lib/version.js';
 import config from '../config.js';
 import { CHUNKER_PROFILE } from '../ingestion/chunker.js';
 
 export const MANIFEST_VERSION = 1;
-
-let cachedSigilVersion;
-function getSigilVersion() {
-  if (cachedSigilVersion) return cachedSigilVersion;
-  try {
-    cachedSigilVersion = JSON.parse(readFileSync(join(PKG_ROOT, 'package.json'), 'utf8')).version;
-  } catch { cachedSigilVersion = 'unknown'; }
-  return cachedSigilVersion;
-}
 
 export async function produceManifest() {
   const promptHashes = await hashPromptDir(join(PKG_ROOT, 'prompts'));

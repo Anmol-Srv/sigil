@@ -13,6 +13,7 @@
  */
 
 import { getActiveSessionPodUid } from '../active-session.js';
+import { parseAttrs } from '../attrs.js';
 
 export const POD_TYPE = 'claude_session';
 
@@ -90,10 +91,4 @@ export function formatForDisplay(pod) {
     memberFactCount: pod.memberFactCount,
     memberDocCount: pod.memberDocCount,
   };
-}
-
-function parseAttrs(attrs) {
-  if (!attrs) return {};
-  if (typeof attrs === 'object') return attrs;
-  try { return JSON.parse(attrs); } catch { return {}; }
 }

@@ -51,9 +51,8 @@ export async function apply(input, emit = () => {}) {
     if (err instanceof StepError) throw err;
     // Any failure here is a real config problem in an earlier step (DB/LLM/
     // embedding). Classify it honestly.
-    const { diagnoseError } = await import('../../db/setup.js');
-    const d = diagnoseError(err);
-    throw new StepError({ message: d.humanMessage, hint: d.fixHint, kind: d.kind });
+    const { fromError } = await import('../db/shared.js');
+    throw fromError(err);
   }
 }
 

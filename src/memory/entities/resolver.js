@@ -5,7 +5,7 @@ import { prompt as llmPrompt, parseJson } from '../../lib/llm.js';
 import config from '../../config.js';
 import {
   insertEntity, findByName, incrementMentionCount, updateEntityTypes,
-  getCanonicalEntity, pushAlias, updateName,
+  getCanonicalEntity, pushAlias, updateName, safeParseEntityTypes,
 } from './store.js';
 import { findEmbeddingMatch, verifyEmbeddingMatch } from './embedding-matcher.js';
 
@@ -182,13 +182,6 @@ async function mergeIntoExisting(match, { newName, entityType, isRename, current
   }
 
   return canonical;
-}
-
-function safeParseEntityTypes(entity) {
-  if (entity.entityTypes) {
-    try { return JSON.parse(entity.entityTypes); } catch { /* fall through */ }
-  }
-  return [entity.entityType];
 }
 
 /**

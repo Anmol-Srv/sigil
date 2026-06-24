@@ -168,9 +168,8 @@ export async function apply(input, emit = () => {}) {
   } catch (err) {
     if (err instanceof StepError) throw err;
     // Classify provider/key/model failures honestly.
-    const { diagnoseError } = await import('../../db/setup.js');
-    const d = diagnoseError(err);
-    throw new StepError({ message: d.humanMessage, hint: d.fixHint, kind: d.kind });
+    const { fromError } = await import('../db/shared.js');
+    throw fromError(err);
   }
 }
 

@@ -16,6 +16,7 @@
 import { loadHookEnv } from './env-loader.js';
 import { maskSecrets } from './secret-mask.js';
 import { breakerOpen, tripBreaker, resetBreaker } from './daemon-breaker.js';
+import { readStdin } from './io.js';
 
 loadHookEnv();
 
@@ -61,13 +62,6 @@ async function main() {
   }
 
   return respond();
-}
-
-async function readStdin() {
-  if (process.stdin.isTTY) return '';
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  return Buffer.concat(chunks).toString('utf8').trim();
 }
 
 function respond() {

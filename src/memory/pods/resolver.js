@@ -21,6 +21,7 @@
 
 import * as podStore from './store.js';
 import * as personType from './kinds/person.js';
+import { parseAttrs } from './attrs.js';
 import config from '../../config.js';
 
 // Find or create the person pod for a given entity. If a pod already
@@ -39,9 +40,7 @@ async function upsertPersonPod({
 
   if (existing) {
     // Merge platforms into the existing pod's attrs.
-    const existingAttrs = typeof existing.attrs === 'object'
-      ? existing.attrs
-      : safeParse(existing.attrs);
+    const existingAttrs = parseAttrs(existing.attrs);
     const mergedPlatforms = personType.mergePlatforms(
       existingAttrs.platforms || {},
       attrs.platforms || {},
@@ -146,11 +145,6 @@ async function fromSourceMetadata(metadata, namespace) {
   // entities/linker.js so we don't duplicate entity creation here.
 
   return attachments;
-}
-
-function safeParse(s) {
-  if (!s) return {};
-  try { return JSON.parse(s); } catch { return {}; }
 }
 
 export { upsertPersonPod, fromSourceMetadata };

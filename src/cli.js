@@ -2098,6 +2098,7 @@ async function removeClaudeMdImport() {
     join(home, '.cortex', 'CLAUDE.md'),
   ];
 
+  const { escapeRegex } = await import('./lib/text.js');
   let after = before;
   for (const p of importPaths) {
     const re = new RegExp(`^@${escapeRegex(p)}\\s*\\n?`, 'gm');
@@ -2107,10 +2108,6 @@ async function removeClaudeMdImport() {
   if (after === before) return false;
   await fs.writeFile(claudeMdPath, after, 'utf8');
   return true;
-}
-
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 

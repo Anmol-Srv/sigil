@@ -4,6 +4,7 @@ import path from 'node:path';
 import { promptJson } from '../../lib/llm.js';
 import config from '../../config.js';
 import { PROMPTS_DIR } from '../../lib/paths.js';
+import { escapeRegex } from '../../lib/text.js';
 import { resolveEntity, resolveEntityList } from './resolver.js';
 import { createRelation } from './relations.js';
 
@@ -80,10 +81,6 @@ function canonicalizeRelationType(rawPredicate) {
   const fallback = norm.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase();
   if (!fallback || fallback.length > 40) return null;
   return fallback;
-}
-
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // Word-boundary check so "sigil" doesn't match "sigilum".

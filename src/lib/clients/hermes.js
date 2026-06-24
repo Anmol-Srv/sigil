@@ -24,7 +24,6 @@
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { PKG_ROOT } from '../paths.js';
 
 import { safeWrite } from '../safe-write.js';

@@ -2,6 +2,7 @@ import { resolveEntity } from './resolver.js';
 import { createRelation } from './relations.js';
 import { extractAndResolveGraph } from './graph-extractor.js';
 import { linkEntitiesToFact } from '../facts/entity-linker.js';
+import { escapeRegex } from '../../lib/text.js';
 import cortexDb from '../../db/cortex.js';
 
 /**
@@ -249,10 +250,6 @@ function factMentionsEntity(content, entity) {
     const re = new RegExp(`\\b${escapeRegex(c)}\\b`);
     return re.test(text);
   });
-}
-
-function escapeRegex(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function mergeUniqueById(...lists) {

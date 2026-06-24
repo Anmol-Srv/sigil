@@ -20,11 +20,8 @@ import cortexDb from '../../db/cortex.js';
 import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
 import { CONFIDENCE_CASE, buildFactFilters } from './filters.js';
+import { RRF_K, VECTOR_WEIGHT, KEYWORD_WEIGHT } from './scoring-constants.js';
 
-// Match the JS-side constants
-const RRF_K = 20;
-const VECTOR_WEIGHT = 1.0;
-const KEYWORD_WEIGHT = 0.7;
 const OVERFETCH = 3;
 
 // Score multipliers (kept here — match what the rerank stage expects)

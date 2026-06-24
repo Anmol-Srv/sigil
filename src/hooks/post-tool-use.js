@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto';
 
 import { loadHookEnv } from './env-loader.js';
 import { SIGIL_HOME, SIGIL_HOOK_DEDUP } from '../lib/paths.js';
+import { readStdin } from './io.js';
 
 loadHookEnv();
 
@@ -152,9 +153,7 @@ function summarize(toolName, toolInput) {
 }
 
 async function main() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  const raw = await readStdin();
   if (!raw) return respond();
 
   // ── DISABLED: tool-usage observations are no longer stored as facts (they

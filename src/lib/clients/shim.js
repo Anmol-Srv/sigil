@@ -51,6 +51,14 @@ export function resolveDistDir() {
   return join(PKG_ROOT, 'src');
 }
 
+// The Sigil MCP server entry point. Bundled installs use dist/server.js;
+// running from source uses src/server.js. Used by MCP-client connectors.
+export function resolveServerPath() {
+  const distServer = join(PKG_ROOT, 'dist', 'server.js');
+  const srcServer = join(PKG_ROOT, 'src', 'server.js');
+  return existsSync(distServer) ? distServer : srcServer;
+}
+
 // Single-quote a value for safe embedding in a POSIX shell script. Paths with
 // spaces (e.g. "/Users/My Name/...") survive; the rare embedded single quote is
 // escaped via the standard '\'' dance.

@@ -1,7 +1,7 @@
 import { groupBy, sumBy, sortBy } from 'lodash-es';
 
 import cortexDb from '../../db/cortex.js';
-import { findById, updateEntityTypes } from './store.js';
+import { findById, updateEntityTypes, safeParseEntityTypes } from './store.js';
 
 async function mergeEntities(primaryId, duplicateId) {
   const [primary, duplicate] = await Promise.all([
@@ -89,15 +89,6 @@ async function mergeEntities(primaryId, duplicateId) {
   console.log(`[entity-merge] Merged ${duplicateId} (${duplicate.name}) into ${primaryId} (${primary.name})`);
 
   return { ...primary, mentionCount: newMentionCount };
-}
-
-function safeParseEntityTypes(entity) {
-  if (!entity.entityTypes) return [entity.entityType];
-  try {
-    return JSON.parse(entity.entityTypes);
-  } catch {
-    return [entity.entityType];
-  }
 }
 
 async function deduplicateRelations(entityId) {

@@ -24,6 +24,7 @@ import { maskSecrets } from './secret-mask.js';
 import { recordHookError, failClosedOnBadConfig } from './error-log.js';
 import { loadHookEnv } from './env-loader.js';
 import { breakerOpen, tripBreaker, resetBreaker } from './daemon-breaker.js';
+import { readStdin } from './io.js';
 
 loadHookEnv();
 
@@ -74,9 +75,7 @@ async function searchViaDaemon(query, input) {
 }
 
 async function main() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  const raw = await readStdin();
   if (!raw) return respond();
 
   const input = JSON.parse(raw);

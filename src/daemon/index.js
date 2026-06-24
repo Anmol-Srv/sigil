@@ -7,6 +7,7 @@ import { createWriteStream, writeFileSync, rmSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 
 import { SIGIL_DAEMON_LOG, SIGIL_HEARTBEAT } from '../lib/paths.js';
+import { getSigilVersion } from '../lib/version.js';
 import {
   detectRunningDaemon,
   ensureSigilHome,
@@ -204,7 +205,7 @@ export async function startDaemon({ foreground = false } = {}) {
 
   // Heartbeat: a small liveness file the supervisor/CLI/GUI read to tell
   // "running" from "stale pidfile". Refreshed every 15s; removed on shutdown.
-  const pkgVersion = await readPkgVersion();
+  const pkgVersion = getSigilVersion();
   const writeHeartbeat = () => {
     try {
       writeFileSync(SIGIL_HEARTBEAT, JSON.stringify({
@@ -334,17 +335,6 @@ export async function startDaemon({ foreground = false } = {}) {
 // and logs loudly on failure. Never throws, never blocks startup — a down DB
 // must not stop the daemon (so `sigil` keeps responding and the user gets a
 // clear signal rather than silent empty memory).
-async function readPkgVersion() {
-  try {
-    const { readFile } = await import('node:fs/promises');
-    const { join } = await import('node:path');
-    const { PKG_ROOT } = await import('../lib/paths.js');
-    return JSON.parse(await readFile(join(PKG_ROOT, 'package.json'), 'utf8')).version;
-  } catch {
-    return 'unknown';
-  }
-}
-
 async function probeDbHealth(log) {
   try {
     const { default: cortexDb } = await import('../db/cortex.js');

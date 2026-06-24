@@ -14,10 +14,8 @@
  * automatically when --addresses isn't given.
  */
 import { hostname } from 'node:os';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { PKG_ROOT } from '../lib/paths.js';
+import { getSigilVersion } from '../lib/version.js';
 import { parseFlags } from './flags.js';
 
 const HELP = `sigil join — pair this device with a Sigil master
@@ -57,7 +55,7 @@ export async function runJoin(args) {
   }
 
   const { joinMaster } = await import('../net/pairing.js');
-  const version = readVersion();
+  const version = getSigilVersion();
 
   console.log(`[sigil] joining master ${masterNodeId.slice(0, 12)}…`);
   const result = await joinMaster({
@@ -124,9 +122,4 @@ export async function runJoin(args) {
   } catch (err) {
     console.error(`(warning: failed to persist mode to .env: ${err.message})`);
   }
-}
-
-function readVersion() {
-  try { return JSON.parse(readFileSync(join(PKG_ROOT, 'package.json'), 'utf8')).version; }
-  catch { return 'unknown'; }
 }

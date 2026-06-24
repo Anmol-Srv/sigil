@@ -12,6 +12,7 @@
 
 import cortexDb from '../../../db/cortex.js';
 import config from '../../../config.js';
+import { parseAttrs } from '../attrs.js';
 
 export const POD_TYPE = 'person';
 
@@ -93,10 +94,4 @@ export function formatForDisplay(pod) {
     memberFactCount: pod.memberFactCount,
     memberDocCount: pod.memberDocCount,
   };
-}
-
-function parseAttrs(attrs) {
-  if (!attrs) return {};
-  if (typeof attrs === 'object') return attrs;
-  try { return JSON.parse(attrs); } catch { return {}; }
 }

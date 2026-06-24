@@ -18,13 +18,12 @@
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { PKG_ROOT } from '../paths.js';
 
 import { safeWrite } from '../safe-write.js';
 import { detectInstalled } from './detect.js';
 import { buildSharedInstructions } from './instructions.js';
-import { MCP_SHIM_PATH, writeLauncherShim } from './shim.js';
+import { MCP_SHIM_PATH, writeLauncherShim, resolveServerPath } from './shim.js';
 
 const KIRO_HOME = join(homedir(), '.kiro');
 const KIRO_MCP_PATH = join(KIRO_HOME, 'settings', 'mcp.json');
@@ -42,11 +41,6 @@ async function detect() {
   return detectInstalled({ dirs: [KIRO_HOME], apps: ['Kiro'], bins: ['kiro'] });
 }
 
-function resolveServerPath() {
-  const distServer = join(PKG_DIR, 'dist', 'server.js');
-  const srcServer = join(PKG_DIR, 'src', 'server.js');
-  return existsSync(distServer) ? distServer : srcServer;
-}
 
 // Merge the sigil entry into ~/.kiro/settings/mcp.json. Same JSON shape +
 // merge logic as Cursor; preserves any other MCP servers the user has.
