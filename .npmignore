@@ -2,9 +2,6 @@
 **/*.test.js
 vitest.config.js
 
-# Dev scripts
-src/scripts/
-
 # Dev artifacts
 src/api/mcp-chat-config.json
 .env
