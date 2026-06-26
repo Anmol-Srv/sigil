@@ -1,0 +1,40 @@
+name: Redirect old docs Pages
+
+# The Sigil docs moved to the dedicated sigil-web project (Cloudflare Pages).
+# This GitHub Pages deployment now serves only a redirect shim so existing
+# links to https://anmol-srv.github.io/sigil/<path> forward to the new site.
+#
+# IMPORTANT: only let this run (i.e. merge this change) once the new site is
+# live at https://sigil.pages.dev — otherwise old links bounce to a dead host.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'web-redirect/**'
+      - '.github/workflows/redirect-old-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-redirect
+      - id: deployment
+        uses: actions/deploy-pages@v4
