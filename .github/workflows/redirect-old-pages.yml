@@ -5,7 +5,7 @@ name: Redirect old docs Pages
 # links to https://anmol-srv.github.io/sigil/<path> forward to the new site.
 #
 # IMPORTANT: only let this run (i.e. merge this change) once the new site is
-# live at https://sigil.pages.dev — otherwise old links bounce to a dead host.
+# live at https://sigil-web.pages.dev — otherwise old links bounce to a dead host.
 
 on:
   push:

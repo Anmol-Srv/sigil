@@ -23,7 +23,7 @@ That's it. The installer puts Sigil on your PATH persistently, then launches it 
 Configure in the dashboard. Open Claude Code. Memory is already wired in.
 
 [![npm](https://img.shields.io/npm/v/@anmol-srv%2Fsigil)](https://www.npmjs.com/package/@anmol-srv/sigil)
-[![Docs](https://img.shields.io/badge/docs-sigil.pages.dev-5e8cff)](https://sigil.pages.dev/docs/)
+[![Docs](https://img.shields.io/badge/docs-sigil--web.pages.dev-5e8cff)](https://sigil-web.pages.dev/docs/)
 [![MCP](https://img.shields.io/badge/MCP-native-8B5CF6)](https://modelcontextprotocol.io/)
 [![Benchmark](https://img.shields.io/badge/LongMemEval%20oracle-R@10%20100%25-6B1A2A)](./eval/longmemeval/RESULTS.md)
 [![License](https://img.shields.io/badge/license-MIT-blue)](https://opensource.org/licenses/MIT)

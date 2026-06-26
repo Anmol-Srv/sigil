@@ -8,19 +8,19 @@
       The Sigil docs moved off this GitHub Pages project page and into the
       dedicated web project (sigil-web), served from Cloudflare Pages.
       Old:  https://anmol-srv.github.io/sigil/<path>
-      New:  https://sigil.pages.dev/docs/<path>
+      New:  https://sigil-web.pages.dev/docs/<path>
       This page (and 404.html, which is identical) redirects deep links,
       mapping /sigil/<rest> -> /docs/<rest>.
     -->
     <script>
       (function () {
-        var NEW_ORIGIN = 'https://sigil.pages.dev';
+        var NEW_ORIGIN = 'https://sigil-web.pages.dev';
         var rest = location.pathname.replace(/^\/sigil\/?/, '');
         location.replace(NEW_ORIGIN + '/docs/' + rest + location.search + location.hash);
       })();
     </script>
-    <meta http-equiv="refresh" content="0; url=https://sigil.pages.dev/docs/" />
-    <link rel="canonical" href="https://sigil.pages.dev/docs/" />
+    <meta http-equiv="refresh" content="0; url=https://sigil-web.pages.dev/docs/" />
+    <link rel="canonical" href="https://sigil-web.pages.dev/docs/" />
     <style>
       body {
         background: #08090b;
@@ -38,7 +38,7 @@
   <body>
     <p>
       The Sigil docs have moved to
-      <a href="https://sigil.pages.dev/docs/">sigil.pages.dev/docs</a>.<br />
+      <a href="https://sigil-web.pages.dev/docs/">sigil-web.pages.dev/docs</a>.<br />
       Redirecting you now…
     </p>
   </body>
