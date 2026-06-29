@@ -17,10 +17,23 @@ import {
   checkForUpdate,
   applyUpdate,
   evictLegacyNpmInstall,
+  revertInstall,
   RELEASE_BRANCH,
 } from '../lib/git-update.js';
 
 const run = promisify(execFile);
+
+async function npmInstall() {
+  await run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', '--loglevel=error'], {
+    cwd: PKG_ROOT,
+    encoding: 'utf8',
+  });
+}
+
+async function restartDaemon() {
+  const { runDaemon } = await import('./daemon.js');
+  await runDaemon(['restart']);
+}
 
 const HELP = `sigil update — update Sigil from the git release branch
 
@@ -86,10 +99,7 @@ export async function runUpdate(args) {
 
   if (lockChanged || force) {
     console.log('Dependencies changed — running npm install…');
-    await run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', '--loglevel=error'], {
-      cwd: PKG_ROOT,
-      encoding: 'utf8',
-    });
+    await npmInstall();
   }
 
   // Evict any leftover global npm install (S3). A pre-git-native `npm i -g`
@@ -113,14 +123,82 @@ export async function runUpdate(args) {
   // code-only change (no version bump) wouldn't trip the CLI's version-mismatch
   // auto-restart, so we do it explicitly here.
   try {
-    const { runDaemon } = await import('./daemon.js');
-    await runDaemon(['restart']);
+    await restartDaemon();
   } catch (err) {
     console.error(`(warning) daemon restart failed — restart it with \`sigil daemon restart\`: ${err.message.split('\n')[0]}`);
   }
 
+  // Apply any pending DB migrations the new code expects — daemon-side, with an
+  // auto-revert net. If the schema can't move forward, we revert the CODE too so
+  // code and schema never drift out of lockstep. Throws on a failed migration
+  // (after restoring the previous version), so the user lands on a working Sigil.
+  await applyMigrationsOrRevert({ from, lockChanged });
+
   await clearFlag();
   console.log(`Updated ${from} → ${to}. ✓`);
+}
+
+/**
+ * Apply pending migrations through the freshly-restarted daemon and reconcile
+ * code with schema:
+ *   - migrated/skipped → keep the new code (success).
+ *   - reverted/dirty   → the daemon left the DB at (or restored to) its prior
+ *                        schema, so revert the code to `from` and restart, then
+ *                        throw — the update is rolled back as a unit.
+ */
+async function applyMigrationsOrRevert({ from, lockChanged }) {
+  let res;
+  let client;
+  try {
+    const { connectOrStartDaemon } = await import('../clients/auto-spawn.js');
+    client = await connectOrStartDaemon({ quiet: true });
+    ({ data: res } = await client.call('migrateSafe', {}));
+  } catch (err) {
+    // Couldn't reach the daemon / RPC missing (e.g. daemon failed to restart).
+    // Don't revert — the code is fine, migrations are just pending. Tell the user.
+    console.error(`(warning) could not apply migrations: ${err.message.split('\n')[0]}`);
+    console.error('Finish with: `sigil daemon stop && sigil migrate && sigil daemon start`');
+    return;
+  } finally {
+    if (client) await client.close().catch(() => {});
+  }
+
+  if (res.status === 'migrated') {
+    if (res.ran && res.ran.length) console.log(`Applied ${res.ran.length} migration${res.ran.length > 1 ? 's' : ''}.`);
+    else console.log('Database schema already up to date.');
+    return;
+  }
+  if (res.status === 'skipped') {
+    console.log(`(database migrations not applied — ${res.reason})`);
+    return;
+  }
+
+  // Migration failed. The daemon guarantees the DB is back at its prior schema
+  // ('reverted') or, worst case, left a restore snapshot ('dirty'). Either way
+  // the new code no longer matches the live schema — revert the code to match.
+  console.error('');
+  console.error(`✗ Migration failed: ${res.error || 'unknown error'}`);
+  if (res.status === 'reverted') {
+    console.error('  Database was rolled back to its previous schema.');
+  } else {
+    console.error('  ⚠ Database rollback was incomplete.'
+      + (res.snapshot ? ` A pre-update snapshot was saved (${res.snapshot}); restore it with \`sigil repair\` if writes misbehave.` : ''));
+  }
+  console.error(`  Reverting code to ${from} so it matches the schema…`);
+
+  try {
+    const landed = await revertInstall(from);
+    if (lockChanged) await npmInstall();
+    await restartDaemon();
+    console.error(`  Reverted to ${landed}. Sigil is back on the previous version.`);
+  } catch (err) {
+    console.error(`  (warning) automatic code revert failed: ${err.message.split('\n')[0]}`);
+    console.error(`  Recover manually: \`git -C ${PKG_ROOT} reset --hard ${from}\` then \`sigil daemon restart\`.`);
+  }
+
+  const e = new Error('update rolled back after a failed migration — fix the migration and re-run `sigil update`.');
+  e.code = 'migration_failed';
+  throw e;
 }
 
 async function clearFlag() {

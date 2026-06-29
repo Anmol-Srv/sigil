@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import knexFactory from 'knex';
 
-import { resyncSequences } from './migrate.js';
+import { resyncSequences, migrateWithRollback } from './migrate.js';
 
 // PGlite is an optional dependency; skip cleanly if it can't load rather than
 // breaking the fast gate.
@@ -68,5 +68,87 @@ suite('resyncSequences', () => {
     await resyncSequences(db); // covers all tables; must not disturb the empty one
     const r = await db.raw("INSERT INTO t2 (v) VALUES ('first') RETURNING id");
     expect(Number(rowsOf(r)[0].id)).toBe(1);
+  });
+});
+
+// migrateWithRollback — the auto-revert safety net behind `sigil update`. Driven
+// with a fake knex so the state machine is tested without a real DB.
+describe('migrateWithRollback', () => {
+  const noSnapshot = async () => ({ skipped: 'test' });
+
+  function fakeKnex({ completed = [], latest, rollback }) {
+    const state = { completed: [...completed] };
+    return {
+      _state: state,
+      raw: async () => ({ rows: [] }), // resyncSequences no-op
+      migrate: {
+        list: async () => [state.completed, []],
+        latest: async () => latest(state),
+        rollback: async () => rollback(state),
+        forceFreeMigrationsLock: async () => {},
+      },
+    };
+  }
+
+  it('returns "migrated" and resyncs when migrations apply', async () => {
+    const knex = fakeKnex({
+      completed: ['old'],
+      latest: (s) => { s.completed.push('a', 'b'); return [1, ['a', 'b']]; },
+      rollback: () => { throw new Error('should not roll back'); },
+    });
+    const r = await migrateWithRollback({ knex, takeSnapshotFn: async () => ({ name: 'snap-1' }) });
+    expect(r).toMatchObject({ status: 'migrated', ran: ['a', 'b'], snapshot: 'snap-1' });
+  });
+
+  it('reports snapshot:null when the snapshot is skipped (non-embedded)', async () => {
+    const knex = fakeKnex({ latest: () => [1, []], rollback: () => {} });
+    const r = await migrateWithRollback({ knex, takeSnapshotFn: noSnapshot });
+    expect(r).toMatchObject({ status: 'migrated', snapshot: null });
+  });
+
+  it('auto-reverts to "reverted" when latest fails and rollback restores the prior schema', async () => {
+    const knex = fakeKnex({
+      completed: ['old'],
+      latest: (s) => { s.completed.push('a'); throw new Error('migration 2 blew up'); },
+      rollback: (s) => { s.completed = ['old']; return [1, ['a']]; }, // back to before
+    });
+    const r = await migrateWithRollback({ knex, takeSnapshotFn: noSnapshot });
+    expect(r.status).toBe('reverted');
+    expect(r.error).toMatch(/blew up/);
+    expect(knex._state.completed).toEqual(['old']);
+  });
+
+  it('does NOT roll back when the failure applied nothing (protects prior batches)', async () => {
+    let rolledBack = false;
+    const knex = fakeKnex({
+      completed: ['old'],
+      latest: () => { throw new Error('first migration threw'); }, // nothing recorded
+      rollback: () => { rolledBack = true; return [1, ['old']]; },  // would wrongly undo 'old'
+    });
+    const r = await migrateWithRollback({ knex, takeSnapshotFn: noSnapshot });
+    expect(r.status).toBe('reverted');
+    expect(rolledBack).toBe(false);            // guard: prior batch left intact
+    expect(knex._state.completed).toEqual(['old']);
+  });
+
+  it('reports "dirty" when rollback cannot restore the prior schema', async () => {
+    const knex = fakeKnex({
+      completed: ['old'],
+      latest: (s) => { s.completed.push('a'); throw new Error('boom'); },
+      rollback: () => [1, []], // rollback did nothing — partial batch left behind
+    });
+    const r = await migrateWithRollback({ knex, takeSnapshotFn: async () => ({ name: 'snap-2' }) });
+    expect(r).toMatchObject({ status: 'dirty', snapshot: 'snap-2' });
+  });
+
+  it('reports "dirty" with rollbackError when rollback itself throws', async () => {
+    const knex = fakeKnex({
+      completed: ['old'],
+      latest: (s) => { s.completed.push('a'); throw new Error('boom'); }, // partial → rollback attempted
+      rollback: () => { throw new Error('rollback also failed'); },
+    });
+    const r = await migrateWithRollback({ knex, takeSnapshotFn: noSnapshot });
+    expect(r.status).toBe('dirty');
+    expect(r.rollbackError).toMatch(/rollback also failed/);
   });
 });

@@ -70,6 +70,94 @@ export async function migrateEmbedded() {
 }
 
 /**
+ * Apply pending migrations with an AUTO-REVERT safety net — the engine behind
+ * `sigil update`'s self-migrating step.
+ *
+ * Runs against the daemon's live pool (the legitimate owner of the single-process
+ * embedded engine), so it works in embedded mode where a CLI process can't open
+ * the DB. The contract: the DB is ALWAYS left in a consistent, known state —
+ * either fully migrated, or rolled back to exactly where it started. The caller
+ * (update.js) reads the returned status to keep the *code* in lockstep with the
+ * *schema* (revert the code if the schema couldn't move forward).
+ *
+ * Safety layers, in order:
+ *   1. A pre-migration snapshot (embedded only, best-effort) — a full-cluster
+ *      restore point for the catastrophic "rollback also failed" case.
+ *   2. migrate.latest. On success → 'migrated'.
+ *   3. On failure → free any stuck lock, then migrate.rollback to undo the
+ *      partial batch. If the schema is back to where it started → 'reverted'.
+ *   4. If rollback can't restore it → 'dirty' (snapshot path returned so the
+ *      operator — or the daemon's boot-recovery — can restore).
+ *
+ * @param {object} [opts]
+ *   knex            — injectable knex-like handle (default: the cortex pool)
+ *   takeSnapshotFn  — injectable snapshot taker (default: db/snapshots.takeSnapshot)
+ *   log             — (msg) => void
+ * @returns {Promise<{status:'migrated'|'reverted'|'dirty', ran?:string[], error?:string, rollbackError?:string, snapshot?:string|null}>}
+ */
+export async function migrateWithRollback({ knex, takeSnapshotFn, log = () => {} } = {}) {
+  const db = knex || (await import('./cortex.js')).default;
+  const dir = { directory: MIGRATIONS_DIR };
+
+  const completedCount = async () => {
+    const res = await db.migrate.list(dir);
+    const done = Array.isArray(res) ? res[0] : [];
+    return (done || []).length;
+  };
+
+  const before = await completedCount();
+
+  // (1) Pre-migration restore point — embedded best-effort; never blocks.
+  let snapshot = null;
+  try {
+    const take = takeSnapshotFn || (await import('./snapshots.js')).takeSnapshot;
+    const snap = await take({ reason: 'pre-update-migration', log });
+    snapshot = snap && snap.name ? snap.name : null;
+  } catch (err) {
+    log(`migrate: pre-migration snapshot skipped (${err.message.split('\n')[0]})`);
+  }
+
+  // (2) Apply.
+  try {
+    const [, ran] = await db.migrate.latest(dir);
+    if (ran.length) await resyncSequences(db);
+    return { status: 'migrated', ran, snapshot };
+  } catch (err) {
+    // How much of THIS run's batch actually landed? Critical: if the first
+    // pending migration threw, knex recorded nothing — and calling rollback now
+    // would undo the *previous* legitimate batch. Only roll back what we added.
+    const mid = await completedCount().catch(() => before);
+    if (mid <= before) {
+      // Nothing from this run applied — the schema is untouched (already at the
+      // prior state). Don't rollback. Report 'reverted' so the caller reverts the
+      // code to match (the migration the new code expects didn't land).
+      log(`migrate: latest failed before applying anything (${oneLine(err)}) — schema unchanged`);
+      return { status: 'reverted', error: oneLine(err), snapshot, ran: [] };
+    }
+
+    log(`migrate: latest failed after a partial batch (${oneLine(err)}) — rolling back`);
+    // (3) Undo the partial batch. Free a lock a crashed migration may have left.
+    try {
+      try { await db.migrate.forceFreeMigrationsLock?.(dir); } catch { /* best-effort */ }
+      await db.migrate.rollback(dir);
+      const after = await completedCount();
+      if (after <= before) {
+        await resyncSequences(db).catch(() => {});
+        return { status: 'reverted', error: oneLine(err), snapshot };
+      }
+      return { status: 'dirty', error: oneLine(err), snapshot };
+    } catch (rbErr) {
+      // (4) Rollback itself failed — DB may be inconsistent; snapshot is the net.
+      return { status: 'dirty', error: oneLine(err), rollbackError: oneLine(rbErr), snapshot };
+    }
+  }
+}
+
+function oneLine(err) {
+  return String(err?.message || err || 'unknown error').split('\n')[0];
+}
+
+/**
  * Re-sync every serial / IDENTITY sequence to its column's MAX value. A sequence
  * left BEHIND max(id) — e.g. after a partial data copy, a half-healed embedded
  * dir, or a restore that inserted rows with explicit ids — makes the next INSERT

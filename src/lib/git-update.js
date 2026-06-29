@@ -140,6 +140,19 @@ export async function applyUpdate() {
   return { from: from.slice(0, 7), to: to.slice(0, 7), lockChanged: lockBefore !== lockAfter, stashed };
 }
 
+/**
+ * Hard-revert the install to an earlier revision — the code half of `sigil
+ * update`'s auto-revert. When a post-update migration fails (and the daemon has
+ * already rolled the schema back), we reset the working tree to the pre-update
+ * commit so the code matches the restored schema. Returns the short SHA landed.
+ *
+ * @param {string} rev  a git revision (the `from` short SHA applyUpdate returned)
+ */
+export async function revertInstall(rev) {
+  await git(['reset', '--hard', '--quiet', rev]);
+  return git(['rev-parse', '--short', 'HEAD']);
+}
+
 // Blob hash of package-lock.json at HEAD — cheap way to know if `npm install`
 // needs to re-run after an update (deps changed) vs being skippable (code-only).
 async function lockHash() {

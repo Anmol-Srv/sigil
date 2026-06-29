@@ -17,6 +17,33 @@ import { buildLocalConnection } from '../../db/drivers/local-postgres.js';
 import { buildUrlConnection, isPooledUrl, directMigrationUrl } from '../../db/drivers/url.js';
 
 export function registerRunMigrations(registry) {
+  // migrateSafe — apply pending migrations daemon-side with auto-revert, the
+  // engine behind `sigil update`'s self-migrating step. The daemon is the
+  // legitimate owner of the single-process embedded engine, so this works where
+  // a CLI `sigil migrate` can't even open the DB. Always leaves the DB
+  // consistent; returns a status the updater uses to keep code ⇄ schema in sync.
+  registry.register('migrateSafe', async () => {
+    const { default: config } = await import('../../config.js');
+
+    // Followers hold no local DB; nothing to migrate.
+    if (config.network?.mode === 'lite-follower') return { status: 'skipped', reason: 'lite-follower' };
+
+    // Not set up yet — the onboarding wizard runs the first migration.
+    let mode;
+    try { mode = config.db.mode; } catch { mode = null; }
+    if (!mode) return { status: 'skipped', reason: 'not-configured' };
+
+    // A transaction-pooler URL can't run migrations (advisory locks / prepared
+    // statements). The daemon pool is bound to it, so migrate.latest would fail;
+    // skip cleanly and tell the user to migrate against the direct endpoint.
+    if (mode === 'url' && isPooledUrl(config.db.url) && !directMigrationUrl(config.db.url)) {
+      return { status: 'skipped', reason: 'pooled-url' };
+    }
+
+    const { migrateWithRollback } = await import('../../db/migrate.js');
+    return migrateWithRollback({ log: (m) => console.error(`[migrate] ${m}`) });
+  });
+
   registry.register('runMigrations', async (params = {}) => {
     if (params.url || params.host) {
       // One-shot migrate against the supplied connection.
