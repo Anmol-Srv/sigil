@@ -509,7 +509,7 @@ function kbRenderGraph(mount, center, relations) {
     }
   }
 
-  function nodeEl(n, idx) {
+  function nodeEl(n, _idx) {
     const g = document.createElementNS(ns, 'g');
     g.setAttribute('class', `kb-node-g${n.focal ? ' focal' : ''}`);
     g.setAttribute('tabindex', '0');
@@ -729,7 +729,6 @@ async function mapLimit(items, limit, fn) {
 }
 
 function buildSimulation(data) {
-  const canvas = $('#graph-canvas');
   const stage = $('#graph-stage');
   const W = stage.clientWidth, H = stage.clientHeight;
 
@@ -961,7 +960,7 @@ function nodeAt(sx, sy) {
       render();
     }
   });
-  function endDrag(e) {
+  function endDrag(_e) {
     if (down && down.node && !down.moved) openGraphNode(down.node);
     else if (down && down.node && down.moved) down.node.pinned = true; // keep a deliberately-placed node put
     graph.dragNode = null; graph.panning = false; down = null;

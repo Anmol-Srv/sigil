@@ -411,21 +411,17 @@ export class SessionManager {
   }
 
   async runFallbackRaw(task) {
-    try {
-      const r = await this.fallback(task);
-      return {
-        text: r.text,
-        inputTokens: r.inputTokens ?? estimateTokens(task.prompt),
-        outputTokens: r.outputTokens ?? estimateTokens(r.text || ''),
-        model: r.model || task.model || null,
-        cost: r.cost || 0,
-        viaFallback: true,
-      };
-    } catch (err) {
-      // A pending task that has its promise must reject; the no-worker path
-      // returns this rejected promise directly. Either way the caller sees it.
-      throw err;
-    }
+    // Errors propagate to the caller untouched: a pending task with a promise
+    // rejects, and the no-worker path returns this rejected promise directly.
+    const r = await this.fallback(task);
+    return {
+      text: r.text,
+      inputTokens: r.inputTokens ?? estimateTokens(task.prompt),
+      outputTokens: r.outputTokens ?? estimateTokens(r.text || ''),
+      model: r.model || task.model || null,
+      cost: r.cost || 0,
+      viaFallback: true,
+    };
   }
 
   safeDriver(sourceType) {

@@ -18,10 +18,9 @@
  *     re-run and leaving everything outside the markers untouched.
  */
 
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { PKG_ROOT } from '../paths.js';
 
 import TOML from '@iarna/toml';
 
@@ -33,9 +32,6 @@ import { MCP_SHIM_PATH, writeLauncherShim, resolveServerPath } from './shim.js';
 const CODEX_HOME = join(homedir(), '.codex');
 const CODEX_CONFIG_PATH = join(CODEX_HOME, 'config.toml');
 const CODEX_AGENTS_PATH = join(CODEX_HOME, 'AGENTS.md');
-
-// Package root — same trick the other client modules use to find dist/ vs src/.
-const PKG_DIR = PKG_ROOT; // bundle-safe package root (see claude-code.js)
 
 const BEGIN_MARKER = '<!-- BEGIN sigil -->';
 const END_MARKER = '<!-- END sigil -->';

@@ -96,9 +96,11 @@
   },
   "devDependencies": {
     "@clack/prompts": "^1.2.0",
+    "@eslint/js": "^10.0.1",
     "dayjs": "^1.11.19",
     "esbuild": "^0.28.0",
     "eslint": "^10.0.3",
+    "globals": "^17.7.0",
     "lodash-es": "^4.17.23",
     "nanoid": "^5.1.7",
     "vitest": "^4.0.18",

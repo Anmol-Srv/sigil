@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { evictLegacyNpmInstall } from './git-update.js';
+import { evictLegacyNpmInstall, hasMeaningfulLocalChanges } from './git-update.js';
 
 let globalRoot;
 afterEach(() => { if (globalRoot) rmSync(globalRoot, { recursive: true, force: true }); });
@@ -56,5 +56,28 @@ describe('evictLegacyNpmInstall', () => {
 
     const r = await evictLegacyNpmInstall({ npm });
     expect(r).toEqual({ evicted: false, reason: 'rm-failed' });
+  });
+});
+
+describe('hasMeaningfulLocalChanges (update dirty-tree guard)', () => {
+  it('is false for a clean tree', () => {
+    expect(hasMeaningfulLocalChanges('')).toBe(false);
+    expect(hasMeaningfulLocalChanges('\n  \n')).toBe(false);
+  });
+
+  it('ignores routine package-lock.json churn from npm install', () => {
+    expect(hasMeaningfulLocalChanges(' M package-lock.json')).toBe(false);
+  });
+
+  it('flags hand-edits to tracked source files', () => {
+    expect(hasMeaningfulLocalChanges(' M src/daemon/index.js')).toBe(true);
+  });
+
+  it('flags untracked files', () => {
+    expect(hasMeaningfulLocalChanges('?? local-patch.js')).toBe(true);
+  });
+
+  it('flags a real edit even alongside the lockfile churn', () => {
+    expect(hasMeaningfulLocalChanges(' M package-lock.json\n M dist/cli.js')).toBe(true);
   });
 });

@@ -83,8 +83,6 @@ async function findRelatedFacts(mentionedEntityIds, { limit = 10 } = {}) {
 }
 
 function rerank(directFacts, relatedFacts, mentionedEntityIds, limit) {
-  const entitySet = new Set(mentionedEntityIds);
-
   const boosted = directFacts.map((f) => ({
     ...f,
     resultType: 'direct',

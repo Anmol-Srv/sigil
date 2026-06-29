@@ -29,7 +29,7 @@ beforeAll(() => {
   vi.doMock('../../lib/llm.js', () => ({ prompt: vi.fn(), promptJson: vi.fn() }));
 
   // Minimal knex-shaped stub: no similar facts, capture the inserted row.
-  const fakeDb = (table) => ({
+  const fakeDb = (_table) => ({
     insert: (row) => ({ returning: async () => { insertedRows.push(row); return [{ id: 1, ...row }]; } }),
     where: () => ({ update: async () => 1 }),
   });

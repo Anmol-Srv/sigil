@@ -77,7 +77,12 @@ export async function runUpdate(args) {
   }
 
   console.log(`Updating ${status.local} → ${status.remote}…`);
-  const { from, to, lockChanged } = await applyUpdate();
+  const { from, to, lockChanged, stashed } = await applyUpdate();
+
+  if (stashed) {
+    console.log(`Local changes in ${PKG_ROOT} were stashed before the reset — recover them with:`);
+    console.log(`  git -C ${PKG_ROOT} stash pop`);
+  }
 
   if (lockChanged || force) {
     console.log('Dependencies changed — running npm install…');

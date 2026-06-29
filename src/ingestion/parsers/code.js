@@ -22,7 +22,6 @@ function splitByBlocks(content, lang) {
   const sections = [];
   let currentHeading = 'Header';
   let currentLines = [];
-  let inBlock = false;
   let braceDepth = 0;
 
   for (const line of lines) {
@@ -37,7 +36,6 @@ function splitByBlocks(content, lang) {
       }
       currentHeading = blockStart;
       currentLines = [line];
-      inBlock = true;
     } else {
       currentLines.push(line);
     }
@@ -64,7 +62,7 @@ function splitByBlocks(content, lang) {
   return sections.filter((s) => s.text);
 }
 
-function detectBlockStart(line, lang) {
+function detectBlockStart(line, _lang) {
   const trimmed = line.trim();
 
   // JavaScript/TypeScript

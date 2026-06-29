@@ -81,22 +81,63 @@ export async function checkForUpdate() {
 }
 
 /**
+ * Decide whether `git status --porcelain` output represents local changes worth
+ * PRESERVING before a hard reset. `npm install --omit=dev` rewrites the committed
+ * package-lock.json on essentially every install, so a dirty lockfile is expected
+ * churn, not a hand-edit — and `reset --hard` would restore it to the release
+ * version anyway. We only care about changes to OTHER tracked files (a user who
+ * hand-patched their install). Pure + exported for testing.
+ *
+ * @param {string} porcelain  raw `git status --porcelain` output
+ * @returns {boolean}
+ */
+export function hasMeaningfulLocalChanges(porcelain) {
+  return porcelain
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    // Drop the routine lockfile churn; everything else counts.
+    .some((l) => !/(^|[/\s])package-lock\.json$/.test(l));
+}
+
+/**
  * Fast-forward the clone to the latest release tip. Uses `reset --hard` rather
  * than `pull`/`merge`: the release branch is a derived, force-pushed artifact
  * (built dist/ committed by CI), so a 3-way merge against a local checkout would
  * spuriously conflict. Resetting to the fetched tip is the correct, conflict-free
  * "make my tree exactly match the release" operation.
  *
- * @returns {Promise<{from:string, to:string, lockChanged:boolean}>}
+ * Dirty-tree guard: a plain `reset --hard` would SILENTLY discard any local
+ * edits to ~/.sigil/app. Before resetting we stash genuine hand-edits (recoverable
+ * via `git -C ~/.sigil/app stash list`) so an update never destroys a user's
+ * patches; if the stash itself fails we abort rather than reset over their work.
+ *
+ * @returns {Promise<{from:string, to:string, lockChanged:boolean, stashed:boolean}>}
  */
 export async function applyUpdate() {
   const from = await git(['rev-parse', 'HEAD']);
   const lockBefore = await lockHash();
+
+  let stashed = false;
+  if (hasMeaningfulLocalChanges(await git(['status', '--porcelain']))) {
+    try {
+      await git(['stash', 'push', '--include-untracked', '-m', `sigil pre-update ${from.slice(0, 7)}`]);
+      stashed = true;
+    } catch (err) {
+      const e = new Error(
+        `${PKG_ROOT} has local changes that could not be stashed (${err.message.split('\n')[0]}). `
+        + 'Refusing to discard them with a hard reset — commit, stash, or remove them, then re-run `sigil update`.',
+      );
+      e.code = 'dirty_install';
+      throw e;
+    }
+  }
+
   await git(['fetch', '--depth', '1', '--quiet', REMOTE, RELEASE_BRANCH]);
   await git(['reset', '--hard', '--quiet', 'FETCH_HEAD']);
   const to = await git(['rev-parse', 'HEAD']);
   const lockAfter = await lockHash();
-  return { from: from.slice(0, 7), to: to.slice(0, 7), lockChanged: lockBefore !== lockAfter };
+  return { from: from.slice(0, 7), to: to.slice(0, 7), lockChanged: lockBefore !== lockAfter, stashed };
 }
 
 // Blob hash of package-lock.json at HEAD — cheap way to know if `npm install`

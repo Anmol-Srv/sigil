@@ -31,7 +31,7 @@ export function registerIngestTurn(registry) {
       podUids = dispatch.podUids || [];
     } catch (err) {
       // Surface in the daemon log; the save below still runs.
-      // eslint-disable-next-line no-console
+       
       console.error(`[ingestTurn] pod dispatch failed: ${err.message}`);
     }
 

@@ -8,7 +8,6 @@
  *   logs [--follow]        Print (or tail) the daemon log.
  *   restart                stop + start.
  */
-import { spawn } from 'node:child_process';
 import { existsSync, createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -204,7 +203,7 @@ async function cmdLogs(args) {
   // Naive polling tail — small log file, this is fine. Refine if needed.
   let lastSize = (await stat(SIGIL_DAEMON_LOG)).size;
   // Keep the process alive until Ctrl-C.
-  // eslint-disable-next-line no-constant-condition
+   
   while (true) {
     await delay(250);
     const s = await stat(SIGIL_DAEMON_LOG).catch(() => null);

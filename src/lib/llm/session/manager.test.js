@@ -3,7 +3,7 @@
 // This file is also the fake-worker E2E (T10): the test plays the worker by
 // calling getTask()/submitResult() the way the real worker MCP tools would.
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 
 import { SessionManager } from './manager.js';
 

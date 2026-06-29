@@ -178,25 +178,6 @@ async function insertFact({ content, category, confidence, importance, namespace
   return fact;
 }
 
-async function updateFact(factId, { content, category, confidence, importance, sourceDocumentIds, embedding }) {
-  await cortexDb('fact')
-    .where({ id: factId })
-    .update({
-      content,
-      category,
-      confidence,
-      importance,
-      sourceDocumentIds,
-      embedding: pgVector(embedding) ?? undefined,
-    });
-
-  await cortexDb.raw(`
-    UPDATE fact
-    SET search_vector = to_tsvector('english', content)
-    WHERE id = ?
-  `, [factId]);
-}
-
 async function findByUid(uid) {
   const [fact] = await cortexDb('fact').where({ uid });
   return fact || null;

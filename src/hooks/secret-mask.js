@@ -16,15 +16,15 @@ const MASK = '***MASKED***';
 // Layer 1: KEY=value with service-specific prefixes or generic names
 const KEY_VALUE_PATTERNS = [
   // OpenAI / Anthropic
-  /\b(sk-(?:proj-|ant-)?[A-Za-z0-9_\-]{20,})\b/g,
+  /\b(sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,})\b/g,
   // GitHub
   /\b(ghp_[A-Za-z0-9]{36,})\b/g,
   /\b(github_pat_[A-Za-z0-9_]{20,})\b/g,
   /\b(gho_[A-Za-z0-9]{36,})\b/g,
   // GitLab
-  /\b(glpat-[A-Za-z0-9_\-]{20,})\b/g,
+  /\b(glpat-[A-Za-z0-9_-]{20,})\b/g,
   // Slack
-  /\b(xox[baprs]-[A-Za-z0-9\-]{10,})\b/g,
+  /\b(xox[baprs]-[A-Za-z0-9-]{10,})\b/g,
   // Stripe / webhooks
   /\b(whsec_[A-Za-z0-9]{20,})\b/g,
   /\b(rk_(?:live|test)_[A-Za-z0-9]{20,})\b/g,
@@ -32,11 +32,11 @@ const KEY_VALUE_PATTERNS = [
   /\b(AKIA[A-Z0-9]{16})\b/g,
   /\b(ASIA[A-Z0-9]{16})\b/g,
   // JWT
-  /\b(eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})\b/g,
+  /\b(eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b/g,
   // Discord bot token
-  /\b([A-Za-z0-9]{24}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27})\b/g,
+  /\b([A-Za-z0-9]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27})\b/g,
   // Telegram bot
-  /\b(\d{8,12}:[A-Za-z0-9_\-]{35})\b/g,
+  /\b(\d{8,12}:[A-Za-z0-9_-]{35})\b/g,
 ];
 
 // Layer 2: generic KEY=VALUE or KEY: "VALUE" patterns

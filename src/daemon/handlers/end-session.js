@@ -33,7 +33,7 @@ export function registerEndSession(registry) {
         transcriptPath: params.transcriptPath || cursor.transcript_path || null,
       });
     } catch (err) {
-      // eslint-disable-next-line no-console
+       
       console.error(`[endSession] synthesis failed: ${err.message}`);
     }
 

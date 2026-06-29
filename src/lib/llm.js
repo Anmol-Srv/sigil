@@ -91,7 +91,7 @@ function parseJson(text) {
     } catch { /* invalid JSON in code block */ }
   }
 
-  const jsonMatch = text.match(/[\[{][\s\S]*[\]}]/);
+  const jsonMatch = text.match(/[[{][\s\S]*[\]}]/);
   if (jsonMatch) {
     try {
       return JSON.parse(jsonMatch[0]);

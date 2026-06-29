@@ -63,7 +63,7 @@ async function ensureRuntime() {
     // iroh test fixture documents.
     const protocols = {};
     for (const [alpn, handler] of pendingProtocols) {
-      protocols[alpn] = (err, ep) => {
+      protocols[alpn] = (err, _ep) => {
         if (err) throw err;
         return {
           accept: handler,

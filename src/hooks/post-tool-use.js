@@ -13,6 +13,8 @@
  * The summarize/dedup logic below is retained (dead) so re-enabling is a
  * one-line change: remove the early return in main().
  */
+/* eslint-disable no-unused-vars -- helpers below are intentionally retained
+   while the hook is disabled (see the note above); they are dead by design. */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';

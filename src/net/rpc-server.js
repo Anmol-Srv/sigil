@@ -90,7 +90,7 @@ export function createRpcAcceptor({ registry, log }) {
       // Process serially per connection — Iroh's stream concurrency
       // already gives us parallelism across distinct connections.
       try {
-        // eslint-disable-next-line no-constant-condition
+         
         while (true) {
           let bi;
           try { bi = await conn.acceptBi(); }

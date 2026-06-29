@@ -18,7 +18,6 @@
 
 import cortexDb from '../../db/cortex.js';
 import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
-import config from '../../config.js';
 import { CONFIDENCE_CASE, buildFactFilters } from './filters.js';
 import { RRF_K, VECTOR_WEIGHT, KEYWORD_WEIGHT } from './scoring-constants.js';
 

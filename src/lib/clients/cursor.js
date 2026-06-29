@@ -23,7 +23,6 @@
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { PKG_ROOT } from '../paths.js';
 
 import { safeWrite } from '../safe-write.js';
 import { detectInstalled } from './detect.js';
@@ -33,9 +32,6 @@ import { MCP_SHIM_PATH, writeLauncherShim, resolveServerPath } from './shim.js';
 const CURSOR_HOME = join(homedir(), '.cursor');
 const CURSOR_MCP_PATH = join(CURSOR_HOME, 'mcp.json');
 const CURSOR_RULES_PATH = join(CURSOR_HOME, 'rules', 'sigil.mdc');
-
-// Package root — same trick claude-code.js uses to find dist/ vs src/.
-const PKG_DIR = PKG_ROOT; // bundle-safe package root (see claude-code.js)
 
 const meta = {
   id: 'cursor',
