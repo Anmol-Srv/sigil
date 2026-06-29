@@ -6,7 +6,7 @@ import { loadConfig } from '../setup/config-store.js';
 import { createWriteStream, writeFileSync, rmSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 
-import { SIGIL_DAEMON_LOG, SIGIL_HEARTBEAT, SIGIL_UPDATE_FLAG } from '../lib/paths.js';
+import { PKG_ROOT, SIGIL_DAEMON_LOG, SIGIL_HEARTBEAT, SIGIL_UPDATE_FLAG } from '../lib/paths.js';
 import { getSigilVersion } from '../lib/version.js';
 import {
   detectRunningDaemon,
@@ -212,6 +212,9 @@ export async function startDaemon({ foreground = false } = {}) {
         pid: process.pid,
         version: pkgVersion,
         node: process.version,
+        // The daemon's package root — lets the install-integrity check (S2) tell
+        // whether the serving daemon is the canonical git install or a foreign copy.
+        root: PKG_ROOT,
         startedAt: STARTED_AT,
         ts: Date.now(),
         supervised: process.env.SIGIL_SUPERVISED === '1',
@@ -221,6 +224,19 @@ export async function startDaemon({ foreground = false } = {}) {
   writeHeartbeat();
   const heartbeatTimer = setInterval(writeHeartbeat, 15_000);
   heartbeatTimer.unref();
+
+  // Install-integrity warning (S2): if the shims or this daemon don't line up
+  // with the canonical git install at ~/.sigil/app, say so loudly. We WARN
+  // rather than refuse to boot — a hard exit here could wedge auto-spawn into a
+  // restart loop on a broken shim — while `sigil doctor` reports it as a hard
+  // failure with the one-command fix.
+  try {
+    const { checkInstallIntegrity } = await import('../lib/install-state.js');
+    const r = checkInstallIntegrity();
+    if (r.applicable && !r.ok) {
+      for (const issue of r.issues) log(`install-integrity WARNING: ${issue.message} — fix: ${issue.fix}`);
+    }
+  } catch { /* best-effort — never block boot */ }
 
   // Background staleness check: tell the user when their git install has fallen
   // behind the release branch. Writes SIGIL_UPDATE_FLAG (read by the CLI

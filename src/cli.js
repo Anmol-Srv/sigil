@@ -619,6 +619,26 @@ running the checks — use when you've seen them and don't want a full pass.`);
     log('warn', 'Config validation', `unable to run: ${err.message}`);
   }
 
+  // Install integrity (S2): the launcher shims, the running daemon, and the git
+  // install at ~/.sigil/app must all agree. A skew here is the silent
+  // precondition behind the dueling-install corruption (two daemons / two PGlite
+  // versions over one single-process DB), so surface it as a hard fail with the
+  // one-command fix. Skipped for dev/source runs with no installed git copy.
+  try {
+    const { checkInstallIntegrity } = await import('./lib/install-state.js');
+    const r = checkInstallIntegrity();
+    if (r.applicable && r.ok) {
+      log('ok', 'Install integrity', `shims + daemon aligned with git install (v${r.canonical.version})`);
+    } else if (r.applicable) {
+      for (const issue of r.issues) {
+        log('fail', 'Install integrity', issue.message);
+        console.log(`    fix: ${issue.fix}`);
+      }
+    }
+  } catch (err) {
+    log('warn', 'Install integrity', `unable to check: ${err.message}`);
+  }
+
   // Database — the driver path is config-only (no DB touch); health + counts come
   // from the daemon's `status` RPC. doctor never opens the DB directly: in
   // embedded mode that would trip the single-process guard / abort PGlite, so the

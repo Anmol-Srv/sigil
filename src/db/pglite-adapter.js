@@ -7,12 +7,20 @@
  */
 
 import { createRequire } from 'node:module';
-import { mkdirSync, existsSync, renameSync } from 'node:fs';
+import {
+  mkdirSync, existsSync, renameSync,
+  openSync, writeSync, closeSync, readFileSync, unlinkSync,
+} from 'node:fs';
 
-import { SIGIL_DB_PATH } from '../lib/paths.js';
+import { PKG_ROOT, SIGIL_DB_PATH } from '../lib/paths.js';
 
 const _require = createRequire(import.meta.url);
 const ClientPG = _require('knex/lib/dialects/postgres/index.js');
+
+// PGlite version, recorded in the owner lock so a future PGlite upgrade can
+// reason about on-disk data-dir compatibility. Best-effort.
+let PGLITE_VERSION = null;
+try { PGLITE_VERSION = _require('@electric-sql/pglite/package.json').version; } catch { /* unknown */ }
 
 // In-process PGlite data directory (~/.sigil/db). Override with SIGIL_PGLITE_PATH.
 export const PGLITE_DB_PATH = process.env.SIGIL_PGLITE_PATH || SIGIL_DB_PATH;
@@ -74,6 +82,95 @@ async function assertEmbeddedOpenable() {
   throw err;
 }
 
+/**
+ * DB-owner lockfile (S4). PGlite is single-process: two processes opening the
+ * same data dir abort the WASM engine and corrupt the cluster. assertEmbeddedOpenable
+ * above blocks a NON-daemon open while a daemon is live, but it can't stop two
+ * DAEMONS from different installs (both exempt themselves) — the exact dueling
+ * -install state behind the recurring corruption. This lock is the structural
+ * backstop: a sibling `<dbPath>.owner.lock` recording who owns the dir. We key
+ * the lock on the data-dir path (outside the dir, so dump/restore never touch
+ * it) and record pid + install root + PGlite version.
+ */
+export function ownerLockPath(dbPath) {
+  return `${String(dbPath).replace(/\/+$/, '')}.owner.lock`;
+}
+
+function readOwnerLock(lockPath) {
+  try { return JSON.parse(readFileSync(lockPath, 'utf8')); } catch { return null; }
+}
+
+function pidAlive(pid) {
+  if (!Number.isInteger(pid)) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (err) { return err.code === 'EPERM'; } // exists but not ours → alive
+}
+
+/**
+ * Pure decision for what to do with an existing lock record. Split out so the
+ * acquire/reclaim/refuse logic is unit-testable without real processes/files.
+ * @returns {'create'|'held'|'reclaim'|'refuse'}
+ */
+export function ownerLockDecision(existing, { selfPid, isAlive }) {
+  if (!existing || !Number.isInteger(existing.pid)) return 'create'; // missing/garbage
+  if (existing.pid === selfPid) return 'held';                       // already ours
+  if (!isAlive(existing.pid)) return 'reclaim';                      // stale → take it
+  return 'refuse';                                                   // live, different owner
+}
+
+let heldLockPath = null;
+
+function acquireOwnerLock(dbPath) {
+  const lockPath = ownerLockPath(dbPath);
+  const record = JSON.stringify({
+    pid: process.pid, root: PKG_ROOT, pgliteVersion: PGLITE_VERSION, startedAt: Date.now(),
+  });
+  // At most two passes: the second covers a reclaim losing the create race to
+  // another reclaimer (its `wx` then fails and we re-evaluate the new owner).
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(lockPath, 'wx'); // atomic exclusive create — wins the race
+      writeSync(fd, record);
+      closeSync(fd);
+      heldLockPath = lockPath;
+      return;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      const existing = readOwnerLock(lockPath);
+      const decision = ownerLockDecision(existing, { selfPid: process.pid, isAlive: pidAlive });
+      if (decision === 'held') { heldLockPath = lockPath; return; }
+      if (decision === 'refuse') {
+        const e = new Error(
+          `Sigil's built-in database is already owned by another process (pid ${existing.pid}`
+          + `${existing.root ? ` at ${existing.root}` : ''}). PGlite is single-process — two installs `
+          + 'opening ~/.sigil/db corrupts it. Stop that process first (or, if it is dead, remove '
+          + `${lockPath}).`,
+        );
+        e.code = 'embedded_owned';
+        throw e;
+      }
+      // create / reclaim → drop the stale (or garbage) lock and retry the create.
+      try { unlinkSync(lockPath); } catch { /* already gone — fine */ }
+    }
+  }
+  // Lost the create race twice — re-read and refuse rather than open unguarded.
+  const owner = readOwnerLock(lockPath);
+  const e = new Error(`Could not acquire the built-in DB lock (${lockPath}); another process holds it.`);
+  e.code = 'embedded_owned';
+  e.owner = owner;
+  throw e;
+}
+
+function releaseOwnerLock() {
+  if (!heldLockPath) return;
+  const existing = readOwnerLock(heldLockPath);
+  // Only remove a lock we still own — never clobber a successor's lock.
+  if (existing && existing.pid === process.pid) {
+    try { unlinkSync(heldLockPath); } catch { /* already gone */ }
+  }
+  heldLockPath = null;
+}
+
 async function getPGlite(dbPath) {
   // Re-open if the cached singleton is bound to a DIFFERENT path than requested
   // — e.g. a reset wiped + recreated ~/.sigil/db within this same process. The
@@ -84,6 +181,7 @@ async function getPGlite(dbPath) {
   }
   if (!pgliteInstance) {
     await assertEmbeddedOpenable();
+    acquireOwnerLock(dbPath); // S4: refuse to open a dir another live process owns
     const { PGlite } = await import('@electric-sql/pglite');
     // Every extension Sigil's migrations CREATE must be registered here, or
     // `CREATE EXTENSION` fails ("control file not found"). Keep in sync with
@@ -116,6 +214,7 @@ export async function destroyPGlite() {
   if (inst) {
     try { await inst.close(); } catch { /* already closed */ }
   }
+  releaseOwnerLock(); // S4: hand off ownership once the engine is closed
 }
 
 /**
