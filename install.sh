@@ -101,6 +101,19 @@ step "Installing runtime dependencies…"
 ( cd "$APP_DIR" && npm install --omit=dev --no-audit --no-fund --loglevel=error ) \
   || die "\`npm install\` failed in $APP_DIR. Re-run the installer, or cd there and inspect."
 
+# ── 3b. evict any leftover GLOBAL npm install ─────────────────────────────────
+# Before git-native, Sigil shipped via npm. A stale `npm i -g @anmol-srv/sigil`
+# carries its own daemon + PGlite version; two installs fighting over the
+# single-process embedded DB (~/.sigil/db) is what corrupts it ("Aborted()").
+# The git clone is now the sole owner, so remove the global package. Best-effort,
+# never fatal.
+NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || echo '')"
+if [ -n "$NPM_GLOBAL_ROOT" ] && [ -d "$NPM_GLOBAL_ROOT/@anmol-srv/sigil" ]; then
+  step "Removing legacy global npm install (git is now the sole owner)…"
+  npm rm -g @anmol-srv/sigil >/dev/null 2>&1 \
+    || warn "Could not remove the global npm install — remove it with: npm rm -g @anmol-srv/sigil"
+fi
+
 # ── 4. put ~/.sigil/bin on PATH ───────────────────────────────────────────────
 # `sigil init` writes the launcher shims into $BIN_DIR; that dir is the single
 # interactive + harness entry point now (no npm global bin to lean on). Wire it

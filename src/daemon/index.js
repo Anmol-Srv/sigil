@@ -265,11 +265,34 @@ export async function startDaemon({ foreground = false } = {}) {
       if (cfg.db.mode !== 'embedded') return;
       const { default: cortexDb } = await import('../db/cortex.js');
       checkpointTimer = setInterval(() => {
-        cortexDb.raw('CHECKPOINT').catch((e) => log(`periodic checkpoint failed: ${e.message}`));
+        cortexDb.raw('CHECKPOINT').catch(async (e) => {
+          log(`periodic checkpoint failed: ${e.message}`);
+          // A CHECKPOINT abort is a poisoned WASM heap surfacing on a TIMER, not
+          // an RPC — so the dispatch-path recovery never sees it. Heal it here so
+          // an idle daemon (no request traffic) can't sit wedged (S1).
+          const { isPgliteAbort } = await import('../db/pglite-adapter.js');
+          if (isPgliteAbort(e) || e?.sigilPoisoned) {
+            const { recoverEmbeddedDb } = await import('./db-monitor.js');
+            await recoverEmbeddedDb({ log, reason: 'checkpoint-abort' });
+          }
+        });
       }, 60_000);
       checkpointTimer.unref();
     } catch { /* config/db unavailable — skip */ }
   })();
+
+  // Proactive DB health monitor (S1): periodically probe the store and, on a
+  // poisoned embedded engine, rebuild it (→ snapshot restore if torn). Recovery
+  // is crash-loop guarded. Skipped for lite-followers (no local DB). Unref'd.
+  let dbMonitorTimer = null;
+  if (config.network.mode !== 'lite-follower') {
+    try {
+      const { startDbHealthMonitor } = await import('./db-monitor.js');
+      dbMonitorTimer = startDbHealthMonitor({ log });
+    } catch (err) {
+      log(`db health monitor failed to start: ${err.message}`);
+    }
+  }
 
   // Periodic + post-boot snapshots of the embedded cluster (F2, field-report
   // Defect 1). A consistent dumpDataDir tarball, rotated, so F3 can restore a
@@ -303,6 +326,7 @@ export async function startDaemon({ foreground = false } = {}) {
     log(`received ${signal}, shutting down`);
     clearInterval(heartbeatTimer);
     if (checkpointTimer) clearInterval(checkpointTimer);
+    if (dbMonitorTimer) clearInterval(dbMonitorTimer);
     if (snapshotTimer) clearInterval(snapshotTimer);
     if (bootSnapshotTimer) clearTimeout(bootSnapshotTimer);
     try { rmSync(SIGIL_HEARTBEAT, { force: true }); } catch { /* ignore */ }

@@ -16,6 +16,7 @@ import {
   isGitInstall,
   checkForUpdate,
   applyUpdate,
+  evictLegacyNpmInstall,
   RELEASE_BRANCH,
 } from '../lib/git-update.js';
 
@@ -85,6 +86,14 @@ export async function runUpdate(args) {
       encoding: 'utf8',
     });
   }
+
+  // Evict any leftover global npm install (S3). A pre-git-native `npm i -g`
+  // copy carries its own daemon + PGlite version; two installs fighting over the
+  // single-process embedded DB is what corrupts it. Do this BEFORE the restart
+  // below, which then stops the (possibly stale) daemon and starts ours.
+  try {
+    await evictLegacyNpmInstall({ log: (m) => console.log(m) });
+  } catch { /* best-effort — never block the update */ }
 
   // Re-pin the launcher shims at the (unchanged) app dir + current node — cheap,
   // idempotent, and self-heals a shim left stale by a node-version switch.

@@ -13,10 +13,13 @@
 
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 import { PKG_ROOT } from './paths.js';
+
+// The legacy npm package name — the pre-git-native distribution channel.
+const LEGACY_NPM_PKG = '@anmol-srv/sigil';
 
 const run = promisify(execFile);
 
@@ -103,5 +106,56 @@ async function lockHash() {
     return await git(['rev-parse', 'HEAD:package-lock.json']);
   } catch {
     return ''; // no lockfile tracked — caller will just always install.
+  }
+}
+
+/**
+ * Evict a leftover GLOBAL npm install of Sigil (S3).
+ *
+ * Before the git-native move (PR #41), Sigil shipped as an npm package. After
+ * migrating, a stale `npm i -g @anmol-srv/sigil` can linger — and crucially it
+ * carries its OWN long-lived daemon and its OWN PGlite version. Two installs
+ * then fight over the single-process embedded DB (~/.sigil/db): the WASM engine
+ * aborts ("Aborted()") and the cluster corrupts. The git install must be the
+ * SOLE owner, so update/install removes the global package.
+ *
+ * Best-effort and never throws: a missing npm, no global install, or a failed
+ * removal all return a reason instead of aborting the update. Caller stops the
+ * old daemon separately (the update flow's `daemon restart` does this). Only
+ * meaningful when WE are the git install — guarded so we never remove the very
+ * package we're running from.
+ *
+ * @param {{log?:(m:string)=>void, npm?:(args:string[])=>Promise<{stdout:string}>}} [opts]
+ *   `npm` is injectable for tests; defaults to the real `npm` binary.
+ * @returns {Promise<{evicted:boolean, path?:string, reason?:string}>}
+ */
+export async function evictLegacyNpmInstall({ log = () => {}, npm } = {}) {
+  const runNpm = npm || ((args) => run('npm', args, { encoding: 'utf8', timeout: 120_000 }));
+
+  let globalRoot;
+  try {
+    globalRoot = (await runNpm(['root', '-g'])).stdout.trim();
+  } catch {
+    return { evicted: false, reason: 'npm-unavailable' };
+  }
+  if (!globalRoot) return { evicted: false, reason: 'no-global-root' };
+
+  const globalPkg = join(globalRoot, ...LEGACY_NPM_PKG.split('/'));
+  if (!existsSync(globalPkg)) return { evicted: false, reason: 'not-installed' };
+
+  // Never evict the package we're running from (e.g. a user still ON the npm
+  // install who hasn't migrated). The update command only runs for git installs,
+  // but guard regardless so this helper is safe to call anywhere.
+  if (globalPkg === PKG_ROOT || PKG_ROOT.startsWith(globalPkg + sep)) {
+    return { evicted: false, reason: 'self' };
+  }
+
+  log(`Removing legacy global npm install at ${globalPkg} — the git install is now the sole owner of ~/.sigil/db.`);
+  try {
+    await runNpm(['rm', '-g', LEGACY_NPM_PKG]);
+    return { evicted: true, path: globalPkg };
+  } catch (err) {
+    log(`(warning) could not remove the global npm install — remove it manually with \`npm rm -g ${LEGACY_NPM_PKG}\`: ${err.message.split('\n')[0]}`);
+    return { evicted: false, reason: 'rm-failed' };
   }
 }
