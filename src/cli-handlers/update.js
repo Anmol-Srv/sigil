@@ -163,6 +163,15 @@ async function applyMigrationsOrRevert({ from, lockChanged }) {
     if (client) await client.close().catch(() => {});
   }
 
+  // Defensive: an unexpected response shape must not throw past this function
+  // (which would skip the revert and leave new code on an unmigrated schema).
+  // Treat it like an unreachable daemon — migrations pending, code untouched.
+  if (!res || typeof res.status !== 'string') {
+    console.error('(warning) could not apply migrations: unexpected response from daemon');
+    console.error('Finish with: `sigil daemon stop && sigil migrate && sigil daemon start`');
+    return;
+  }
+
   if (res.status === 'migrated') {
     if (res.ran && res.ran.length) console.log(`Applied ${res.ran.length} migration${res.ran.length > 1 ? 's' : ''}.`);
     else console.log('Database schema already up to date.');
@@ -189,8 +198,15 @@ async function applyMigrationsOrRevert({ from, lockChanged }) {
   try {
     const landed = await revertInstall(from);
     if (lockChanged) await npmInstall();
-    await restartDaemon();
-    console.error(`  Reverted to ${landed}. Sigil is back on the previous version.`);
+    // Restart failure here is distinct from a revert failure: the code IS back
+    // on the old version, only the daemon didn't come up. Report it accurately.
+    try {
+      await restartDaemon();
+      console.error(`  Reverted to ${landed}. Sigil is back on the previous version.`);
+    } catch (err) {
+      console.error(`  Code reverted to ${landed}, but the daemon restart failed: ${err.message.split('\n')[0]}`);
+      console.error('  Bring it back up with `sigil daemon restart`.');
+    }
   } catch (err) {
     console.error(`  (warning) automatic code revert failed: ${err.message.split('\n')[0]}`);
     console.error(`  Recover manually: \`git -C ${PKG_ROOT} reset --hard ${from}\` then \`sigil daemon restart\`.`);
