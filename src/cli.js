@@ -41,6 +41,7 @@ Usage:
 
 Commands:
   init                     Interactive setup wizard (DB, LLM, embeddings, agents)
+  update [--check]         Update Sigil from the git release branch
   connect [--clients ...]  Re-pin launcher shims + re-sync AI client configs (fix stale paths)
   uninstall [--dry-run]    Remove Sigil's entries from selected AI clients
   doctor                   Diagnose Sigil setup (DB, LLM, embeddings, hooks)
@@ -188,11 +189,17 @@ const commands = {
   register: runRegister,
   why: runWhy,
   kind: runKind,
+  update: runUpdateVerb,
   daemon: runDaemonVerb,
   service: runServiceVerb,
   pair: runPairVerb,
   join: runJoinVerb,
 };
+
+async function runUpdateVerb(args) {
+  const { runUpdate } = await import('./cli-handlers/update.js');
+  return runUpdate(args);
+}
 
 async function runDaemonVerb(args) {
   const { runDaemon } = await import('./cli-handlers/daemon.js');
@@ -237,6 +244,23 @@ if (command !== 'doctor' && command !== 'export' && command !== 'register') {
       process.stderr.write(`⚠ Sigil: ${count} unacked hook issue${count > 1 ? 's' : ''} — run \`sigil doctor\` for details\n`);
     }
   } catch { /* never let the warning break the command */ }
+
+  // Surface a pending git update (flag set by the daemon's background staleness
+  // check). Suppressed for `update` itself — it has its own richer output.
+  if (command !== 'update') {
+    try {
+      const { existsSync, readFileSync } = await import('node:fs');
+      const { SIGIL_UPDATE_FLAG } = await import('./lib/paths.js');
+      if (existsSync(SIGIL_UPDATE_FLAG)) {
+        let detail = '';
+        try {
+          const f = JSON.parse(readFileSync(SIGIL_UPDATE_FLAG, 'utf8'));
+          if (f.local && f.remote) detail = ` (${f.local} → ${f.remote})`;
+        } catch { /* flag may be empty — fine */ }
+        process.stderr.write(`⬆ Sigil update available${detail} — run \`sigil update\`\n`);
+      }
+    } catch { /* never let the warning break the command */ }
+  }
 }
 
 try {

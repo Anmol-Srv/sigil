@@ -1,0 +1,55 @@
+name: release
+
+# Git is Sigil's distribution channel — there is no npm publish. This workflow
+# IS the release: on every push to master it rebuilds dist/ and force-pushes the
+# tree to the `release` branch, which `install.sh` clones and `sigil update`
+# fast-forwards. So merging to master ships to users automatically — no version
+# bump, no manual publish.
+#
+# The release branch = master's source + a freshly-CI-built dist/. We rebuild
+# here (rather than trusting the committed dist/) so users can never receive a
+# stale bundle, and we gate on the fast unit suite so a red push can't ship.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      # Gate: never force-push a red build to the branch users install from.
+      - name: Fast unit suite
+        run: npx vitest run
+
+      - name: Build dist bundle
+        run: npm run build
+
+      - name: Publish to release branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # dist/ is tracked but may be stale on master — commit the freshly-built
+          # bundle on top of this commit so the release tip always carries it.
+          git add -f dist
+          git commit -m "build: dist for release ${GITHUB_SHA::7} [skip ci]" || echo "dist unchanged — releasing master HEAD as-is"
+          git push --force origin HEAD:release

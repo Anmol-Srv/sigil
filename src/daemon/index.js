@@ -6,7 +6,7 @@ import { loadConfig } from '../setup/config-store.js';
 import { createWriteStream, writeFileSync, rmSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 
-import { SIGIL_DAEMON_LOG, SIGIL_HEARTBEAT } from '../lib/paths.js';
+import { SIGIL_DAEMON_LOG, SIGIL_HEARTBEAT, SIGIL_UPDATE_FLAG } from '../lib/paths.js';
 import { getSigilVersion } from '../lib/version.js';
 import {
   detectRunningDaemon,
@@ -221,6 +221,38 @@ export async function startDaemon({ foreground = false } = {}) {
   writeHeartbeat();
   const heartbeatTimer = setInterval(writeHeartbeat, 15_000);
   heartbeatTimer.unref();
+
+  // Background staleness check: tell the user when their git install has fallen
+  // behind the release branch. Writes SIGIL_UPDATE_FLAG (read by the CLI
+  // preamble → "update available") when behind, removes it when in sync. Git
+  // installs only; best-effort; unref'd so it never holds the process open.
+  // First check 30s after boot (let the daemon settle), then every 12h. Opt out
+  // with SIGIL_NO_UPDATE_CHECK=1.
+  if (process.env.SIGIL_NO_UPDATE_CHECK !== '1') {
+    (async () => {
+      try {
+        const { isGitInstall, checkForUpdate } = await import('../lib/git-update.js');
+        if (!isGitInstall()) return;
+        const runCheck = async () => {
+          try {
+            const s = await checkForUpdate();
+            if (s.behind > 0) {
+              writeFileSync(SIGIL_UPDATE_FLAG, JSON.stringify({ ...s, ts: Date.now() }), 'utf8');
+              log(`update available: ${s.local} → ${s.remote} (${s.behind} behind ${s.branch})`);
+            } else {
+              rmSync(SIGIL_UPDATE_FLAG, { force: true });
+            }
+          } catch (e) {
+            log(`update check failed: ${e.message.split('\n')[0]}`);
+          }
+        };
+        const firstCheck = setTimeout(runCheck, 30_000);
+        firstCheck.unref();
+        const updateCheckTimer = setInterval(runCheck, 12 * 60 * 60 * 1000);
+        updateCheckTimer.unref();
+      } catch { /* git-update unavailable — skip */ }
+    })();
+  }
 
   // Periodic CHECKPOINT for the embedded store (field-report Defect 1): bounds how
   // much WAL a hard kill (SIGKILL / crash / power loss) would need to replay,

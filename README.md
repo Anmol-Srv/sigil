@@ -14,15 +14,22 @@ Local-first memory shared across Claude Code, Codex CLI, Cursor, Kiro, and any a
 curl -fsSL https://raw.githubusercontent.com/Anmol-Srv/sigil/master/install.sh | sh
 ```
 
-That's it. The installer puts Sigil on your PATH persistently, then launches it and opens a dashboard in your browser where you configure everything — database, LLM, and embedding provider — with live connection tests and one-click fixes. No config files to edit, no setup prompts in the terminal.
+That's it. The installer clones Sigil into `~/.sigil/app`, puts it on your PATH persistently, then launches it and opens a dashboard in your browser where you configure everything — database, LLM, and embedding provider — with live connection tests and one-click fixes. No config files to edit, no setup prompts in the terminal.
 
-> **Why not `npx`?** Sigil is persistent infrastructure (a background daemon + editor hooks pinned to a path). `npx`/`pnpx` runs from a throwaway cache your package manager later deletes, which would silently break memory — so Sigil refuses to set up from there. The installer above (or `npm install -g @anmol-srv/sigil`) is the supported path.
+Update any time with:
+
+```bash
+sigil update
+```
+
+It fast-forwards your install to the latest release — git is the source of truth, so there's no package to reinstall. The background daemon also checks periodically and tells you when an update is available.
+
+> **Why git, not npm?** Sigil is persistent infrastructure (a background daemon + editor hooks pinned to a path). It installs as a git clone and updates with `git pull` under the hood; pushing to the release branch *is* the release. `npx`/`pnpx` was never viable — it runs from a throwaway cache your package manager later deletes, which would silently break memory, so Sigil refuses to set up from there.
 
 <div align="center">
 
 Configure in the dashboard. Open Claude Code. Memory is already wired in.
 
-[![npm](https://img.shields.io/npm/v/@anmol-srv%2Fsigil)](https://www.npmjs.com/package/@anmol-srv/sigil)
 [![Docs](https://img.shields.io/badge/docs-sigil--web.pages.dev-5e8cff)](https://sigil-web.pages.dev/docs/)
 [![MCP](https://img.shields.io/badge/MCP-native-8B5CF6)](https://modelcontextprotocol.io/)
 [![Benchmark](https://img.shields.io/badge/LongMemEval%20oracle-R@10%20100%25-6B1A2A)](./eval/longmemeval/RESULTS.md)
@@ -80,7 +87,7 @@ sigil facts --limit=20                   # list recent facts
 sigil why "auth setup"                   # explain the search
 ```
 
-That's exactly how Claude Code (via Bash tool), Codex CLI, terminal-based agents, Hermes, and your own CI scripts use Sigil today. The CLI is auto-detected on `PATH` once installed (the `curl … | sh` installer, or `npm install -g @anmol-srv/sigil`); agents discover it the same way they discover `git` or `node`.
+That's exactly how Claude Code (via Bash tool), Codex CLI, terminal-based agents, Hermes, and your own CI scripts use Sigil today. The CLI is auto-detected on `PATH` once installed (via the `curl … | sh` installer); agents discover it the same way they discover `git` or `node`.
 
 For clients that prefer structured tool calls (Cursor, Continue, Cline, Claude Desktop, Kiro, any MCP-spec agent), Sigil also exposes the same memory as a 9-tool MCP server. `sigil register --print` generates the config. MCP is the second interface, not the only one.
 
@@ -147,7 +154,7 @@ Retrieval is hybrid: pgvector cosine + tsvector keyword fused via Reciprocal Ran
 | **Pluggable pods** | Five built-in kinds; add `slack_channel`, `github_pr`, `codex_session`, etc. as contract files. No schema migrations |
 | **AUDM dedup** | Add / Update / Delete / Merge intelligence stops fact pile-up across thousands of saves |
 | **Fully air-gappable** | Pick Ollama for both LLM and embeddings. Zero data leaves your network |
-| **No vendor account** | `npm install` + your Postgres = working brain. No signup, no API key required to start |
+| **No vendor account** | One `curl … | sh` install + your Postgres = working brain. No signup, no API key required to start |
 | **Hot-context snapshot** | Top-20 facts always loaded via `@~/.sigil/CLAUDE.md` import. Instant context with zero latency |
 | **9-tool MCP server** | `search`, `search_entity`, `traverse_graph`, `get_fact_context`, `get_entity_context`, `get_pod`, `list_pods`, `status`, `ingest` |
 | **Honest benchmarks** | Public LongMemEval oracle: R@10 = 100%, 33ms p50 search. Reproducible. No in-house corpus theater |
@@ -186,9 +193,8 @@ Finishing the wizard auto-detects every AI client on your machine (Claude Code, 
 
 ### Prefer the terminal?
 
-The interactive CLI setup still works and is fully equivalent:
+The same `curl … | sh` installer auto-falls back to the terminal wizard when there's no browser (headless / SSH / CI). After installing, the CLI setup is fully equivalent:
 ```bash
-npm install -g @anmol-srv/sigil
 sigil init                                                    # interactive
 sigil init --url "postgres://user:pass@ep-foo.neon.tech/sigil?sslmode=require"  # non-interactive (CI / dotfiles)
 sigil doctor                                                  # verify everything's wired
@@ -415,7 +421,7 @@ A: Single-user for now. Multiple installs sharing one Postgres works (see [Cross
 A: Your prompt still goes through. Every hook wraps in a top-level try/catch that fails silently, Sigil's invariant is **a broken memory layer must never block a working prompt.** Errors append to `~/.sigil/.hook-errors.log`; `sigil doctor` surfaces them. After 5 unacked errors in 24h, `sigil doctor` exits with code 1 so CI / scripts can catch it.
 
 **Q: How do I uninstall cleanly?**
-A: `npm uninstall -g @anmol-srv/sigil` removes the binary. `rm -rf ~/.sigil` removes data and config. Unwire from Claude Code by removing the sigil hook entries from `~/.claude/settings.json` and the `@~/.sigil/CLAUDE.md` line from `~/.claude/CLAUDE.md`. The Postgres database (`sigil`) and user (`sigil_app`) survive. Drop them yourself if you want them gone.
+A: `rm -rf ~/.sigil` removes the install (the git clone at `~/.sigil/app`), data, and config in one shot. Remove the `export PATH="$HOME/.sigil/bin:$PATH"` line the installer added to your shell rc. Unwire from Claude Code by removing the sigil hook entries from `~/.claude/settings.json` and the `@~/.sigil/CLAUDE.md` line from `~/.claude/CLAUDE.md`. The Postgres database (`sigil`) and user (`sigil_app`) survive. Drop them yourself if you want them gone.
 
 **Q: Where can I see how the retrieval pipeline actually works?**
 A: Read `src/memory/search/hybrid.js` (entry point) and `src/memory/search/hybrid-sql.js` (the single-SQL RRF + ACT-R activation query). The pod kind registry contracts are in `src/memory/pods/kinds/`. Hooks are in `src/hooks/`.
