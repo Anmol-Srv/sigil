@@ -485,6 +485,7 @@ pre.result {
 .badge.warn { background: var(--warn-bg); color: var(--warn); border-color: rgba(232,169,74,0.30); }
 .badge.err  { background: var(--err-bg);  color: var(--err);  border-color: rgba(226,100,100,0.30); }
 .badge.info { background: var(--info-bg); color: var(--accent); border-color: rgba(94,140,255,0.30); }
+.badge.accent { background: rgba(154,134,255,0.12); color: #9a86ff; border-color: rgba(154,134,255,0.30); }
 
 .pill {
   display: inline-flex;
@@ -508,11 +509,14 @@ pre.result {
 .pill.warn::before { background: var(--warn); }
 .pill.err   { background: var(--err-bg);  color: var(--err);  border-color: rgba(226,100,100,0.30); }
 .pill.err::before { background: var(--err); }
+.pill.info  { background: var(--info-bg); color: var(--accent); border-color: rgba(94,140,255,0.30); }
+.pill.info::before { background: var(--accent); }
 
 /* ════════════════════════════════════════════════════════════════════════
    Activity — causal trace log
    ════════════════════════════════════════════════════════════════════════ */
-.trace-filters { display: flex; gap: var(--s-2); margin-bottom: var(--s-4); }
+.trace-filters { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-4); flex-wrap: wrap; }
+.filter-lbl { font-size: var(--t-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-3); margin-right: var(--s-1); }
 .chip {
   height: 28px;
   padding: 0 var(--s-3);
@@ -553,6 +557,7 @@ pre.result {
 .trace-summary { flex: 1; min-width: 0; font-size: var(--t-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trace-ns { font-family: var(--font-mono); font-size: var(--t-xs); color: var(--fg-3); background: var(--bg-surface-2); padding: 1px 6px; border: 1px solid var(--border); flex-shrink: 0; }
 .trace-dur { color: var(--fg-3); font-family: var(--font-mono); font-size: var(--t-xs); flex-shrink: 0; min-width: 44px; text-align: right; }
+.trace-sess { font-family: var(--font-mono); font-size: var(--t-xs); color: var(--fg-3); background: var(--bg-surface-2); padding: 1px 6px; border: 1px solid var(--border); flex-shrink: 0; }
 
 .trace-detail { padding: var(--s-2) var(--s-4) var(--s-4); border-top: 1px solid var(--border); background: var(--bg-canvas); }
 .trace-block { margin-top: var(--s-4); }
@@ -1166,8 +1171,9 @@ footer .footer-inner {
   /* Stat grid: single column */
   .stat-grid { grid-template-columns: 1fr; }
 
-  /* Activity list: hide namespace and duration to give summary more room */
+  /* Activity list: hide namespace, session and duration to give summary more room */
   .trace-ns  { display: none; }
+  .trace-sess { display: none; }
   .trace-dur { display: none; }
 
   /* Wizard actions: stack Continue above Back, both full-width */

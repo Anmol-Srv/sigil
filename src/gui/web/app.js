@@ -61,7 +61,7 @@ function renderKv(node, entries) {
   node.innerHTML = entries.map(([k, v]) => `<div class="row"><div class="k">${escape(k)}</div><div class="v">${escape(v)}</div></div>`).join('');
 }
 
-const validRoutes = ['health', 'kb', 'graph', 'devices', 'activity', 'setup', 'settings', 'methods'];
+const validRoutes = ['health', 'kb', 'graph', 'devices', 'activity', 'engine', 'setup', 'settings', 'methods'];
 function setRoute(name) {
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
   $$('nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === name));
@@ -73,6 +73,7 @@ function setRoute(name) {
   if (name === 'settings') { refreshEnv(); refreshSettingsClients(); }
   if (name === 'devices')  refreshDevices();
   if (name === 'activity') { ensureActivityWs(); loadTraces(); }
+  if (name === 'engine')   startEnginePolling(); else stopEnginePolling();
 }
 function routeFromHash() {
   const r = (window.location.hash || '#health').slice(1);
@@ -1241,6 +1242,7 @@ async function restartAndClose(out) {
 // ── Activity / causal trace log ──────────────────────────────────────
 let ws = null;
 let traceFilter = '';
+let traceAgentFilter = '';
 const seenTraceUids = new Set();
 
 function ensureActivityWs() {
@@ -1260,8 +1262,9 @@ function setActivityStatus(state, label) { const el = $('#activity-status'); if 
 function onLiveEvent(evt) {
   if (evt.type === 'trace') {
     if (traceFilter && evt.kind !== traceFilter) return;
+    if (traceAgentFilter && evt.agent !== traceAgentFilter) return;
     prependTrace(evt, true);
-  } else if (!traceFilter) {
+  } else if (!traceFilter && !traceAgentFilter) {
     // operational events (rpc/pair/device) only shown in the unfiltered view
     prependOpEvent(evt);
   }
@@ -1271,7 +1274,7 @@ async function loadTraces() {
   const list = $('#trace-list');
   if (!list) return;
   try {
-    const { traces } = await rpc('trace.list', { kind: traceFilter || undefined, limit: 50 });
+    const { traces } = await rpc('trace.list', { kind: traceFilter || undefined, agent: traceAgentFilter || undefined, limit: 50 });
     seenTraceUids.clear();
     list.innerHTML = '';
     if (!traces.length) { $('#activity-empty').style.display = 'block'; return; }
@@ -1310,12 +1313,20 @@ function traceCard(t) {
   li.className = 'trace-card';
   const dur = t.durationMs != null ? `${t.durationMs}ms` : '';
   const ns = t.namespace ? `<span class="trace-ns">${escape(t.namespace)}</span>` : '';
+  // Attribution: who made this call. agent answers "which agent", sessionId
+  // "which session" — the pair that was previously unrecorded.
+  const agent = t.agent ? `<span class="badge ${agentBadge(t.agent)}" title="originating agent">${escape(t.agent)}</span>` : '';
+  const sess = t.sessionId
+    ? `<span class="trace-sess" title="session ${escape(t.sessionId)}">${escape(shortId(t.sessionId))}</span>`
+    : '';
   li.innerHTML = `
     <button class="trace-head" type="button" aria-expanded="false">
       <span class="trace-caret">▸</span>
       <span class="trace-ts">${escape(clock(t.ts))}</span>
       <span class="badge ${traceBadge(t.kind)}">${escape(t.kind)}</span>
+      ${agent}
       <span class="trace-summary">${escape(t.summary)}</span>
+      ${sess}
       ${ns}
       <span class="trace-dur">${escape(dur)}</span>
     </button>
@@ -1334,9 +1345,43 @@ function traceCard(t) {
 // ── Detail renderers ─────────────────────────────────────────────────
 function renderTraceDetail(t) {
   const d = t.detail || {};
-  if (t.kind === 'search') return renderSearchTrace(d);
-  if (t.kind === 'ingest') return renderIngestTrace(d);
-  return `<pre class="trace-json">${escape(JSON.stringify(d, null, 2))}</pre>`;
+  const source = renderSourceBlock(t, d);
+  if (t.kind === 'search') return source + renderSearchTrace(d);
+  if (t.kind === 'ingest') return source + renderIngestTrace(d);
+  if (t.kind === 'engine') return source + renderEngineTrace(d);
+  return source + `<pre class="trace-json">${escape(JSON.stringify(d, null, 2))}</pre>`;
+}
+
+// Who made this call — the attribution block. Surfaced on every trace so an
+// unexplained search/expansion can be traced to a specific agent + session.
+function renderSourceBlock(t, d) {
+  const rows = [
+    ['agent', t.agent],
+    ['session', t.sessionId],
+    ['transport', t.transport],
+    ['device', t.deviceId],
+    ['cwd', d.cwd],
+  ].filter(([, v]) => v != null && v !== '');
+  if (!rows.length) return '';
+  return traceBlock('Source', rows.map(([k, v]) => kvline(k, v)).join(' '));
+}
+
+// Managed-session engine event (dispatch/result/fallback/recycle/ready).
+function renderEngineTrace(d) {
+  const rows = [
+    ['event', d.type],
+    ['worker', d.workerId],
+    ['tmux session', d.session],
+    ['reqId', d.reqId],
+    ['caller', d.caller],
+    ['reason', d.reason],
+    ['viaFallback', d.type === 'fallback' ? true : undefined],
+    ['durationMs', d.durationMs],
+    ['inputTokens', d.inputTokens],
+    ['outputTokens', d.outputTokens],
+    ['tokensUsed', d.tokensUsed],
+  ].filter(([, v]) => v !== null && v !== undefined && v !== '');
+  return traceBlock('Engine event', rows.map(([k, v]) => kvline(k, v)).join(' '));
 }
 
 const sc = (v) => (v === null || v === undefined ? '—' : String(v));
@@ -1456,8 +1501,20 @@ function clock(iso) { return (iso || '').slice(11, 19) || (iso || '').slice(0, 1
 function traceBadge(kind) {
   if (kind === 'search') return 'info';
   if (kind === 'ingest') return 'ok';
+  if (kind === 'engine') return 'accent';
   if (kind === 'lifecycle') return 'warn';
   return 'info';
+}
+function agentBadge(agent) {
+  if (agent === 'claude-code') return 'info';
+  if (agent === 'mcp') return 'ok';
+  if (agent === 'codex') return 'warn';
+  if (agent === 'cursor') return 'accent';
+  return ''; // cli + unknown → neutral
+}
+function shortId(id) {
+  const s = String(id);
+  return s.length > 10 ? s.slice(0, 8) + '…' : s;
 }
 function audmBadge(action) {
   const a = String(action || '').toUpperCase();
@@ -1492,12 +1549,80 @@ $('#trace-filters')?.addEventListener('click', (e) => {
   $$('#trace-filters .chip').forEach((c) => c.classList.toggle('active', c === chip));
   loadTraces();
 });
+$('#trace-agent-filters')?.addEventListener('click', (e) => {
+  const chip = e.target.closest('[data-agent-filter]');
+  if (!chip) return;
+  traceAgentFilter = chip.dataset.agentFilter || '';
+  $$('#trace-agent-filters .chip').forEach((c) => c.classList.toggle('active', c === chip));
+  loadTraces();
+});
 $('#trace-refresh')?.addEventListener('click', loadTraces);
 $('#trace-clear')?.addEventListener('click', async () => {
   if (!confirm('Clear the entire trace log? This deletes persisted history.')) return;
   try { await rpc('trace.clear'); } catch {}
   loadTraces();
 });
+
+// ── Engine (managed-session warm tmux workers) ──────────────────────
+let engineTimer = null;
+function startEnginePolling() {
+  loadEngine();
+  if (engineTimer) return;
+  engineTimer = setInterval(() => { if (location.hash === '#engine') loadEngine(); }, 5000);
+}
+function stopEnginePolling() { if (engineTimer) { clearInterval(engineTimer); engineTimer = null; } }
+
+const STATE_PILL = { ready: 'ok', busy: 'info', booting: 'warn', unhealthy: 'err' };
+
+async function loadEngine() {
+  const setStatus = (state, label) => { const el = $('#engine-status'); if (el) { el.className = `conn-status ${state}`; el.textContent = label; } };
+  let s;
+  try { s = await rpc('engine.status'); }
+  catch (err) { setStatus('err', 'error'); $('#engine-workers').innerHTML = `<div class="empty">could not load engine status: ${escape(err.message)}</div>`; return; }
+
+  const running = !!s.running;
+  setStatus(running ? 'ok' : '', running ? 'managed' : 'one-shot');
+
+  $('#eng-mode').textContent = running ? 'Managed' : 'One-shot';
+  $('#eng-mode-sub').textContent = running ? 'warm tmux workers' : 'claude -p per call';
+  $('#eng-pool').textContent = sc(s.poolSize);
+  $('#eng-budget').textContent = s.tokenBudget != null ? `${s.tokenBudget.toLocaleString()} tok budget` : '—';
+  const queued = Object.values(s.queued || {}).reduce((a, b) => a + b, 0);
+  $('#eng-queued').textContent = sc(queued);
+  $('#eng-pending').textContent = sc(s.pending);
+
+  const host = $('#engine-workers');
+  if (!running) {
+    // Explain WHY the engine isn't warm so the empty state is actionable.
+    let why;
+    if (!s.enabled) why = 'Managed-session engine is off. Every LLM call uses the proven one-shot <code>claude -p</code> path.';
+    else if (!s.tmuxAvailable) why = '<code>SIGIL_MANAGED_SESSION=true</code> is set, but <code>tmux</code> was not found on PATH — staying on one-shot.';
+    else if (s.provider && s.provider !== 'claude-cli') why = `LLM provider is <code>${escape(s.provider)}</code> (not <code>claude-cli</code>) — API providers don't need warm sessions.`;
+    else why = 'Engine enabled but no workers are running yet.';
+    host.innerHTML = `<div class="empty">${why}<br><span class="muted">Enable with <code>SIGIL_MANAGED_SESSION=true</code> on a host with <code>tmux</code> + the <code>claude</code> CLI, then restart the daemon.</span></div>`;
+  } else if (!s.workers || !s.workers.length) {
+    host.innerHTML = `<div class="empty">No live workers — the pool is spinning up or has yielded to one-shot after repeated boot failures. Check <code>~/.sigil/sigild.log</code>.</div>`;
+  } else {
+    const rows = s.workers.map((w) => {
+      const session = `${escape(s.sessionPrefix || 'sigil-')}${escape(w.id)}`;
+      const pct = s.tokenBudget ? Math.min(100, Math.round((w.tokensUsed / s.tokenBudget) * 100)) : null;
+      return `<tr>
+        <td class="mono">${escape(w.id)}</td>
+        <td class="mono">${session}</td>
+        <td><span class="pill ${STATE_PILL[w.state] || ''}">${escape(w.state)}</span></td>
+        <td class="num">${w.tokensUsed.toLocaleString()}${pct != null ? ` <span class="muted">(${pct}%)</span>` : ''}</td>
+      </tr>`;
+    }).join('');
+    host.innerHTML = `<div class="trace-table-wrap"><table class="trace-table">
+      <thead><tr><th>worker</th><th>tmux session</th><th>state</th><th>tokens used</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+  }
+
+  $('#engine-hint').innerHTML = running
+    ? 'Inspect a worker pane directly: <code>tmux attach -t sigil-&lt;worker&gt;</code> (detach with <code>Ctrl-b d</code>) or <code>tmux capture-pane -t sigil-&lt;worker&gt; -p</code>. Per-task events stream into <a href="#activity" data-route="activity">Activity → Engine</a>.'
+    : '';
+}
+$('#engine-refresh')?.addEventListener('click', loadEngine);
 
 // ── Setup tab (legacy DB form) ──────────────────────────────────────
 $('#db-mode')?.addEventListener('change', (e) => {

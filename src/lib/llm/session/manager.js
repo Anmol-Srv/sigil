@@ -87,6 +87,10 @@ export class SessionManager {
     };
     this.now = deps.now || Date.now;
     this.log = deps.log || (() => {});
+    // onEvent — best-effort structured telemetry hook (dispatch/result/fallback/
+    // recycle/ready). The daemon wires it to recordTrace(kind:'engine') so the
+    // warm engine shows up in the Activity feed; tests omit it. Never throws.
+    this.onEvent = deps.onEvent || null;
     this.writeFileFn = deps.writeFileFn || writeFile;
     this.mkdirFn = deps.mkdirFn || mkdir;
 
@@ -162,9 +166,9 @@ export class SessionManager {
    * source type (engine disabled / not started), runs the fallback directly so
    * the caller never hangs.
    */
-  submit({ sourceType, prompt, model, schema } = {}) {
+  submit({ sourceType, prompt, model, schema, caller } = {}) {
     const reqId = randomUUID();
-    const task = { reqId, sourceType, prompt, model, schema, enqueuedAt: this.now() };
+    const task = { reqId, sourceType, prompt, model, schema, caller: caller ?? null, enqueuedAt: this.now() };
 
     if (!this.hasWorkers(sourceType)) {
       return this.runFallback(task, 'no-workers');
@@ -195,6 +199,7 @@ export class SessionManager {
       w.state = STATE.READY;
       this.bootFailures.set(w.sourceType, 0);
       this.log(`worker ${w.id} booted (get_task handshake) — ready`);
+      this.emit({ type: 'worker-ready', workerId: w.id, sourceType: w.sourceType, session: this.sessionNameOf(w) });
       this.dispatch(w.sourceType);
     }
     if (!w || !w.currentReqId) return { empty: true };
@@ -208,18 +213,29 @@ export class SessionManager {
     const p = this.pending.get(reqId);
     if (!p || p.settled) return { ok: true, duplicate: true }; // resolve-once
 
+    const inputTokens = estimateTokens(p.task.prompt);
+    const outputTokens = estimateTokens(String(result ?? ''));
     this.settle(p, {
       text: String(result ?? ''),
-      inputTokens: estimateTokens(p.task.prompt),
-      outputTokens: estimateTokens(String(result ?? '')),
+      inputTokens,
+      outputTokens,
       model: p.task.model || null,
       cost: 0,
       viaFallback: false,
+      workerId,
+      reqId,
     });
 
     const w = this.workers.get(workerId);
+    this.emit({
+      type: 'result', workerId, reqId, sourceType: p.task.sourceType, caller: p.task.caller,
+      session: this.sessionNameOf(workerId), inputTokens, outputTokens,
+      tokensUsed: w ? w.tokensUsed + inputTokens + outputTokens : null,
+      durationMs: p.task.dispatchedAt ? this.now() - p.task.dispatchedAt : null,
+    });
+
     if (w) {
-      w.tokensUsed += estimateTokens(p.task.prompt) + estimateTokens(String(result ?? ''));
+      w.tokensUsed += inputTokens + outputTokens;
       this.releaseWorker(w); // → READY or RECYCLE if over budget
     }
     return { ok: true };
@@ -248,7 +264,12 @@ export class SessionManager {
       w.state = STATE.BUSY;
       w.currentReqId = task.reqId;
       p.workerId = w.id;
+      task.dispatchedAt = this.now();
       p.timer = this.timers.set(this.taskTimeoutMs, () => this.onTimeout(task.reqId));
+      this.emit({
+        type: 'dispatch', workerId: w.id, reqId: task.reqId, sourceType,
+        caller: task.caller, session: this.sessionNameOf(w),
+      });
 
       const driver = this.getDriver(sourceType);
       Promise.resolve(driver.nudge(this.tmux, driver.sessionName(w.id)))
@@ -276,9 +297,16 @@ export class SessionManager {
       w.state = STATE.UNHEALTHY;
     }
 
+    this.emit({
+      type: 'fallback', reqId, reason: 'timeout', sourceType: p.task.sourceType,
+      caller: p.task.caller, workerId: w ? w.id : null, session: w ? this.sessionNameOf(w) : null,
+    });
     const fb = await this.runFallbackRaw(p.task);
     if (!p.settled) this.settle(p, fb);
-    if (w) await this.recycle(w);
+    if (w) {
+      this.emit({ type: 'recycle', workerId: w.id, sourceType: w.sourceType, reason: 'timeout', session: this.sessionNameOf(w) });
+      await this.recycle(w);
+    }
   }
 
   /**
@@ -313,6 +341,7 @@ export class SessionManager {
     w.currentReqId = null;
     if (w.tokensUsed >= this.tokenBudget) {
       this.log(`worker ${w.id} hit token budget (${w.tokensUsed} ≥ ${this.tokenBudget}) — recycling`);
+      this.emit({ type: 'recycle', workerId: w.id, sourceType: w.sourceType, reason: 'token-budget', tokensUsed: w.tokensUsed, session: this.sessionNameOf(w) });
       this.recycle(w).catch((e) => this.log(`recycle ${w.id} failed: ${e.message}`));
     } else {
       w.state = STATE.READY;
@@ -401,12 +430,14 @@ export class SessionManager {
       await this.spawnWorker(w.sourceType).catch((e) => this.log(`respawn ${w.sourceType} failed: ${e.message}`));
     } else if (fails >= this.maxBootFailures) {
       this.log(`managed-session: ${w.sourceType} worker failed to boot ${fails}× — staying on one-shot for this source type`);
+      this.emit({ type: 'boot-failure', workerId: w.id, sourceType: w.sourceType, fails });
     }
   }
 
   /** Run the fallback and wrap into the uniform result shape (no pending entry). */
   async runFallback(task, reason) {
     this.log(`task ${task.reqId} → fallback (${reason})`);
+    this.emit({ type: 'fallback', reqId: task.reqId, reason, sourceType: task.sourceType, caller: task.caller, workerId: null });
     return this.runFallbackRaw(task);
   }
 
@@ -421,11 +452,28 @@ export class SessionManager {
       model: r.model || task.model || null,
       cost: r.cost || 0,
       viaFallback: true,
+      // No warm worker produced this result — the call took the one-shot path.
+      workerId: null,
+      reqId: task.reqId,
     };
   }
 
   safeDriver(sourceType) {
     try { return this.getDriver(sourceType); } catch { return null; }
+  }
+
+  /** tmux session name for a worker (e.g. 'sigil-claude-0'), driver-defined. */
+  sessionNameOf(workerOrId) {
+    const w = typeof workerOrId === 'string' ? this.workers.get(workerOrId) : workerOrId;
+    if (!w) return null;
+    const d = this.safeDriver(w.sourceType);
+    return d ? d.sessionName(w.id) : `sigil-${w.id}`;
+  }
+
+  /** Fire a structured telemetry event. Best-effort: a bad hook never breaks work. */
+  emit(ev) {
+    if (!this.onEvent) return;
+    try { this.onEvent(ev); } catch { /* telemetry must never throw */ }
   }
 
   /** Snapshot for diagnostics / `status`. */

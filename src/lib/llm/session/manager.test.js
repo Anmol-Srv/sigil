@@ -55,6 +55,7 @@ function makeManager(overrides = {}) {
   const fallbackCalls = [];
   const fallback = overrides.fallback || (async (task) => { fallbackCalls.push(task); return { text: 'FALLBACK', model: 'haiku' }; });
 
+  const events = [];
   const mgr = new SessionManager({
     tmux,
     getDriver: () => driver,
@@ -67,8 +68,9 @@ function makeManager(overrides = {}) {
     writeFileFn: async () => {},
     mkdirFn: async () => {},
     log: () => {},
+    onEvent: (ev) => events.push(ev),
   });
-  return { mgr, tmux, driver, timers, fallbackCalls };
+  return { mgr, tmux, driver, timers, fallbackCalls, events };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -318,5 +320,48 @@ describe('SessionManager — boot handshake (finding-1 fix)', () => {
     const r = await mgr.submit({ sourceType: 'claude', prompt: 'x' });
     expect(r.viaFallback).toBe(true); // one-shot path
     expect(fallbackCalls).toHaveLength(1);
+  });
+});
+
+describe('SessionManager — telemetry events (attribution)', () => {
+  it('emits dispatch + result events carrying workerId/reqId/caller for the Activity feed', async () => {
+    const { mgr, events } = makeManager();
+    await mgr.start();
+    const wid = mgr.stats().workers[0].id;
+    events.length = 0; // ignore worker-ready from boot handshake below
+
+    const p = mgr.submit({ sourceType: 'claude', prompt: 'extract', model: 'haiku', caller: 'extractor' });
+    const task = mgr.getTask(wid); // boots+ready (worker-ready) then dispatch
+    mgr.submitResult(wid, task.reqId, '{"facts":[]}');
+    const r = await p;
+
+    // Result carries correlation back to the caller → flows into llm_log.
+    expect(r).toMatchObject({ workerId: wid, reqId: task.reqId, viaFallback: false });
+
+    const dispatch = events.find((e) => e.type === 'dispatch');
+    expect(dispatch).toMatchObject({ workerId: wid, reqId: task.reqId, caller: 'extractor', session: `sigil-${wid}` });
+    const result = events.find((e) => e.type === 'result');
+    expect(result).toMatchObject({ workerId: wid, reqId: task.reqId, caller: 'extractor', session: `sigil-${wid}` });
+    expect(result.durationMs).not.toBeNull();
+  });
+
+  it('emits a fallback event (no-workers) with the reason', async () => {
+    const { mgr, events } = makeManager({ pools: {} });
+    await mgr.start();
+    await mgr.submit({ sourceType: 'claude', prompt: 'x', caller: 'audm' });
+    const fb = events.find((e) => e.type === 'fallback');
+    expect(fb).toMatchObject({ reason: 'no-workers', caller: 'audm', workerId: null });
+  });
+
+  it('emits fallback + recycle on a dead-man timeout', async () => {
+    const { mgr, timers, events } = makeManager();
+    await mgr.start();
+    const wid = mgr.stats().workers[0].id;
+    const p = mgr.submit({ sourceType: 'claude', prompt: 'never', caller: 'synth' });
+    mgr.getTask(wid);
+    await timers.fireLast(); // dead-man fires
+    await p;
+    expect(events.find((e) => e.type === 'fallback')).toMatchObject({ reason: 'timeout', caller: 'synth' });
+    expect(events.find((e) => e.type === 'recycle')).toMatchObject({ reason: 'timeout', workerId: wid });
   });
 });

@@ -24,6 +24,9 @@ export function registerLlmLog(registry) {
       durationMs: row.durationMs,
       status: row.status,
       error: row.error?.slice(0, 2000),
+      workerId: row.workerId ?? null,
+      reqId: row.reqId ?? null,
+      viaFallback: row.viaFallback ?? null,
     });
     return { ok: true };
   });

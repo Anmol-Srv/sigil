@@ -57,7 +57,7 @@ function routeThroughDaemon() {
   return shouldRouteLlmLog(mode, process.env.SIGIL_DAEMON_PROCESS === '1');
 }
 
-function buildRow({ provider, model, caller, input, response, inputTokens, outputTokens, cost, durationMs, status, error }) {
+function buildRow({ provider, model, caller, input, response, inputTokens, outputTokens, cost, durationMs, status, error, workerId, reqId, viaFallback }) {
   return {
     provider,
     model,
@@ -70,6 +70,12 @@ function buildRow({ provider, model, caller, input, response, inputTokens, outpu
     durationMs,
     status,
     error: error?.slice(0, 2000),
+    // Managed-session correlation (NULL for one-shot/API calls). workerId →
+    // which warm worker served it; reqId correlates to the kind='engine' trace;
+    // viaFallback → the warm engine bailed to one-shot.
+    workerId: workerId ?? null,
+    reqId: reqId ?? null,
+    viaFallback: viaFallback ?? null,
   };
 }
 
@@ -145,4 +151,4 @@ async function pruneLogs({ llmLogDays = 30, traceDays = 7 } = {}) {
   return { llmDeleted, traceDeleted };
 }
 
-export { estimateTokens, calcCost, logCall, withRetry, pruneLogs };
+export { estimateTokens, calcCost, logCall, withRetry, pruneLogs, buildRow };

@@ -13,7 +13,7 @@ import { nanoid } from 'nanoid';
 
 import cortexDb from '../db/cortex.js';
 import bus from './events.js';
-import { currentRequestContext } from './request-context.js';
+import { currentRequestContext, currentAgent } from './request-context.js';
 
 // Keep individual trace payloads bounded so a pathological search (hundreds
 // of candidates) can't bloat a row or the WS frame. Detail is already
@@ -22,12 +22,14 @@ const MAX_DETAIL_BYTES = 256 * 1024;
 
 function provenance() {
   // request-context (AsyncLocalStorage) is populated by rpc-registry.dispatch
-  // around each handler: { device, transport }. Local in-process calls (and
-  // tests) get null.
+  // around each handler: { device, transport, agent }. Local in-process calls
+  // (and tests) get null. `agent` answers "who made this call" — currentAgent()
+  // also falls back to SIGIL_AGENT for in-process callers (the hooks).
   const ctx = currentRequestContext();
   return {
     deviceId: ctx?.device?.id ?? null,
     transport: ctx?.transport ?? null,
+    agent: currentAgent(),
   };
 }
 
@@ -38,12 +40,14 @@ function provenance() {
  * @param {object} [p.detail]    structured causal trace (jsonb)
  * @param {string} [p.namespace]
  * @param {number} [p.durationMs]
+ * @param {string} [p.sessionId]  originating session (not in request-context —
+ *                                the caller must pass it explicitly)
  * @returns {Promise<string|null>} the trace uid, or null if persistence failed
  */
-async function recordTrace({ kind, summary, detail = {}, namespace = null, durationMs = null }) {
+async function recordTrace({ kind, summary, detail = {}, namespace = null, durationMs = null, sessionId = null }) {
   const uid = `trace-${nanoid(16)}`;
   const ts = new Date().toISOString();
-  const { deviceId, transport } = provenance();
+  const { deviceId, transport, agent } = provenance();
 
   // Bound the detail size — drop to a marker rather than reject the row.
   let safeDetail = detail;
@@ -57,7 +61,7 @@ async function recordTrace({ kind, summary, detail = {}, namespace = null, durat
 
   // Live broadcast first (cheap, never blocks on DB).
   try {
-    bus.emit('trace', { uid, kind, summary, namespace, durationMs, deviceId, transport, detail: safeDetail });
+    bus.emit('trace', { uid, kind, summary, namespace, durationMs, deviceId, transport, agent, sessionId, detail: safeDetail });
   } catch { /* bus never throws, but be safe */ }
 
   // Durable write (best-effort).
@@ -71,6 +75,8 @@ async function recordTrace({ kind, summary, detail = {}, namespace = null, durat
       summary,
       device_id: deviceId,
       transport,
+      agent,
+      session_id: sessionId,
       detail: JSON.stringify(safeDetail),
     });
     return uid;
@@ -80,13 +86,14 @@ async function recordTrace({ kind, summary, detail = {}, namespace = null, durat
   }
 }
 
-/** Latest traces, newest first. Optionally filtered by kind / namespace / before-ts. */
-async function listTraces({ kind = null, namespace = null, before = null, limit = 50 } = {}) {
+/** Latest traces, newest first. Optionally filtered by kind / agent / namespace / before-ts. */
+async function listTraces({ kind = null, agent = null, namespace = null, before = null, limit = 50 } = {}) {
   let q = cortexDb('trace_event')
-    .select('uid', 'kind', 'ts', 'duration_ms as durationMs', 'namespace', 'summary', 'device_id as deviceId', 'transport', 'detail')
+    .select('uid', 'kind', 'ts', 'duration_ms as durationMs', 'namespace', 'summary', 'device_id as deviceId', 'transport', 'agent', 'session_id as sessionId', 'detail')
     .orderBy('ts', 'desc')
     .limit(Math.min(Number(limit) || 50, 200));
   if (kind) q = q.where({ kind });
+  if (agent) q = q.where({ agent });
   if (namespace) q = q.where({ namespace });
   if (before) q = q.where('ts', '<', before);
   const rows = await q;
@@ -96,7 +103,7 @@ async function listTraces({ kind = null, namespace = null, before = null, limit 
 
 async function getTrace(uid) {
   const row = await cortexDb('trace_event')
-    .select('uid', 'kind', 'ts', 'duration_ms as durationMs', 'namespace', 'summary', 'device_id as deviceId', 'transport', 'detail')
+    .select('uid', 'kind', 'ts', 'duration_ms as durationMs', 'namespace', 'summary', 'device_id as deviceId', 'transport', 'agent', 'session_id as sessionId', 'detail')
     .where({ uid })
     .first();
   if (!row) return null;

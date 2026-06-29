@@ -17,18 +17,23 @@
  */
 const SOURCE_TYPE = 'claude';
 
-async function chat(input, { model, jsonMode = false, schema, temperature } = {}) {
+async function chat(input, { model, jsonMode = false, schema, temperature, caller } = {}) {
   const { getSessionManager } = await import('../session/index.js');
   const mgr = getSessionManager();
 
   if (mgr && mgr.hasWorkers(SOURCE_TYPE)) {
-    const r = await mgr.submit({ sourceType: SOURCE_TYPE, prompt: input, model, schema });
+    const r = await mgr.submit({ sourceType: SOURCE_TYPE, prompt: input, model, schema, caller });
     return {
       text: r.text,
       inputTokens: r.inputTokens,
       outputTokens: r.outputTokens,
       model: r.model || model || null,
       cost: r.cost || 0,
+      // Correlation for llm_log + the kind='engine' trace. workerId is null when
+      // the warm engine bailed to one-shot (viaFallback).
+      workerId: r.workerId ?? null,
+      reqId: r.reqId ?? null,
+      viaFallback: r.viaFallback ?? false,
     };
   }
 

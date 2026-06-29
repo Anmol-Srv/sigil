@@ -69,7 +69,8 @@ export function registerSearch(registry) {
       summary: `"${qShort}" → ${response.facts.length} facts, ${response.chunks.length} chunks${strategy}`,
       namespace: namespaces[0] || null,
       durationMs: trace.durationMs ?? null,
-      detail: trace,
+      sessionId: ctx.sessionId,
+      detail: { ...trace, cwd: ctx.cwd ?? null },
     }).catch(() => {});
 
     return response;

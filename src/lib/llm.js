@@ -26,7 +26,7 @@ async function prompt(input, { model, caller, temperature } = {}) {
   const start = Date.now();
 
   try {
-    const result = await withRetry(() => chatFn(input, { model: resolvedModel, jsonMode: false, temperature }), config.llm.maxRetries);
+    const result = await withRetry(() => chatFn(input, { model: resolvedModel, jsonMode: false, temperature, caller }), config.llm.maxRetries);
     const cost = result.cost || calcCost(result.model, result.inputTokens, result.outputTokens);
 
     logCall({
@@ -34,6 +34,7 @@ async function prompt(input, { model, caller, temperature } = {}) {
       input, response: result.text,
       inputTokens: result.inputTokens, outputTokens: result.outputTokens,
       cost, durationMs: Date.now() - start, status: 'success',
+      workerId: result.workerId, reqId: result.reqId, viaFallback: result.viaFallback,
     });
 
     return result.text;
@@ -57,7 +58,7 @@ async function promptJson(input, { model, caller, schema, temperature } = {}) {
     // `schema` (a JSON Schema) requests provider-enforced structured output.
     // Providers that support it (OpenAI, OpenRouter) constrain decoding to the
     // exact shape; others ignore it and fall back to plain JSON mode.
-    const result = await withRetry(() => chatFn(input, { model: resolvedModel, jsonMode: true, schema, temperature }), config.llm.maxRetries);
+    const result = await withRetry(() => chatFn(input, { model: resolvedModel, jsonMode: true, schema, temperature, caller }), config.llm.maxRetries);
     const cost = result.cost || calcCost(result.model, result.inputTokens, result.outputTokens);
 
     logCall({
@@ -65,6 +66,7 @@ async function promptJson(input, { model, caller, schema, temperature } = {}) {
       input, response: result.text,
       inputTokens: result.inputTokens, outputTokens: result.outputTokens,
       cost, durationMs: Date.now() - start, status: 'success',
+      workerId: result.workerId, reqId: result.reqId, viaFallback: result.viaFallback,
     });
 
     return parseJson(result.text);

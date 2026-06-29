@@ -10,6 +10,7 @@ export function registerTrace(registry) {
     const { listTraces } = await import('../trace-store.js');
     const traces = await listTraces({
       kind: params.kind || null,
+      agent: params.agent || null,
       namespace: params.namespace || null,
       before: params.before || null,
       limit: params.limit ?? 50,

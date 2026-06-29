@@ -67,6 +67,7 @@
         <a href="#graph"    data-route="graph">Graph</a>
         <a href="#devices"  data-route="devices">Devices</a>
         <a href="#activity" data-route="activity">Activity</a>
+        <a href="#engine"   data-route="engine">Engine</a>
         <a href="#setup"    data-route="setup">Setup</a>
         <a href="#settings" data-route="settings">Settings</a>
         <a href="#methods"  data-route="methods">RPC</a>
@@ -242,11 +243,48 @@
         <button class="chip active" type="button" data-trace-filter="">All</button>
         <button class="chip" type="button" data-trace-filter="search">Search</button>
         <button class="chip" type="button" data-trace-filter="ingest">Ingest</button>
+        <button class="chip" type="button" data-trace-filter="engine">Engine</button>
         <button class="chip" type="button" data-trace-filter="lifecycle">Lifecycle</button>
+      </div>
+
+      <div class="trace-filters" id="trace-agent-filters">
+        <span class="filter-lbl">agent</span>
+        <button class="chip active" type="button" data-agent-filter="">All</button>
+        <button class="chip" type="button" data-agent-filter="claude-code">claude-code</button>
+        <button class="chip" type="button" data-agent-filter="mcp">mcp</button>
+        <button class="chip" type="button" data-agent-filter="cli">cli</button>
+        <button class="chip" type="button" data-agent-filter="codex">codex</button>
+        <button class="chip" type="button" data-agent-filter="cursor">cursor</button>
       </div>
 
       <ul id="trace-list" class="trace-list"></ul>
       <div class="empty" id="activity-empty">no activity yet — run <code>sigil search "..."</code> or <code>sigil remember "..."</code> and it'll appear here</div>
+    </section>
+
+    <!-- ── Engine (managed-session warm tmux workers) ──────────────── -->
+    <section id="view-engine" class="view">
+      <div class="section-head">
+        <div class="title-block">
+          <h2>Engine</h2>
+          <p>The LLM core. When the managed-session engine is on, Sigil keeps warm <code>claude</code> workers alive in tmux (one <code>sigil-&lt;worker&gt;</code> session each) to amortize agentic cold-starts across ingest + expansion calls. When off, every call uses the one-shot <code>claude -p</code> path. Live worker state below; per-task dispatch/result/fallback events stream into Activity (filter: Engine).</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="engine-refresh">Refresh</button>
+          <span class="conn-status" id="engine-status">—</span>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat"><span class="lbl">Mode</span><span class="val" id="eng-mode">—</span><span class="sub" id="eng-mode-sub">—</span></div>
+        <div class="stat"><span class="lbl">Pool size</span><span class="val" id="eng-pool">—</span><span class="sub" id="eng-budget">—</span></div>
+        <div class="stat"><span class="lbl">Queued</span><span class="val" id="eng-queued">—</span><span class="sub">tasks waiting</span></div>
+        <div class="stat"><span class="lbl">Pending</span><span class="val" id="eng-pending">—</span><span class="sub">in flight</span></div>
+      </div>
+
+      <h3 class="section-sub">Workers</h3>
+      <div id="engine-workers"></div>
+
+      <div class="muted text-xs" id="engine-hint" style="margin-top:var(--s-4)"></div>
     </section>
 
     <!-- ── Setup (legacy DB test tab; same as onboarding) ─────────── -->

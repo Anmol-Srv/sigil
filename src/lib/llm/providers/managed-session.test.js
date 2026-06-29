@@ -18,13 +18,15 @@ describe('managed-session provider', () => {
     const calls = [];
     setSessionManager({
       hasWorkers: (t) => t === 'claude',
-      submit: async (task) => { calls.push(task); return { text: '{"facts":[]}', inputTokens: 12, outputTokens: 3, model: 'haiku', cost: 0 }; },
+      submit: async (task) => { calls.push(task); return { text: '{"facts":[]}', inputTokens: 12, outputTokens: 3, model: 'haiku', cost: 0, workerId: 'claude-0', reqId: 'req-1', viaFallback: false }; },
     });
 
-    const r = await chat('extract from "hi"', { model: 'haiku', schema: { type: 'object' } });
+    const r = await chat('extract from "hi"', { model: 'haiku', schema: { type: 'object' }, caller: 'extractor' });
 
-    expect(calls[0]).toMatchObject({ sourceType: 'claude', prompt: 'extract from "hi"', model: 'haiku' });
-    expect(r).toEqual({ text: '{"facts":[]}', inputTokens: 12, outputTokens: 3, model: 'haiku', cost: 0 });
+    // caller is forwarded so the warm path can be attributed in llm_log + traces.
+    expect(calls[0]).toMatchObject({ sourceType: 'claude', prompt: 'extract from "hi"', model: 'haiku', caller: 'extractor' });
+    // Correlation fields (workerId/reqId/viaFallback) flow back through to logCall.
+    expect(r).toEqual({ text: '{"facts":[]}', inputTokens: 12, outputTokens: 3, model: 'haiku', cost: 0, workerId: 'claude-0', reqId: 'req-1', viaFallback: false });
   });
 
   it('gates on hasWorkers: a manager with no workers is not submitted to', async () => {

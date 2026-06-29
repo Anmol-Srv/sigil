@@ -29,6 +29,30 @@ async function fallbackFor(task) {
 }
 
 /**
+ * Map a SessionManager telemetry event → a kind='engine' trace row, so the warm
+ * engine (worker dispatch/result/fallback/recycle) shows up live in the GUI
+ * Activity feed and is durably queryable. Best-effort: recordTrace already
+ * swallows its own errors, and the manager wraps onEvent in try/catch.
+ */
+function makeEngineRecorder() {
+  return async (ev) => {
+    const { recordTrace } = await import('../../../daemon/trace-store.js');
+    const who = ev.caller ? ` · ${ev.caller}` : '';
+    let summary;
+    switch (ev.type) {
+      case 'dispatch':     summary = `dispatch → ${ev.session}${who}`; break;
+      case 'result':       summary = `result ✓ ${ev.session}${who}${ev.durationMs != null ? ` · ${ev.durationMs}ms` : ''}`; break;
+      case 'fallback':     summary = `fallback (${ev.reason})${who} → one-shot`; break;
+      case 'recycle':      summary = `recycle ${ev.session || ev.workerId} (${ev.reason})`; break;
+      case 'worker-ready': summary = `worker ${ev.session} ready`; break;
+      case 'boot-failure': summary = `worker ${ev.workerId} boot failed ×${ev.fails} — staying on one-shot`; break;
+      default:             summary = `engine: ${ev.type}`;
+    }
+    recordTrace({ kind: 'engine', summary, durationMs: ev.durationMs ?? null, detail: ev }).catch(() => {});
+  };
+}
+
+/**
  * Build, start, and register the manager — called once at daemon boot. Returns
  * the manager, or null if managed sessions are disabled / unavailable (no tmux),
  * in which case provider calls transparently use the one-shot path.
@@ -86,6 +110,7 @@ export async function initSessionManager({ config, log = () => {} } = {}) {
     taskTimeoutMs: ms.taskTimeoutMs,
     firstTaskTimeoutMs: ms.firstTaskTimeoutMs,
     log,
+    onEvent: makeEngineRecorder(),
   });
 
   await manager.start();
