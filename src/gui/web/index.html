@@ -86,23 +86,49 @@
   </header>
 
   <main>
-    <!-- ── Overview ─────────────────────────────────────────────── -->
+    <!-- ── Home ─────────────────────────────────────────────────── -->
     <section id="view-health" class="view active">
       <div class="section-head">
         <div class="title-block">
-          <h2>Overview</h2>
-          <p>This Sigil install — its daemon process, identity, and where memory lives.</p>
+          <h2>Home</h2>
+          <p>Your agents' memory at a glance — everything they've learned, on this machine, in your control.</p>
+        </div>
+        <div class="actions"><button class="btn" id="home-refresh">Refresh</button></div>
+      </div>
+
+      <!-- stat strip — memory as the hero (real counts; recall computed from traces) -->
+      <div class="stat-grid">
+        <div class="stat"><span class="lbl">Facts</span><span class="val" id="hm-facts">—</span><span class="sub">stored memories</span></div>
+        <div class="stat"><span class="lbl">Entities</span><span class="val" id="hm-entities">—</span><span class="sub">people · topics · docs</span></div>
+        <div class="stat"><span class="lbl">Relations</span><span class="val" id="hm-relations">—</span><span class="sub">graph edges</span></div>
+        <div class="stat"><span class="lbl"><span class="hm-dot" id="hm-recall-dot"></span>Recall hit-rate</span><span class="val" id="hm-recall">—</span><span class="sub" id="hm-recall-sub">recent searches</span></div>
+      </div>
+
+      <div class="home-cols">
+        <!-- recall health -->
+        <div class="panel panel-pad">
+          <h3 class="home-h">Recall health</h3>
+          <p class="muted text-sm" style="margin:2px 0 var(--s-4)">Is memory answering when your agents ask? (recent searches)</p>
+          <div class="home-recall">
+            <div class="hm-metric"><span class="hmv" id="hm-searches">—</span><span class="hmk">searches</span></div>
+            <div class="hm-metric"><span class="hmv" id="hm-hitrate">—</span><span class="hmk">returned ≥1 fact</span><div class="hm-bar"><i id="hm-hitbar"></i></div></div>
+            <div class="hm-metric"><span class="hmv" id="hm-avgfacts">—</span><span class="hmk">avg facts / search</span></div>
+            <div class="hm-metric"><span class="hmv" id="hm-latency">—</span><span class="hmk">median latency</span></div>
+          </div>
+        </div>
+
+        <!-- recent activity -->
+        <div class="panel panel-pad">
+          <h3 class="home-h">Recent activity <a href="#activity" data-route="activity" class="home-link">View all →</a></h3>
+          <ul class="home-feed" id="hm-feed"><li class="muted text-sm">loading…</li></ul>
         </div>
       </div>
 
-      <div class="stat-grid">
-        <div class="stat"><span class="lbl">Daemon</span><span class="val" id="hc-pid">—</span><span class="sub" id="hc-uptime">—</span></div>
-        <div class="stat"><span class="lbl">Mode</span><span class="val" id="hc-mode">—</span><span class="sub" id="hc-driver">—</span></div>
-        <div class="stat"><span class="lbl">Identity</span><span class="val" id="hc-nodeid">—</span><span class="sub" id="hc-relay">—</span></div>
-      </div>
-
-      <h3 class="section-sub">Details</h3>
-      <div class="kv" id="health-pane"><div class="row"><div class="k">pid</div><div class="v">—</div></div></div>
+      <!-- diagnostics — the daemon plumbing, demoted out of the headline -->
+      <details class="panel home-diag">
+        <summary>Diagnostics — daemon process &amp; identity</summary>
+        <div class="kv" id="health-pane"><div class="row"><div class="k">pid</div><div class="v">—</div></div></div>
+      </details>
     </section>
 
     <!-- ── Knowledge Base ───────────────────────────────────────── -->

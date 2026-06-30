@@ -83,28 +83,27 @@ window.addEventListener('hashchange', () => setRoute(routeFromHash()));
 $$('nav a').forEach((a) => {
   a.addEventListener('click', (e) => { e.preventDefault(); setRoute(a.dataset.route); });
 });
+$('#home-refresh')?.addEventListener('click', refreshHealth);
+
+const fmtNum = (x) => (typeof x === 'number' ? x.toLocaleString() : '—');
 
 async function refreshHealth() {
   try {
-    const [ping, nodeInfo, mode] = await Promise.all([
+    const [ping, nodeInfo, mode, status] = await Promise.all([
       rpc('ping'),
       rpc('nodeInfo').catch(() => ({ enabled: false })),
       rpc('mode').catch(() => ({})),
+      rpc('status', {}).catch(() => ({})),
     ]);
-    $('#hc-pid').textContent = `pid ${ping.pid}`;
-    $('#hc-uptime').textContent = `up ${formatUptime(ping.uptimeMs)} · ${ping.node}`;
-    $('#hc-mode').textContent = mode.mode || '—';
-    $('#hc-driver').textContent = mode.memoryClient ? `memory client: ${mode.memoryClient}` : '—';
-    if (nodeInfo.enabled && nodeInfo.nodeId) {
-      $('#hc-nodeid').textContent = nodeInfo.nodeId.slice(0, 12) + '…';
-      $('#hc-nodeid').title = nodeInfo.nodeId;
-      $('#hc-relay').textContent = nodeInfo.relayUrl ? new URL(nodeInfo.relayUrl).hostname : 'no relay';
-    } else {
-      $('#hc-nodeid').textContent = '—';
-      $('#hc-relay').textContent = 'Iroh disabled';
-    }
+
+    // ── stat strip: memory as the hero (real counts from status) ──
+    const ents = (status.entities?.documents || 0) + (status.entities?.people || 0) + (status.entities?.topics || 0);
+    $('#hm-facts').textContent = fmtNum(status.facts);
+    $('#hm-entities').textContent = fmtNum(ents);
+    $('#hm-relations').textContent = fmtNum(status.relations);
     $('#brand-badge').textContent = mode.mode || 'solo';
 
+    // ── diagnostics drawer: the daemon plumbing, demoted ──
     const rows = [
       ['daemon pid', ping.pid], ['version', ping.version], ['node.js', ping.node],
       ['uptime', formatUptime(ping.uptimeMs)], ['mode', mode.mode || '—'],
@@ -115,6 +114,8 @@ async function refreshHealth() {
       rows.push(['this nodeId', nodeInfo.nodeId || nodeInfo.error || '—']);
       if (nodeInfo.relayUrl) rows.push(['relay', nodeInfo.relayUrl]);
       if (nodeInfo.addresses?.length) rows.push(['addresses', nodeInfo.addresses.join(', ')]);
+    } else {
+      rows.push(['identity', 'Iroh disabled']);
     }
     renderKv($('#health-pane'), rows);
 
@@ -123,6 +124,58 @@ async function refreshHealth() {
 
     setConn('ok', 'connected');
   } catch (err) { setConn('err', err.message); }
+
+  // recall health + recent activity are independent of the daemon ping;
+  // load them separately so one failing doesn't blank the other.
+  loadHomeRecall();
+  loadHomeFeed();
+}
+
+// Recall hit-rate, avg results, and median latency computed CLIENT-SIDE from
+// the existing search traces — no backend metric needed. A search "hit" is any
+// trace whose ranking returned ≥1 fact (detail.ranking.facts).
+async function loadHomeRecall() {
+  try {
+    const { traces } = await rpc('trace.list', { kind: 'search', limit: 50 });
+    const n = traces.length;
+    const factCount = (t) => (t.detail?.ranking?.facts?.length || 0);
+    const withHits = traces.filter((t) => factCount(t) > 0).length;
+    const hitRate = n ? Math.round((withHits / n) * 100) : null;
+    const avgFacts = n ? (traces.reduce((s, t) => s + factCount(t), 0) / n) : null;
+    const durs = traces.map((t) => t.durationMs).filter((x) => x != null).sort((a, b) => a - b);
+    const med = durs.length ? durs[Math.floor(durs.length / 2)] : null;
+
+    $('#hm-recall').textContent = hitRate != null ? `${hitRate}%` : '—';
+    $('#hm-recall-sub').textContent = n ? `${n} recent searches` : 'no searches yet';
+    const dot = $('#hm-recall-dot');
+    dot.className = 'hm-dot' + (hitRate == null ? '' : hitRate >= 80 ? ' ok' : hitRate >= 50 ? ' warn' : ' err');
+
+    $('#hm-searches').textContent = fmtNum(n);
+    $('#hm-hitrate').textContent = hitRate != null ? `${hitRate}%` : '—';
+    $('#hm-hitbar').style.width = hitRate != null ? `${hitRate}%` : '0';
+    $('#hm-avgfacts').textContent = avgFacts != null ? avgFacts.toFixed(1) : '—';
+    $('#hm-latency').textContent = med != null ? `${med}ms` : '—';
+  } catch { /* leave dashes */ }
+}
+
+async function loadHomeFeed() {
+  try {
+    const { traces } = await rpc('trace.list', { limit: 6 });
+    const feed = $('#hm-feed');
+    feed.innerHTML = traces.length
+      ? traces.map(homeFeedRow).join('')
+      : '<li class="muted text-sm">no activity yet — run a search or remember a fact</li>';
+  } catch { /* leave loading */ }
+}
+
+function homeFeedRow(t) {
+  const agent = t.agent ? `<span class="badge ${agentBadge(t.agent)}">${escape(t.agent)}</span>` : '';
+  return `<li class="home-feed-row">
+    <span class="badge ${traceBadge(t.kind)}">${escape(t.kind)}</span>
+    <span class="home-feed-summary">${escape(t.summary)}</span>
+    ${agent}
+    <span class="home-feed-time">${escape(clock(t.ts))}</span>
+  </li>`;
 }
 
 // ════════════════════════════════════════════════════════════════════

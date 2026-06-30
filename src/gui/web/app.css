@@ -338,6 +338,106 @@ h3.section-sub {
 .stat .sub { color: var(--fg-3); font-size: var(--t-sm); }
 
 /* ════════════════════════════════════════════════════════════════════════
+   Home — memory at a glance. See DESIGN.md › Home / stat strip.
+   ════════════════════════════════════════════════════════════════════════ */
+.hm-dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--fg-4);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.hm-dot.ok   { background: var(--ok);   box-shadow: 0 0 0 3px var(--ok-bg); }
+.hm-dot.warn { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-bg); }
+.hm-dot.err  { background: var(--err);  box-shadow: 0 0 0 3px var(--err-bg); }
+
+.home-cols {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: var(--s-4);
+  margin-top: var(--s-5);
+}
+.home-h {
+  margin: 0;
+  font-size: var(--t-md);
+  font-weight: 600;
+  color: var(--fg);
+}
+.home-link {
+  float: right;
+  font-size: var(--t-sm);
+  font-weight: 500;
+  color: var(--accent);
+}
+.home-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+.home-recall {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--s-4);
+}
+.hm-metric { display: flex; flex-direction: column; gap: 2px; }
+.hm-metric .hmv {
+  font-family: var(--font-mono);
+  font-size: var(--t-xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+}
+.hm-metric .hmk { font-size: var(--t-xs); color: var(--fg-3); }
+.hm-bar {
+  height: 4px;
+  background: var(--bg-surface-3);
+  margin-top: var(--s-1);
+  overflow: hidden;
+}
+.hm-bar > i { display: block; height: 100%; width: 0; background: var(--ok); transition: width var(--dur-2) var(--ease); }
+
+.home-feed { list-style: none; margin: var(--s-1) 0 0; padding: 0; }
+.home-feed-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) 0;
+  border-top: 1px solid var(--border);
+  font-size: var(--t-sm);
+}
+.home-feed-row:first-child { border-top: none; }
+.home-feed-summary {
+  color: var(--fg-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+.home-feed-time {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--fg-4);
+}
+
+.home-diag { margin-top: var(--s-5); }
+.home-diag > summary {
+  cursor: pointer;
+  padding: var(--s-3) var(--s-4);
+  font-size: var(--t-sm);
+  font-weight: 500;
+  color: var(--fg-3);
+  user-select: none;
+}
+.home-diag > summary:hover { color: var(--fg); }
+.home-diag[open] > summary { border-bottom: 1px solid var(--border); }
+.home-diag .kv { border: none; }
+
+@media (max-width: 768px) {
+  .home-cols { grid-template-columns: 1fr; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
    Key-value rows (replaces dl)
    ════════════════════════════════════════════════════════════════════════ */
 .kv {
