@@ -29,7 +29,7 @@
   /* Foreground text ramp */
   --fg-1:        #f4f5f6;   /* primary text, headings, key values */
   --fg-2:        #a2a5ab;   /* body, secondary text */
-  --fg-3:        #74777d;   /* labels, captions, footer */
+  --fg-3:        #82858c;   /* labels, captions, footer — AA on surfaces (≥4.9:1) */
   --fg-4:        #50535a;   /* disabled, faint meta */
 
   /* ---- Brand (from the Sigil mark gradient) ---- */

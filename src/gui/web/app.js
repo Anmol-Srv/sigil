@@ -62,9 +62,20 @@ function renderKv(node, entries) {
 }
 
 const validRoutes = ['health', 'kb', 'graph', 'devices', 'activity', 'engine', 'setup', 'settings', 'methods'];
+const ROUTE_TITLES = {
+  health: 'Home', kb: 'Knowledge Base', graph: 'Graph', devices: 'Devices',
+  activity: 'Activity', engine: 'Engine', setup: 'Database', settings: 'Settings', methods: 'RPC methods',
+};
 function setRoute(name) {
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
-  $$('nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === name));
+  $$('nav a').forEach((a) => {
+    const on = a.dataset.route === name;
+    a.classList.toggle('active', on);
+    if (on) a.setAttribute('aria-current', 'page');
+    else a.removeAttribute('aria-current');
+  });
+  const h1 = $('#route-title');
+  if (h1) h1.textContent = ROUTE_TITLES[name] || 'Sigil';
   window.location.hash = name;
   if (name === 'health')   refreshHealth();
   if (name === 'kb')       refreshKb();
@@ -126,46 +137,42 @@ async function refreshHealth() {
   } catch (err) { setConn('err', err.message); }
 
   // recall health + recent activity are independent of the daemon ping;
-  // load them separately so one failing doesn't blank the other.
-  loadHomeRecall();
-  loadHomeFeed();
+  // load them in one fetch so one failing doesn't blank the other.
+  loadHomeActivity();
 }
 
-// Recall hit-rate, avg results, and median latency computed CLIENT-SIDE from
-// the existing search traces — no backend metric needed. A search "hit" is any
-// trace whose ranking returned ≥1 fact (detail.ranking.facts).
-async function loadHomeRecall() {
-  try {
-    const { traces } = await rpc('trace.list', { kind: 'search', limit: 50 });
-    const n = traces.length;
-    const factCount = (t) => (t.detail?.ranking?.facts?.length || 0);
-    const withHits = traces.filter((t) => factCount(t) > 0).length;
-    const hitRate = n ? Math.round((withHits / n) * 100) : null;
-    const avgFacts = n ? (traces.reduce((s, t) => s + factCount(t), 0) / n) : null;
-    const durs = traces.map((t) => t.durationMs).filter((x) => x != null).sort((a, b) => a - b);
-    const med = durs.length ? durs[Math.floor(durs.length / 2)] : null;
+// One trace.list call feeds both the recall metrics and the activity feed.
+// Recall hit-rate, avg results, and median latency are computed CLIENT-SIDE
+// from the search traces in the recent window — no backend metric needed.
+// A "hit" is any search whose ranking returned ≥1 fact (detail.ranking.facts).
+async function loadHomeActivity() {
+  let traces;
+  try { ({ traces } = await rpc('trace.list', { limit: 50 })); } catch { return; }
 
-    $('#hm-recall').textContent = hitRate != null ? `${hitRate}%` : '—';
-    $('#hm-recall-sub').textContent = n ? `${n} recent searches` : 'no searches yet';
-    const dot = $('#hm-recall-dot');
-    dot.className = 'hm-dot' + (hitRate == null ? '' : hitRate >= 80 ? ' ok' : hitRate >= 50 ? ' warn' : ' err');
+  const searches = traces.filter((t) => t.kind === 'search');
+  const n = searches.length;
+  const factCount = (t) => (t.detail?.ranking?.facts?.length || 0);
+  const withHits = searches.filter((t) => factCount(t) > 0).length;
+  const hitRate = n ? Math.round((withHits / n) * 100) : null;
+  const avgFacts = n ? (searches.reduce((s, t) => s + factCount(t), 0) / n) : null;
+  const durs = searches.map((t) => t.durationMs).filter((x) => x != null).sort((a, b) => a - b);
+  const med = durs.length ? durs[Math.floor(durs.length / 2)] : null;
 
-    $('#hm-searches').textContent = fmtNum(n);
-    $('#hm-hitrate').textContent = hitRate != null ? `${hitRate}%` : '—';
-    $('#hm-hitbar').style.width = hitRate != null ? `${hitRate}%` : '0';
-    $('#hm-avgfacts').textContent = avgFacts != null ? avgFacts.toFixed(1) : '—';
-    $('#hm-latency').textContent = med != null ? `${med}ms` : '—';
-  } catch { /* leave dashes */ }
-}
+  $('#hm-recall').textContent = hitRate != null ? `${hitRate}%` : '—';
+  $('#hm-recall-sub').textContent = n ? `${n} recent searches` : 'no searches yet';
+  const dot = $('#hm-recall-dot');
+  dot.className = 'hm-dot' + (hitRate == null ? '' : hitRate >= 80 ? ' ok' : hitRate >= 50 ? ' warn' : ' err');
 
-async function loadHomeFeed() {
-  try {
-    const { traces } = await rpc('trace.list', { limit: 6 });
-    const feed = $('#hm-feed');
-    feed.innerHTML = traces.length
-      ? traces.map(homeFeedRow).join('')
-      : '<li class="muted text-sm">no activity yet — run a search or remember a fact</li>';
-  } catch { /* leave loading */ }
+  $('#hm-searches').textContent = fmtNum(n);
+  $('#hm-hitrate').textContent = hitRate != null ? `${hitRate}%` : '—';
+  $('#hm-hitbar').style.transform = `scaleX(${hitRate != null ? hitRate / 100 : 0})`;
+  $('#hm-avgfacts').textContent = avgFacts != null ? avgFacts.toFixed(1) : '—';
+  $('#hm-latency').textContent = med != null ? `${med}ms` : '—';
+
+  const feed = $('#hm-feed');
+  feed.innerHTML = traces.length
+    ? traces.slice(0, 6).map(homeFeedRow).join('')
+    : '<li class="muted text-sm">no activity yet — run a search or remember a fact</li>';
 }
 
 function homeFeedRow(t) {

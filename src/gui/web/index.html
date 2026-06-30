@@ -63,7 +63,7 @@
 
     <div class="side-status"><span class="conn-status" id="conn">connecting…</span></div>
 
-    <nav>
+    <nav aria-label="Primary">
       <div class="navgroup">
         <div class="navgroup-label">Memory</div>
         <a href="#health"   data-route="health" class="active">Home</a>
@@ -86,6 +86,10 @@
   </header>
 
   <main>
+    <!-- Per-route page heading (visually hidden; the section-head h2 carries
+         the visible title). Gives every view a proper h1 for screen readers. -->
+    <h1 class="sr-only" id="route-title">Home</h1>
+
     <!-- ── Home ─────────────────────────────────────────────────── -->
     <section id="view-health" class="view active">
       <div class="section-head">

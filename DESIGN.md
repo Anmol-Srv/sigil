@@ -48,7 +48,8 @@ never the rule.
 
 ### Text ramp
 `--fg-1 #f4f5f6` (primary / headings / key values) · `--fg-2 #a2a5ab` (body) ·
-`--fg-3 #74777d` (labels, captions) · `--fg-4 #50535a` (disabled, faint meta).
+`--fg-3 #82858c` (labels, captions — meets WCAG AA ≥4.9:1 on all surfaces) ·
+`--fg-4 #50535a` (disabled / decorative faint meta only — not for real info text).
 
 ### Brand (from the Sigil mark gradient)
 `--brand #0084ff` (links, active, focus) · `--brand-deep #004ce6` (pressed) ·
