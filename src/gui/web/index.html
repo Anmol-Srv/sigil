@@ -55,25 +55,34 @@
        MAIN DASHBOARD
        ════════════════════════════════════════════════════════════════════ -->
   <header>
-    <div class="header-inner">
-      <div class="brand">
-        <img class="brand-mark" src="/static/design/sigil-mark.svg" alt="Sigil" width="20" height="20">
-        <div class="brand-name">Sigil</div>
-        <div class="brand-badge" id="brand-badge">local</div>
-      </div>
-      <nav>
-        <a href="#health"   data-route="health"   class="active">Overview</a>
+    <div class="brand">
+      <img class="brand-mark" src="/static/design/sigil-mark.svg" alt="Sigil" width="22" height="22">
+      <div class="brand-name">Sigil</div>
+      <div class="brand-badge" id="brand-badge">local</div>
+    </div>
+
+    <div class="side-status"><span class="conn-status" id="conn">connecting…</span></div>
+
+    <nav>
+      <div class="navgroup">
+        <div class="navgroup-label">Memory</div>
+        <a href="#health"   data-route="health" class="active">Home</a>
         <a href="#kb"       data-route="kb">Knowledge Base</a>
         <a href="#graph"    data-route="graph">Graph</a>
-        <a href="#devices"  data-route="devices">Devices</a>
         <a href="#activity" data-route="activity">Activity</a>
+      </div>
+      <div class="navgroup">
+        <div class="navgroup-label">Connections</div>
+        <a href="#devices"  data-route="devices">Devices</a>
+      </div>
+      <div class="navgroup">
+        <div class="navgroup-label">System</div>
         <a href="#engine"   data-route="engine">Engine</a>
-        <a href="#setup"    data-route="setup">Setup</a>
         <a href="#settings" data-route="settings">Settings</a>
-        <a href="#methods"  data-route="methods">RPC</a>
-      </nav>
-      <div class="conn-status" id="conn">connecting…</div>
-    </div>
+      </div>
+    </nav>
+
+    <div class="side-foot">Local · loopback only</div>
   </header>
 
   <main>
@@ -167,7 +176,7 @@
       </div>
 
       <div class="graph-stage" id="graph-stage">
-        <canvas id="graph-canvas"></canvas>
+        <div id="graph-canvas"></div><!-- force-graph mounts its canvas here -->
         <div class="graph-legend" id="graph-legend" aria-hidden="true">
           <span class="gl-item"><span class="gl-dot entity person"></span>Person</span>
           <span class="gl-item"><span class="gl-dot entity topic"></span>Topic</span>
@@ -508,6 +517,8 @@
     </div>
   </div>
 
+  <!-- force-graph (vasturiano), vendored UMD — defines window.ForceGraph -->
+  <script src="/static/vendor/force-graph.min.js"></script>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

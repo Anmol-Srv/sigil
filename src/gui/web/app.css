@@ -31,12 +31,14 @@
   --accent-2:     var(--brand-deep);
   --accent-fg:    #ffffff;
 
-  /* entity-type palette — cohesive cool triad, used by the graph nodes,
-     the graph legend, and the KB browser's type dots (one source of truth) */
-  --etype-person:   #4ea1ff;
-  --etype-topic:    #9a86ff;
-  --etype-document: #43c9b0;
-  --etype-fact:     #5b5f67;
+  /* entity-type palette — brand-forward: topics carry the brand blue (they're
+     the most common entity, so the graph reads mostly-blue / on-brand), with
+     person/document as light-blue + teal accents. Used by the graph nodes, the
+     graph legend, and the KB browser's type dots (one source of truth) */
+  --etype-person:   #9bd6ff;
+  --etype-topic:    #2f81f7;
+  --etype-document: #36cfa6;
+  --etype-fact:     #565a63;
 
   /* status: foreground --ok/--warn come from design tokens; backgrounds map
      to the design's restrained tints (used only as small dot/row washes) */
@@ -93,45 +95,32 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 code, .mono { font-family: var(--font-mono); }
 
 /* ════════════════════════════════════════════════════════════════════════
-   Top nav
+   Sidebar (left rail) — two-tier grouped nav. See DESIGN.md › Information
+   Architecture. Fixed full-height; main/footer are offset by --sidebar.
    ════════════════════════════════════════════════════════════════════════ */
 header {
-  height: var(--header-h);
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
-  position: sticky;
-  top: 0;
-  z-index: 20;
-}
-.header-inner {
-  height: 100%;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  width: var(--sidebar);
+  background: var(--bg-0);
+  border-right: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  padding: 0 var(--s-5);
-  max-width: var(--container);
-  margin: 0 auto;
-  width: 100%;
+  flex-direction: column;
+  overflow-y: auto;
+  z-index: 20;
 }
 .brand {
   display: flex;
   align-items: center;
-  gap: var(--s-3);
-  padding-right: var(--s-5);
-  margin-right: var(--s-5);
-  border-right: 1px solid var(--border);
-  height: 100%;
+  gap: var(--s-2);
+  padding: var(--s-4) var(--s-4) var(--s-3);
 }
-.brand-mark {
-  width: 20px;
-  height: 20px;
-  display: block;
-  flex-shrink: 0;
-}
+.brand-mark { width: 22px; height: 22px; display: block; flex-shrink: 0; }
 .brand-name {
-  font-weight: 600;
-  font-size: var(--t-md);
-  letter-spacing: -0.005em;
+  font-weight: 700;
+  font-size: var(--t-lg);
+  letter-spacing: -0.01em;
+  color: var(--fg);
 }
 .brand-badge {
   font-family: var(--font-mono);
@@ -143,56 +132,79 @@ header {
   border: 1px solid var(--border);
   text-transform: lowercase;
   letter-spacing: 0.04em;
+  margin-left: auto;
 }
 
-nav { display: flex; flex: 1; height: 100%; }
-nav a {
-  display: flex;
-  align-items: center;
-  height: 100%;
-  padding: 0 var(--s-3);
-  color: var(--fg-3);
-  text-decoration: none;
-  font-size: var(--t-base);
-  font-weight: 500;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px; /* overlap header border */
-}
-nav a:hover { color: var(--fg); text-decoration: none; }
-nav a.active {
-  color: var(--fg);
-  border-bottom-color: var(--accent);
-}
-
+/* status pill — replaces PID/uptime as the at-a-glance health signal */
+.side-status { padding: 0 var(--s-3) var(--s-4); }
 .conn-status {
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
-  font-size: var(--t-sm);
-  color: var(--fg-3);
-  margin-left: auto;
+  width: 100%;
+  font-size: var(--t-xs);
+  color: var(--fg-2);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  padding: var(--s-2) var(--s-3);
 }
 .conn-status::before {
   content: "";
-  width: 6px;
-  height: 6px;
+  width: 7px; height: 7px;
+  border-radius: 50%;
   background: var(--fg-4);
-  display: inline-block;
+  flex-shrink: 0;
 }
-.conn-status.ok       { color: var(--ok); }
-.conn-status.ok::before { background: var(--ok); }
-.conn-status.err      { color: var(--err); }
-.conn-status.err::before { background: var(--err); }
+.conn-status.ok        { color: var(--fg-2); }
+.conn-status.ok::before  { background: var(--ok);  box-shadow: 0 0 0 3px var(--ok-bg); }
+.conn-status.err       { color: var(--err); }
+.conn-status.err::before { background: var(--err); box-shadow: 0 0 0 3px var(--err-bg); }
+
+nav { display: flex; flex-direction: column; gap: var(--s-4); padding: 0 var(--s-3); }
+.navgroup { display: flex; flex-direction: column; gap: 1px; }
+.navgroup-label {
+  font-size: var(--t-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--fg-3);
+  padding: 0 var(--s-2) var(--s-2);
+}
+nav a {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2);
+  color: var(--fg-2);
+  text-decoration: none;
+  font-size: var(--t-md);
+  font-weight: 500;
+  border-left: 2px solid transparent;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+nav a:hover { color: var(--fg); background: var(--bg-surface-2); text-decoration: none; }
+nav a.active {
+  color: var(--fg);
+  background: var(--info-bg);
+  border-left-color: var(--accent);
+}
+
+.side-foot {
+  margin-top: auto;
+  padding: var(--s-3) var(--s-4);
+  border-top: 1px solid var(--border);
+  font-size: var(--t-xs);
+  color: var(--fg-4);
+}
 
 /* ════════════════════════════════════════════════════════════════════════
    Main layout
    ════════════════════════════════════════════════════════════════════════ */
 main {
   flex: 1;
-  padding: var(--s-6) var(--s-5) var(--s-8);
-  max-width: var(--container);
-  margin: 0 auto;
-  width: 100%;
+  margin-left: var(--sidebar);
+  padding: var(--s-6) var(--s-6) var(--s-8);
+  width: auto;
 }
 .view { display: none; }
 .view.active { display: block; }
@@ -873,6 +885,7 @@ table.trace-table td.audm-cell { font-size: var(--t-xs); color: var(--fg-2); whi
 footer {
   padding: var(--s-3) 0;
   flex-shrink: 0;
+  margin-left: var(--sidebar);
   border-top: 1px solid var(--border);
   background: var(--bg-surface);
   color: var(--fg-3);
@@ -1086,16 +1099,45 @@ footer .footer-inner {
 /* ── ≤ 768px — tablet / landscape phone ───────────────────────────────────── */
 @media (max-width: 768px) {
 
-  /* Nav: scroll horizontally instead of wrapping to a second line */
+  /* Sidebar collapses back to a horizontal top bar; nav scrolls sideways */
+  header {
+    position: static;
+    width: 100%;
+    height: var(--header-h);
+    flex-direction: row;
+    align-items: center;
+    gap: var(--s-2);
+    padding: 0 var(--s-3);
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    overflow: visible;
+  }
+  .brand { padding: 0; }
+  .side-status, .side-foot { display: none; }
   nav {
+    flex-direction: row;
+    gap: var(--s-1);
+    padding: 0;
+    flex: 1;
+    min-width: 0;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    flex-shrink: 1;
-    min-width: 0;
   }
   nav::-webkit-scrollbar { display: none; }
-  nav a { white-space: nowrap; flex-shrink: 0; }
+  .navgroup { flex-direction: row; gap: var(--s-1); }
+  .navgroup-label { display: none; }
+  nav a {
+    white-space: nowrap;
+    flex-shrink: 0;
+    border-left: none;
+    border-bottom: 2px solid transparent;
+    padding: var(--s-2) var(--s-3);
+  }
+  nav a.active { background: transparent; border-left: none; border-bottom-color: var(--accent); }
+
+  /* Sidebar offset removed when stacked */
+  main, footer { margin-left: 0; }
 
   /* Reduce page horizontal padding */
   main { padding: var(--s-5) var(--s-4) var(--s-7); }
@@ -1455,9 +1497,10 @@ footer .footer-inner {
     var(--bg-canvas);
   overflow: hidden;
 }
-#graph-canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
-#graph-canvas:focus-visible { outline: none; box-shadow: inset var(--focus-ring); }
-#graph-canvas:active { cursor: grabbing; }
+/* force-graph mounts its own <canvas> inside this container */
+#graph-canvas { position: absolute; inset: 0; }
+#graph-canvas canvas { display: block; cursor: grab; touch-action: none; }
+#graph-canvas canvas:active { cursor: grabbing; }
 
 .graph-legend {
   position: absolute; left: var(--s-3); bottom: var(--s-3);
