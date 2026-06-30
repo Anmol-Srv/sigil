@@ -1,13 +1,14 @@
 /**
- * DB driver selection.
+ * DB driver selection — driven entirely by config.json (config.db.*); no env.
  *
- *   - If db.mode === 'embedded' (or SIGIL_DB_MODE=embedded), use the in-process
- *     PGlite engine — a full Postgres 17 + pgvector compiled to WASM, no server,
- *     no Docker, no prerequisites. Data lives at ~/.sigil/db.
- *   - Else if SIGIL_DATABASE_URL or DATABASE_URL is set, use the URL driver
- *     (Neon, Supabase, RDS, Render, Railway, self-hosted, etc.).
- *   - Otherwise, use the local-postgres driver (back-compat with the
- *     SIGIL_DB_HOST / PORT / NAME / USER / PASSWORD env vars).
+ *   - config.db.mode === 'embedded' → the in-process PGlite engine (a full
+ *     Postgres 17 + pgvector compiled to WASM, no server, no Docker). Data at
+ *     ~/.sigil/db.
+ *   - Else if config.db.url is set → the URL driver (Neon, Supabase, RDS,
+ *     Render, Railway, self-hosted, etc.).
+ *   - Else if config.db.mode === 'local' → the local-postgres driver from the
+ *     stored host/port/name/user/password.
+ *   - Otherwise → throw notConfiguredError() (setup never finished).
  *
  * Returns a descriptor: { kind, provider, connection, client }. `connection` is
  * a pg-shape object for the URL/local drivers, or { pglitePath } for embedded.

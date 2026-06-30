@@ -195,8 +195,11 @@ function validateSection(section, values) {
 // Existing installs configured ~/.sigil/.env. Rather than strand them on a clean
 // break, import that file into config.json ONCE, then rename it so it's skipped
 // thereafter. A power user can later drop a fresh .env to update settings; it's
-// re-imported on the next boot. Only the onboarding-managed keys are mapped;
-// tuning flags (MEMORY_*, ports) remain plain env vars.
+// re-imported on the next boot. We map the settings whose silent loss would
+// actually break a daemon (db, llm, embedding, network, http, managed-session) so
+// an existing .env-configured install upgrades losslessly. Pure tuning knobs
+// (MEMORY_* thresholds, per-task model overrides) are NOT carried — they fall
+// back to the (identical) code defaults; re-set them in the GUI/config if needed.
 
 function parseEnvFile(path) {
   if (!existsSync(path)) return null;
@@ -225,6 +228,10 @@ function envToPatches(e) {
     if (e.SIGIL_DB_NAME) db.name = e.SIGIL_DB_NAME;
     if (e.SIGIL_DB_USER) db.user = e.SIGIL_DB_USER;
     if (e.SIGIL_DB_PASSWORD) db.password = e.SIGIL_DB_PASSWORD;
+  } else if (e.SIGIL_DB_MODE && DB_MODES.includes(e.SIGIL_DB_MODE)) {
+    // Bare SIGIL_DB_MODE=embedded (the zero-config escape hatch) with no
+    // url/host — without this the daemon would boot with mode=null and throw.
+    db.mode = e.SIGIL_DB_MODE;
   }
   if (Object.keys(db).length) patches.database = db;
 
@@ -246,6 +253,30 @@ function envToPatches(e) {
     if (e.EMBEDDING_PROVIDER === 'ollama' && e.OLLAMA_HOST) emb.host = e.OLLAMA_HOST;
     patches.embedding = emb;
   }
+
+  // Managed-session engine (opt-in power feature). Carry the toggle so an
+  // .env-enabled warm pool doesn't silently fall back to one-shot on upgrade.
+  if (e.SIGIL_MANAGED_SESSION !== undefined) {
+    patches.llm = patches.llm || {};
+    patches.llm.managedSession = { enabled: e.SIGIL_MANAGED_SESSION === 'true' };
+  }
+
+  // Network (multi-device). Without this a .env-configured follower/master
+  // silently reverts to solo — Iroh never starts and sync stops dead.
+  const net = {};
+  if (e.SIGIL_MODE) net.mode = e.SIGIL_MODE;
+  if (e.SIGIL_NETWORK_ENABLED !== undefined) net.enabled = e.SIGIL_NETWORK_ENABLED !== 'false';
+  else if (e.SIGIL_MODE && e.SIGIL_MODE !== 'solo') net.enabled = true; // legacy derive-from-mode
+  if (e.SIGIL_MASTER_NODE_ID) net.masterNodeId = e.SIGIL_MASTER_NODE_ID;
+  if (Object.keys(net).length) patches.network = net;
+
+  // HTTP server (custom port/host/disabled) — a bookmarked GUI URL / reverse
+  // proxy on a non-default port would otherwise break after upgrade.
+  const http = {};
+  if (e.SIGIL_HTTP_PORT) http.port = Number(e.SIGIL_HTTP_PORT) || 7777;
+  if (e.SIGIL_HTTP_HOST) http.host = e.SIGIL_HTTP_HOST;
+  if (e.SIGIL_HTTP_ENABLED !== undefined) http.enabled = e.SIGIL_HTTP_ENABLED !== 'false';
+  if (Object.keys(http).length) patches.http = http;
 
   if (e.SIGIL_SETUP_COMPLETE === 'true') patches.setup = { complete: true };
   return patches;
@@ -321,11 +352,13 @@ export function getConfig() {
 // ── test seam ────────────────────────────────────────────────────────────────
 // config.json is the sole source of truth (no env override), so tests can no
 // longer configure the daemon/embedder/LLM by setting process.env. They seed the
-// in-memory cache instead. `__setTestConfig` overlays a partial onto the current
-// (disk-or-defaults) snapshot; `__resetTestConfig` clears it. Test-only — prod
-// never calls these.
+// in-memory cache instead. `__setTestConfig` overlays a partial onto the CURRENT
+// cache (or code defaults on first call) — never the developer's real config.json
+// on disk, so it stays hermetic AND additive across calls. It also avoids
+// triggering loadConfig()'s one-time .env migration on a dev machine.
+// `__resetTestConfig` clears it. Test-only — prod never calls these.
 export function __setTestConfig(partial = {}) {
-  cache = deepMerge(getConfig(), partial);
+  cache = deepMerge(cache ?? defaults(), partial);
   return cache;
 }
 export function __resetTestConfig() {
