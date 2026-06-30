@@ -73,6 +73,7 @@
       </div>
       <div class="navgroup">
         <div class="navgroup-label">Connections</div>
+        <a href="#agents"   data-route="agents">Agents</a>
         <a href="#devices"  data-route="devices">Devices</a>
       </div>
       <div class="navgroup">
@@ -220,6 +221,28 @@
         </div>
         <div class="graph-tooltip" id="graph-tooltip" hidden></div>
         <div class="graph-overlay" id="graph-overlay"></div>
+      </div>
+    </section>
+
+    <!-- ── Agents ───────────────────────────────────────────────── -->
+    <section id="view-agents" class="view">
+      <div class="section-head">
+        <div class="title-block">
+          <h2>Agents</h2>
+          <p>One shared memory across every AI coding tool on this machine. Connect a tool and Sigil writes a small, reversible hook so it reads and writes the same brain.</p>
+        </div>
+        <div class="actions"><button class="btn" id="agents-refresh">Refresh</button></div>
+      </div>
+
+      <div class="connector-grid" id="agents-connectors"><div class="muted">detecting installed tools…</div></div>
+
+      <h3 class="section-sub">Activity by agent</h3>
+      <p class="muted text-sm" style="margin-top: calc(var(--s-3) * -1 + 2px); margin-bottom: var(--s-3);">Reads and writes attributed to each agent, from recent activity.</p>
+      <div class="table-wrap">
+        <table id="agents-activity">
+          <thead><tr><th>Agent</th><th class="num">Searches</th><th class="num">Writes</th><th class="num">Last seen</th></tr></thead>
+          <tbody><tr><td colspan="4" class="empty">loading…</td></tr></tbody>
+        </table>
       </div>
     </section>
 
@@ -382,15 +405,8 @@
         </div>
       </div>
 
-      <!-- Coding agents — single-click install of Sigil hooks into Claude Code,
-           Cursor, Codex, Kiro, Hermes. Cards reuse the wizard's connectorCard. -->
-      <div class="panel" style="padding: var(--s-5); margin-bottom: var(--s-4);">
-        <div class="title-block" style="margin-bottom: var(--s-4);">
-          <h3 style="margin: 0;">Coding agents</h3>
-          <p class="muted text-sm" style="margin: 4px 0 0;">One shared memory across every AI coding tool you use. Sigil writes a small CLAUDE.md/AGENTS.md import + hook config — fully reversible.</p>
-        </div>
-        <div class="connector-grid" id="settings-connectors"><div class="muted">detecting installed tools…</div></div>
-      </div>
+      <!-- Coding agents now live on their own page (Connections › Agents). -->
+      <p class="muted text-sm" style="margin-bottom: var(--s-4);">Connect coding tools to this memory on the <a href="#agents" data-route="agents">Agents</a> page.</p>
 
       <!-- Current config + switch controls -->
       <div class="panel" style="padding: var(--s-5); margin-bottom: var(--s-4);">

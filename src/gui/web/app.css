@@ -456,6 +456,14 @@ h3.section-sub {
   .home-cols { grid-template-columns: 1fr; }
 }
 
+/* Agents — activity-by-agent table: right-align the numeric columns */
+#agents-activity th.num,
+#agents-activity td.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
 /* ════════════════════════════════════════════════════════════════════════
    Key-value rows (replaces dl)
    ════════════════════════════════════════════════════════════════════════ */

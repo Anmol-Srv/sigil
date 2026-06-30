@@ -61,9 +61,9 @@ function renderKv(node, entries) {
   node.innerHTML = entries.map(([k, v]) => `<div class="row"><div class="k">${escape(k)}</div><div class="v">${escape(v)}</div></div>`).join('');
 }
 
-const validRoutes = ['health', 'kb', 'graph', 'devices', 'activity', 'engine', 'setup', 'settings', 'methods'];
+const validRoutes = ['health', 'kb', 'graph', 'agents', 'devices', 'activity', 'engine', 'setup', 'settings', 'methods'];
 const ROUTE_TITLES = {
-  health: 'Home', kb: 'Knowledge Base', graph: 'Graph', devices: 'Devices',
+  health: 'Home', kb: 'Knowledge Base', graph: 'Graph', agents: 'Agents', devices: 'Devices',
   activity: 'Activity', engine: 'Engine', setup: 'Database', settings: 'Settings', methods: 'RPC methods',
 };
 function setRoute(name) {
@@ -81,7 +81,8 @@ function setRoute(name) {
   if (name === 'kb')       refreshKb();
   if (name === 'graph')    initGraphView();
   if (name === 'methods')  refreshMethods();
-  if (name === 'settings') { refreshEnv(); refreshSettingsClients(); }
+  if (name === 'settings') refreshEnv();
+  if (name === 'agents')   refreshAgents();
   if (name === 'devices')  refreshDevices();
   if (name === 'activity') { ensureActivityWs(); loadTraces(); }
   if (name === 'engine')   startEnginePolling(); else stopEnginePolling();
@@ -95,6 +96,7 @@ $$('nav a').forEach((a) => {
   a.addEventListener('click', (e) => { e.preventDefault(); setRoute(a.dataset.route); });
 });
 $('#home-refresh')?.addEventListener('click', refreshHealth);
+$('#agents-refresh')?.addEventListener('click', refreshAgents);
 
 const fmtNum = (x) => (typeof x === 'number' ? x.toLocaleString() : '—');
 
@@ -1097,40 +1099,70 @@ async function refreshEnv() {
 // Same flow as the onboarding CONNECTORS step, surfaced post-onboarding so
 // users who skipped the step (or completed setup before this card existed)
 // can still wire up Claude Code / Cursor / Codex / Kiro / Hermes.
-async function refreshSettingsClients() {
-  const host = $('#settings-connectors');
-  if (!host) return;
-  try {
-    const { connectors } = await rpc('listConnectors');
-    host.innerHTML = '';
-    if (!connectors.length) {
-      host.innerHTML = '<div class="muted">no agents registered</div>';
-      return;
+// ════════════════════════════════════════════════════════════════════
+// AGENTS — connect coding tools to this memory + per-agent activity
+// ════════════════════════════════════════════════════════════════════
+async function refreshAgents() {
+  const host = $('#agents-connectors');
+  if (host) {
+    try {
+      const { connectors } = await rpc('listConnectors');
+      host.innerHTML = '';
+      if (!connectors.length) host.innerHTML = '<div class="muted">no coding tools detected on this machine</div>';
+      else connectors.forEach((c) => host.appendChild(connectorCard(c, onAgentAction)));
+    } catch (err) {
+      host.innerHTML = `<div class="muted">could not load agents: ${escape(err.message)}</div>`;
     }
-    connectors.forEach((c) => host.appendChild(connectorCard(c, onSettingsClientAction)));
-  } catch (err) {
-    host.innerHTML = `<div class="muted">could not load agents: ${escape(err.message)}</div>`;
   }
+  loadAgentActivity();
 }
 
-async function onSettingsClientAction(id, action) {
-  const host = $('#settings-connectors');
+async function onAgentAction(id, action) {
+  const host = $('#agents-connectors');
   const card = host?.querySelector(`[data-id="${id}"]`);
   if (action === 'disconnect') {
     try {
       await rpc('disconnectConnector', { id });
       toast({ variant: 'success', message: `${id} disconnected` });
     } catch (err) { toast({ variant: 'error', message: err.message, hint: err.hint, code: err.code }); }
-    return refreshSettingsClients();
+    return refreshAgents();
   }
-  if (card) card.replaceWith(connectorCard({ id, label: id, hint: '', uiState: 'connecting' }, onSettingsClientAction));
+  if (card) card.replaceWith(connectorCard({ id, label: id, hint: '', uiState: 'connecting' }, onAgentAction));
   try {
     await rpc('connectConnector', { id });
     toast({ variant: 'success', message: `${id} connected` });
   } catch (err) {
     toast({ variant: 'error', message: err.message || `could not connect ${id}`, hint: err.hint, code: err.code });
   }
-  return refreshSettingsClients();
+  return refreshAgents();
+}
+
+// Per-agent reads/writes from recent traces (newest-first), attributed by the
+// trace's `agent` field — no backend metric needed. Same approach as Home.
+async function loadAgentActivity() {
+  const tbody = $('#agents-activity tbody');
+  if (!tbody) return;
+  let traces;
+  try { ({ traces } = await rpc('trace.list', { limit: 200 })); }
+  catch (err) { tbody.innerHTML = `<tr><td colspan="4" class="empty">could not load activity: ${escape(err.message)}</td></tr>`; return; }
+
+  const byAgent = new Map();
+  for (const t of traces) {
+    if (!t.agent) continue;
+    if (!byAgent.has(t.agent)) byAgent.set(t.agent, { searches: 0, writes: 0, last: t.ts }); // first seen = latest
+    const rec = byAgent.get(t.agent);
+    if (t.kind === 'search') rec.searches++;
+    else if (t.kind === 'ingest') rec.writes++;
+  }
+  const rows = [...byAgent.entries()].sort((a, b) => (b[1].searches + b[1].writes) - (a[1].searches + a[1].writes));
+  tbody.innerHTML = rows.length
+    ? rows.map(([agent, r]) => `<tr>
+        <td><span class="badge ${agentBadge(agent)}">${escape(agent)}</span></td>
+        <td class="num">${r.searches}</td>
+        <td class="num">${r.writes}</td>
+        <td class="num">${escape(clock(r.last))}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="4" class="empty">no agent activity yet</td></tr>';
 }
 
 // ── Settings: live provider switcher (LLM + embedding) ───────────────
