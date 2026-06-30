@@ -16,6 +16,7 @@ export default [
       'web-redirect/**',
       'eval/**',
       'benchmarks/**',
+      'src/gui/web/vendor/**',  // vendored third-party UMD bundles (force-graph)
     ],
   },
 
@@ -62,10 +63,11 @@ export default [
   },
 
   // Browser-side GUI: different global environment (window, document, fetch…).
+  // ForceGraph is the vendored force-graph UMD global (loaded via <script>).
   {
     files: ['src/gui/web/**/*.js'],
     languageOptions: {
-      globals: { ...globals.browser },
+      globals: { ...globals.browser, ForceGraph: 'readonly' },
     },
   },
 

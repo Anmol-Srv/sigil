@@ -615,28 +615,33 @@ $('#kb-entity-detail')?.addEventListener('click', (e) => {
 });
 
 // ════════════════════════════════════════════════════════════════════
-// GRAPH VIEW — whole-KB force-directed graph on canvas (Obsidian-style)
-// Hand-rolled spring-electrical simulation (velocity Verlet + cooling),
-// no dependencies. Facts + entities as nodes; fact→entity mentions and
-// entity→entity relations as edges.
+// GRAPH VIEW — whole-KB force-directed graph (Obsidian-style)
+// Rendered with vasturiano/force-graph (vendored UMD): d3-force physics +
+// HTML5 canvas, with drag / pan / zoom / hover / auto-resize handled by the
+// library. We keep custom canvas drawing so nodes, links and labels match the
+// Sigil design tokens. Facts + entities are nodes; fact→entity mentions and
+// entity→entity relations are edges.
 // ════════════════════════════════════════════════════════════════════
 const graph = {
   loaded: false,
   raw: null,            // { nodes, edges, counts, truncated }
-  sim: null,            // running simulation handle
-  view: { x: 0, y: 0, k: 1 },  // pan (x,y) + zoom (k)
+  fg: null,             // ForceGraph instance
+  adj: new Map(),       // id → Set(neighbour ids), for hover-highlight
   hover: null,
-  dragNode: null,
-  panning: false,
+  _fitted: false,
 };
 
-// Entity-type palette — a cohesive cool triad, distinct on the near-black
-// canvas. Used by both the graph nodes and the KB browser's type dots/legend.
-const ENTITY_COLORS = { person: '#4ea1ff', topic: '#9a86ff', document: '#43c9b0' };
+// Entity-type palette — brand-forward: topics (the most common entity) take the
+// brand blue so the graph reads mostly-blue and on-brand, with person/document
+// as light-blue / teal accents. Mirrors the --etype-* design tokens (one source
+// of truth). Used by the graph nodes and the KB browser's type dots/legend.
+const ENTITY_COLORS = { person: '#9bd6ff', topic: '#2f81f7', document: '#36cfa6' };
+const FACT_COLOR = '#565a63';   // --etype-fact: visible-but-secondary on canvas
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+let _graphPointer = { x: 0, y: 0 };
 
 async function initGraphView() {
-  if (graph.loaded) { graph.hover = null; hideTooltip(); graphFit(); return; }
+  if (graph.loaded) { graph.hover = null; hideTooltip(); sizeGraph(); graph.fg?.zoomToFit(400, 64); return; }
   await loadGraph();
 }
 
@@ -654,7 +659,7 @@ async function loadGraph() {
       return;
     }
     overlay.style.display = 'none';
-    buildSimulation(data);
+    buildGraph(data);
     graph.loaded = true;
   } catch (err) {
     overlay.innerHTML = `<div class="graph-status err">Couldn’t build the graph: ${escape(err.message)}</div>`;
@@ -729,272 +734,224 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
-function buildSimulation(data) {
-  const stage = $('#graph-stage');
-  const W = stage.clientWidth, H = stage.clientHeight;
+function buildGraph(data) {
+  const mount = $('#graph-canvas');
+  if (typeof ForceGraph === 'undefined') throw new Error('graph engine failed to load');
 
-  // node radius: entities scale with degree+mentions; facts are small dots
-  const nodes = data.nodes.map((n, idx) => {
+  // node radius: entities scale gently with degree+mentions (tight range so
+  // hubs don't dwarf everything); facts are small dots. Spread each node so
+  // force-graph mutates a fresh copy, leaving graph.raw intact.
+  const nodes = data.nodes.map((n) => {
     const deg = n.degree || 0;
-    const r = n.kind === 'entity' ? Math.min(4 + Math.sqrt(deg + (n.mentions || 0)) * 3.2, 22) : 3.2;
-    // seed on a spiral so the layout opens consistently (no Math.random reliance for repeatability)
-    const ang = idx * 2.399963229, rad = 14 * Math.sqrt(idx);
-    return { ...n, r, x: W / 2 + Math.cos(ang) * rad, y: H / 2 + Math.sin(ang) * rad, vx: 0, vy: 0 };
+    const r = n.kind === 'entity'
+      ? Math.max(3.5, Math.min(3 + Math.sqrt(deg + (n.mentions || 0)) * 1.5, 11))
+      : 2.4;
+    return { ...n, r };
   });
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const links = data.edges
-    .map((e) => ({ ...e, s: byId.get(e.source), t: byId.get(e.target) }))
-    .filter((l) => l.s && l.t);
+  const links = data.edges.map((e) => ({ ...e }));
 
-  // adjacency for hover-highlight
+  // adjacency (by id) for hover-highlight — built now, before force-graph swaps
+  // each link's source/target from an id string to a node reference.
   const adj = new Map();
   for (const n of nodes) adj.set(n.id, new Set());
-  for (const l of links) { adj.get(l.s.id).add(l.t.id); adj.get(l.t.id).add(l.s.id); }
+  for (const e of data.edges) {
+    if (adj.has(e.source) && adj.has(e.target)) {
+      adj.get(e.source).add(e.target);
+      adj.get(e.target).add(e.source);
+    }
+  }
+  graph.adj = adj;
+  graph.hover = null;
+  graph._fitted = false;
+  // On dense graphs, only label the biggest hubs at the default zoom (zooming
+  // past 1.45 still reveals every entity label, hover always labels).
+  graph._hubMin = nodes.length > 150 ? 10 : 2;
 
-  graph.nodes = nodes; graph.links = links; graph.byId = byId; graph.adj = adj;
+  // Reuse the instance across refreshes so we don't leak canvases/listeners.
+  if (graph.fg) {
+    graph.fg.graphData({ nodes, links });
+    graph.fg.d3ReheatSimulation();
+    sizeGraph();
+    return;
+  }
 
-  setupCanvas();
-  if (graph.sim) cancelAnimationFrame(graph.sim);
+  const fg = new ForceGraph(mount)
+    .backgroundColor('rgba(0,0,0,0)')          // let the CSS dotted grid show through
+    .nodeId('id')
+    .nodeCanvasObject(drawNode)                 // custom draw → matches design tokens
+    .nodePointerAreaPaint((n, color, ctx) => { // generous, radius-aware hit target
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, Math.max(n.r, 6), 0, 2 * Math.PI);
+      ctx.fill();
+    })
+    .linkColor(graphLinkColor)
+    .linkWidth((l) => (l.kind === 'relation' ? 1.3 : 1))
+    .onNodeHover(onGraphHover)
+    .onNodeClick((n) => openGraphNode(n))
+    .onNodeDragEnd((n) => { n.fx = n.x; n.fy = n.y; })  // pin a deliberately-placed node
+    .onBackgroundClick(() => { graph.hover = null; hideTooltip(); })
+    .warmupTicks(reducedMotion ? 200 : 0)      // pre-settle invisibly if motion is reduced
+    .cooldownTicks(reducedMotion ? 0 : 200);   // …then stop quickly (bounded animation)
 
-  // simulation params
-  const REPULSION = 1400, LINK_DIST = 64, LINK_K = 0.04, GRAVITY = 0.018, DAMP = 0.86;
-  let alpha = 1;
+  // Tune the d3 forces for an Obsidian-style constellation. A collision force
+  // (below) does the spacing, so charge/links can stay gentle — that's what
+  // keeps the graph compact instead of scattering: short links pull connected
+  // nodes into tight rosettes, light repulsion just separates clusters, and
+  // collision guarantees no overlap. The default forceCenter re-centres the
+  // centroid each tick, so orphans can't drift off-canvas. Forces ease off as
+  // the KB grows so a big graph doesn't blow up.
+  const n = nodes.length;
+  const charge = n > 400 ? -22 : n > 150 ? -45 : -90;
+  fg.d3Force('charge').strength(charge).distanceMax(170);
+  fg.d3Force('link').distance(24).strength(0.28);
+  fg.d3Force('collide', collideForce((nd) => nd.r + 2, 0.9));
 
-  function tick() {
-    const cx = W / 2, cy = H / 2;
-    // repulsion (O(n²) — fine for a few hundred nodes)
-    for (let a = 0; a < nodes.length; a++) {
-      const na = nodes[a];
-      for (let b = a + 1; b < nodes.length; b++) {
-        const nb = nodes[b];
-        let dx = na.x - nb.x, dy = na.y - nb.y;
-        let d2 = dx * dx + dy * dy; if (d2 < 0.01) { d2 = 0.01; dx = (a - b) * 0.1; }
-        const f = (REPULSION * alpha) / d2;
-        const d = Math.sqrt(d2);
-        const fx = (dx / d) * f, fy = (dy / d) * f;
-        na.vx += fx; na.vy += fy; nb.vx -= fx; nb.vy -= fy;
+  // Auto-fit once the layout settles: fit instantly, then clamp zoom to 1.5×
+  // so the graph fills the frame on a small KB without ballooning the nodes.
+  fg.onEngineStop(() => {
+    if (graph._fitted) return;
+    graph._fitted = true;
+    fg.zoomToFit(0, 55);
+    if (fg.zoom() > 1.5) fg.zoom(1.5, 0);
+  });
+
+  graph.fg = fg;
+  fg.graphData({ nodes, links });
+  sizeGraph();
+}
+
+// Minimal collision force (d3-force compatible: a function called each tick
+// plus an .initialize hook that receives the node array). force-graph bundles
+// d3-force privately and doesn't expose forceCollide, so we register our own.
+// O(n²) per tick — fine for a few hundred nodes (the old engine did the same).
+// `radius(node)` → the keep-out radius; `strength` 0..1 damps the push.
+function collideForce(radius, strength = 0.85) {
+  let nodes = [];
+  function force() {
+    for (let i = 0; i < nodes.length; i++) {
+      const a = nodes[i];
+      const ra = radius(a);
+      for (let j = i + 1; j < nodes.length; j++) {
+        const b = nodes[j];
+        // resolve against the post-velocity position, like d3.forceCollide
+        let dx = (b.x + b.vx) - (a.x + a.vx);
+        let dy = (b.y + b.vy) - (a.y + a.vy);
+        let d2 = dx * dx + dy * dy;
+        const rmin = ra + radius(b);
+        if (d2 < rmin * rmin) {
+          if (d2 === 0) { dx = (i - j) * 0.5; dy = (j - i) * 0.5; d2 = dx * dx + dy * dy; }
+          const d = Math.sqrt(d2);
+          const push = ((rmin - d) / d) * strength * 0.5;
+          const ox = dx * push, oy = dy * push;
+          a.vx -= ox; a.vy -= oy;
+          b.vx += ox; b.vy += oy;
+        }
       }
     }
-    // springs
-    for (const l of links) {
-      let dx = l.t.x - l.s.x, dy = l.t.y - l.s.y;
-      const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      const f = LINK_K * (d - LINK_DIST) * alpha;
-      const fx = (dx / d) * f, fy = (dy / d) * f;
-      l.s.vx += fx; l.s.vy += fy; l.t.vx -= fx; l.t.vy -= fy;
-    }
-    // gravity to center (contains orphans) + integrate
-    for (const n of nodes) {
-      if (n === graph.dragNode || n.pinned) { n.vx = 0; n.vy = 0; continue; }
-      n.vx += (cx - n.x) * GRAVITY * alpha;
-      n.vy += (cy - n.y) * GRAVITY * alpha;
-      n.vx *= DAMP; n.vy *= DAMP;
-      n.x += n.vx; n.y += n.vy;
-    }
-    // forceCenter: snap the free cluster's centroid back to canvas center each
-    // tick (Obsidian-style center of gravity) so the layout settles centered
-    // instead of drifting off into a corner. Pinned / dragged nodes are excluded
-    // so a deliberate placement isn't yanked around.
-    let mx = 0, my = 0, cnt = 0;
-    for (const n of nodes) { if (n === graph.dragNode || n.pinned) continue; mx += n.x; my += n.y; cnt++; }
-    if (cnt) {
-      const sx = cx - mx / cnt, sy = cy - my / cnt;
-      for (const n of nodes) { if (n === graph.dragNode || n.pinned) continue; n.x += sx; n.y += sy; }
-    }
-    alpha *= 0.985;
   }
-
-  if (reducedMotion) {
-    for (let i = 0; i < 320; i++) tick();
-    graphFit(); render();
-  } else {
-    function loop() {
-      tick();
-      render();
-      if (alpha > 0.02 || graph.dragNode) { graph.sim = requestAnimationFrame(loop); }
-      else graph.sim = null;
-    }
-    graphFit(false);
-    graph.sim = requestAnimationFrame(loop);
-  }
-  graph._reheat = () => { alpha = Math.max(alpha, 0.5); if (!graph.sim && !reducedMotion) graph.sim = requestAnimationFrame(function l() { tick(); render(); if (alpha > 0.02 || graph.dragNode) graph.sim = requestAnimationFrame(l); else graph.sim = null; }); };
+  force.initialize = (_nodes) => { nodes = _nodes; };
+  return force;
 }
 
-function setupCanvas() {
-  const canvas = $('#graph-canvas');
-  const stage = $('#graph-stage');
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = stage.clientWidth * dpr;
-  canvas.height = stage.clientHeight * dpr;
-  canvas.style.width = stage.clientWidth + 'px';
-  canvas.style.height = stage.clientHeight + 'px';
-  graph.ctx = canvas.getContext('2d');
-  graph.dpr = dpr;
-}
-
-function render() {
-  const ctx = graph.ctx; if (!ctx) return;
-  const canvas = $('#graph-canvas');
-  const { x: px, y: py, k } = graph.view;
-  ctx.save();
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.scale(graph.dpr, graph.dpr);
-  ctx.translate(px, py); ctx.scale(k, k);
-
+// Custom node renderer — colours by entity type, sizes by degree, and shows
+// labels for hubs (always), leaf entities (zoomed in / hovered) and facts (only
+// on hover). `scale` is the current zoom (k), so dividing by it keeps strokes
+// and label text screen-constant while node radii scale with zoom.
+function drawNode(n, ctx, scale) {
   const hoverId = graph.hover?.id;
   const lit = hoverId ? graph.adj.get(hoverId) : null;
-  const isLit = (id) => !hoverId || id === hoverId || lit.has(id);
-
-  // edges — three tiers: incident-to-hover (bright), idle (legible at rest),
-  // non-incident-while-hovering (faded so the focused subgraph reads clearly)
-  for (const l of graph.links) {
-    const incident = l.s.id === hoverId || l.t.id === hoverId;
-    const faded = hoverId && !incident;
-    ctx.beginPath();
-    ctx.moveTo(l.s.x, l.s.y); ctx.lineTo(l.t.x, l.t.y);
-    if (l.kind === 'relation') {
-      ctx.strokeStyle = incident ? 'rgba(0,132,255,0.7)' : faded ? 'rgba(0,132,255,0.06)' : 'rgba(0,132,255,0.3)';
-      ctx.lineWidth = 1.3 / k;
-    } else {
-      ctx.strokeStyle = incident ? 'rgba(164,167,179,0.6)' : faded ? 'rgba(140,142,150,0.05)' : 'rgba(146,149,171,0.2)';
-      ctx.lineWidth = 1 / k;
-    }
-    ctx.stroke();
+  const on = !hoverId || n.id === hoverId || lit?.has(n.id);
+  ctx.globalAlpha = on ? 1 : 0.18;
+  ctx.beginPath();
+  ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+  if (n.kind === 'entity') {
+    ctx.fillStyle = ENTITY_COLORS[n.entityType] || ENTITY_COLORS.topic;
+    ctx.fill();
+    if (n.id === hoverId) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = '#f4f5f6'; ctx.stroke(); }
+  } else {
+    ctx.fillStyle = FACT_COLOR;
+    ctx.fill();
+    if (n.id === hoverId) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = '#0084ff'; ctx.stroke(); }
   }
-  // nodes
-  for (const n of graph.nodes) {
-    const on = isLit(n.id);
-    ctx.globalAlpha = on ? 1 : 0.22;
-    ctx.beginPath();
-    ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-    if (n.kind === 'entity') {
-      ctx.fillStyle = ENTITY_COLORS[n.entityType] || ENTITY_COLORS.topic;
-      ctx.fill();
-      if (n.id === hoverId) { ctx.lineWidth = 2 / k; ctx.strokeStyle = '#f4f5f6'; ctx.stroke(); }
-    } else {
-      ctx.fillStyle = '#5b5f67'; // visible-but-secondary on the near-black canvas
-      ctx.fill();
-      if (n.id === hoverId) { ctx.lineWidth = 2 / k; ctx.strokeStyle = '#0084ff'; ctx.stroke(); }
-    }
-    ctx.globalAlpha = 1;
-    // labels: hubs (high-degree entities) read at any zoom; leaf entities only
-    // when zoomed in or hovered; facts only on hover. Keeps dense graphs legible.
-    const isHub = n.kind === 'entity' && n.degree >= 2;
-    const showLabel = n.id === hoverId || (n.kind === 'entity' && on && (isHub || k > 1.45));
-    if (showLabel) {
-      const label = n.label.length > 26 ? n.label.slice(0, 25) + '…' : n.label;
-      ctx.font = `${n.kind === 'entity' ? 600 : 400} ${11 / k}px 'Geist', ui-sans-serif, system-ui, sans-serif`;
-      ctx.fillStyle = on ? '#f4f5f6' : '#74777d';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-      ctx.fillText(label, n.x, n.y + n.r + 2 / k);
-    }
+  ctx.globalAlpha = 1;
+  const isHub = n.kind === 'entity' && (n.degree || 0) >= (graph._hubMin || 2);
+  const showLabel = n.id === hoverId || (n.kind === 'entity' && on && (isHub || scale > 1.45));
+  if (showLabel) {
+    const label = n.label.length > 26 ? n.label.slice(0, 25) + '…' : n.label;
+    ctx.font = `${n.kind === 'entity' ? 600 : 400} ${11 / scale}px 'Geist', ui-sans-serif, system-ui, sans-serif`;
+    ctx.fillStyle = on ? '#f4f5f6' : '#74777d';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(label, n.x, n.y + n.r + 2 / scale);
   }
-  ctx.restore();
 }
 
-// fit all nodes into view (with padding)
-function graphFit(doRender = true) {
-  const nodes = graph.nodes; if (!nodes?.length) return;
+// Edge colour — three tiers: incident-to-hover (bright), idle (legible at
+// rest), non-incident-while-hovering (faded so the focused subgraph reads
+// clearly). Works whether source/target are id strings or node refs.
+function graphLinkColor(l) {
+  const hoverId = graph.hover?.id;
+  const sid = (l.source && l.source.id) ?? l.source;
+  const tid = (l.target && l.target.id) ?? l.target;
+  const incident = sid === hoverId || tid === hoverId;
+  const faded = hoverId && !incident;
+  if (l.kind === 'relation') {
+    return incident ? 'rgba(0,132,255,0.7)' : faded ? 'rgba(0,132,255,0.06)' : 'rgba(0,132,255,0.3)';
+  }
+  return incident ? 'rgba(164,167,179,0.6)' : faded ? 'rgba(140,142,150,0.05)' : 'rgba(146,149,171,0.22)';
+}
+
+// Hover → drive the existing tooltip + cursor. force-graph repaints every
+// frame, so updating graph.hover here is enough for drawNode / graphLinkColor
+// to reflect the highlight.
+function onGraphHover(n) {
+  graph.hover = n || null;
+  const mount = $('#graph-canvas');
+  if (mount) mount.style.cursor = n ? 'pointer' : 'grab';
+  if (n) showTooltip(n, _graphPointer.x, _graphPointer.y);
+  else hideTooltip();
+}
+
+// Keep the force-graph canvas matched to its container (fixes the old 0×0 /
+// stale-size races: we re-assert size on enter and on every container resize).
+function sizeGraph() {
+  if (!graph.fg) return;
   const stage = $('#graph-stage');
-  const W = stage.clientWidth, H = stage.clientHeight;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const n of nodes) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); }
-  const gw = (maxX - minX) || 1, gh = (maxY - minY) || 1;
-  const pad = 96; // generous margin so edge nodes' labels stay in frame
-  // Cap below the leaf-label threshold (1.45) so the default view labels only
-  // hubs; zooming in past that reveals every entity label.
-  const k = Math.min((W - pad) / gw, (H - pad) / gh, 1.35);
-  graph.view.k = k;
-  graph.view.x = W / 2 - ((minX + maxX) / 2) * k;
-  graph.view.y = H / 2 - ((minY + maxY) / 2) * k;
-  if (doRender) render();
+  const w = stage.clientWidth, h = stage.clientHeight;
+  if (w > 0 && h > 0) graph.fg.width(w).height(h);
 }
 
-// screen → world coords
-function toWorld(sx, sy) {
-  return { x: (sx - graph.view.x) / graph.view.k, y: (sy - graph.view.y) / graph.view.k };
-}
-function nodeAt(sx, sy) {
-  const { x, y } = toWorld(sx, sy);
-  // topmost (facts drawn last but entities are bigger targets) — iterate reverse
-  for (let i = graph.nodes.length - 1; i >= 0; i--) {
-    const n = graph.nodes[i];
-    const dx = n.x - x, dy = n.y - y;
-    const hitR = Math.max(n.r, 6); // generous hit target in world units
-    if (dx * dx + dy * dy <= hitR * hitR) return n;
-  }
-  return null;
-}
-
-// ── graph interactions ───────────────────────────────────────────────
+// ── graph interactions (toolbar, tooltip placement, resize) ──────────
+// Drag / pan / zoom / hover hit-testing are all handled by force-graph; here
+// we only wire the toolbar buttons, keep the tooltip glued to the pointer
+// (onNodeHover gives us the node but no coords), and keep the canvas sized to
+// its container — which kills the old 0×0 / stale-size races.
 (function wireGraph() {
-  const stage = () => $('#graph-stage');
-  const canvas = () => $('#graph-canvas');
-  let down = null;
+  const stage = $('#graph-stage');
 
-  $('#graph-stage')?.addEventListener('pointerdown', (e) => {
-    const rect = canvas().getBoundingClientRect();
-    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
-    const n = nodeAt(sx, sy);
-    down = { sx, sy, vx: graph.view.x, vy: graph.view.y, node: n, moved: false };
-    if (n) { graph.dragNode = n; } else { graph.panning = true; }
-    canvas().setPointerCapture(e.pointerId);
+  stage?.addEventListener('pointermove', (e) => {
+    const rect = stage.getBoundingClientRect();
+    _graphPointer.x = e.clientX - rect.left;
+    _graphPointer.y = e.clientY - rect.top;
+    if (graph.hover) showTooltip(graph.hover, _graphPointer.x, _graphPointer.y);
   });
-  $('#graph-stage')?.addEventListener('pointermove', (e) => {
-    const rect = canvas().getBoundingClientRect();
-    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
-    if (!down) {
-      const n = nodeAt(sx, sy);
-      if (n !== graph.hover) { graph.hover = n; showTooltip(n, sx, sy); render(); }
-      else if (n) showTooltip(n, sx, sy);
-      canvas().style.cursor = n ? 'pointer' : 'grab';
-      return;
-    }
-    const ddx = sx - down.sx, ddy = sy - down.sy;
-    if (Math.abs(ddx) > 3 || Math.abs(ddy) > 3) down.moved = true;
-    if (down.node) {
-      const w = toWorld(sx, sy);
-      down.node.x = w.x; down.node.y = w.y;
-      graph._reheat?.(); render();
-    } else if (graph.panning) {
-      graph.view.x = down.vx + ddx; graph.view.y = down.vy + ddy;
-      render();
-    }
-  });
-  function endDrag(_e) {
-    if (down && down.node && !down.moved) openGraphNode(down.node);
-    else if (down && down.node && down.moved) down.node.pinned = true; // keep a deliberately-placed node put
-    graph.dragNode = null; graph.panning = false; down = null;
-    if (canvas()) canvas().style.cursor = 'grab';
-  }
-  $('#graph-stage')?.addEventListener('pointerup', endDrag);
-  $('#graph-stage')?.addEventListener('pointerleave', () => { if (!down) { graph.hover = null; hideTooltip(); render(); } });
+  stage?.addEventListener('pointerleave', () => { graph.hover = null; hideTooltip(); });
 
-  $('#graph-stage')?.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const rect = canvas().getBoundingClientRect();
-    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
-    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-    const k0 = graph.view.k, k1 = Math.max(0.15, Math.min(k0 * factor, 6));
-    // zoom toward cursor
-    graph.view.x = sx - (sx - graph.view.x) * (k1 / k0);
-    graph.view.y = sy - (sy - graph.view.y) * (k1 / k0);
-    graph.view.k = k1;
-    render();
-  }, { passive: false });
-
+  const zoomBy = (f) => { if (graph.fg) graph.fg.zoom(graph.fg.zoom() * f, 200); };
   $('#graph-zoom-in')?.addEventListener('click', () => zoomBy(1.25));
   $('#graph-zoom-out')?.addEventListener('click', () => zoomBy(1 / 1.25));
-  $('#graph-zoom-fit')?.addEventListener('click', () => graphFit());
+  $('#graph-zoom-fit')?.addEventListener('click', () => graph.fg?.zoomToFit(400, 64));
   $('#graph-refresh')?.addEventListener('click', () => { graph.loaded = false; loadGraph(); });
-  $('#graph-relayout')?.addEventListener('click', () => { if (graph.raw) buildSimulation(graph.raw); });
+  $('#graph-relayout')?.addEventListener('click', () => {
+    if (!graph.fg) return;
+    // unpin every node, then re-run the layout from the current positions
+    for (const n of graph.fg.graphData().nodes) { n.fx = undefined; n.fy = undefined; }
+    graph._fitted = false;
+    graph.fg.d3ReheatSimulation();
+  });
 
-  function zoomBy(f) {
-    const stageEl = stage(); const sx = stageEl.clientWidth / 2, sy = stageEl.clientHeight / 2;
-    const k0 = graph.view.k, k1 = Math.max(0.15, Math.min(k0 * f, 6));
-    graph.view.x = sx - (sx - graph.view.x) * (k1 / k0);
-    graph.view.y = sy - (sy - graph.view.y) * (k1 / k0);
-    graph.view.k = k1; render();
+  if (stage && 'ResizeObserver' in window) {
+    new ResizeObserver(() => sizeGraph()).observe(stage);
   }
 })();
 
@@ -1030,13 +987,6 @@ function kbSelectFactById(factId) {
   }).catch(() => {});
 }
 
-let _graphResizeT = null;
-window.addEventListener('resize', () => {
-  if (location.hash !== '#graph' || !graph.loaded) return;
-  clearTimeout(_graphResizeT);
-  _graphResizeT = setTimeout(() => { setupCanvas(); graphFit(); }, 150);
-});
-
 async function refreshMethods() {
   try {
     const res = await fetch('/api/v1/methods', { credentials: 'same-origin' });
@@ -1055,6 +1005,7 @@ async function refreshEnv() {
     const dbDesc = db.mode === 'url' ? `connection URL (${db.urlHost || '—'})`
       : db.mode === 'docker' ? `Docker container (localhost:${db.port})`
       : db.mode === 'local' ? `local Postgres (${db.host}:${db.port})`
+      : db.mode === 'embedded' ? 'built-in (embedded)'
       : 'not configured';
     $('#cfg-db').textContent = `${dbDesc}${c.setup?.steps?.database === 'done' ? ' · ready' : ''}`;
     $('#cfg-llm').textContent = c.llm?.provider ? `${c.llm.provider}${c.llm.model ? ` · ${c.llm.model}` : ''}` : 'not configured';
