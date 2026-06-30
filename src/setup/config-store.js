@@ -312,9 +312,17 @@ function migrateEnvIfPresent() {
 
 // ── public API ───────────────────────────────────────────────────────────────
 
-/** Load (migrate legacy .env → read → migrate schema → prune → merge defaults). */
-export function loadConfig() {
-  migrateEnvIfPresent();
+/**
+ * Load (migrate legacy .env → read → migrate schema → prune → merge defaults).
+ *
+ * `migrateEnv: false` skips the one-time ~/.sigil/.env → config.json import +
+ * rename. knexfile.js uses this: importing it for a connection string must not
+ * consume the user's .env as a module-load side effect (a failed `npm run
+ * migrate` would otherwise have already renamed it). The daemon/CLI run the full
+ * migration on their own first load.
+ */
+export function loadConfig({ migrateEnv = true } = {}) {
+  if (migrateEnv) migrateEnvIfPresent();
   let raw = readRaw();
   const migrated = runMigrations(raw);
   // Persist a migration only if it actually changed the version on disk.
