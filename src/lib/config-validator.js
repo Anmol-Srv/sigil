@@ -58,6 +58,7 @@ export function validateConfig() {
   validateEmbedding(issues);
   validateLlm(issues);
   validateDb(issues);
+  validateSetup(issues);
 
   return issues;
 }
@@ -74,7 +75,7 @@ export async function validateConfigDeep() {
         level: 'fail',
         code: 'DB_UNREACHABLE',
         message: `Postgres at ${config.db.host}:${config.db.port}/${config.db.database} unreachable: ${err.message.split('\n')[0]}`,
-        fix: 'Start Postgres (e.g. `docker start sigil-pg` or your equivalent) and verify SIGIL_DB_HOST/PORT/NAME/USER/PASSWORD in ~/.sigil/.env',
+        fix: 'Start Postgres (e.g. `docker start sigil-pg` or your equivalent), then re-check the database step in the GUI Setup or `sigil init`.',
       });
     }
   }
@@ -110,8 +111,8 @@ function validateEmbedding(issues) {
       issues.push({
         level: 'fail',
         code: 'EMBEDDING_PROVIDER_MISSING_KEY',
-        message: `EMBEDDING_PROVIDER=${provider} but no ${envNameFor(keyField)} found.`,
-        fix: `Set ${envNameFor(keyField)} in ~/.sigil/.env, or run 'sigil init' to reconfigure.`,
+        message: `embedding provider is ${provider} but no API key is configured.`,
+        fix: `Re-run the embedding step in the GUI Setup or 'sigil init' and enter the ${provider} key.`,
       });
     }
   }
@@ -127,8 +128,8 @@ function validateLlm(issues) {
       issues.push({
         level: 'fail',
         code: 'LLM_PROVIDER_MISSING_KEY',
-        message: `LLM_PROVIDER=${provider} but no ${envNameFor(keyField)} found.`,
-        fix: `Set ${envNameFor(keyField)} in ~/.sigil/.env, or run 'sigil init' to reconfigure.`,
+        message: `LLM provider is ${provider} but no API key is configured.`,
+        fix: `Re-run the LLM step in the GUI Setup or 'sigil init' and enter the ${provider} key.`,
       });
     }
   }
@@ -147,26 +148,46 @@ function validateLlm(issues) {
 }
 
 function validateDb(issues) {
-  if (config.db.type === 'postgres') {
-    if (!config.db.host || !config.db.database || !config.db.user) {
-      issues.push({
-        level: 'fail',
-        code: 'DB_CONFIG_INCOMPLETE',
-        message: 'SIGIL_DB_TYPE=postgres but host/database/user missing.',
-        fix: 'Set SIGIL_DB_HOST, SIGIL_DB_NAME, SIGIL_DB_USER, SIGIL_DB_PASSWORD in ~/.sigil/.env. Run `sigil init` for an interactive setup.',
-      });
-    }
+  const mode = config.db.mode;
+  // No mode = onboarding never finished. With config.json as the sole source of
+  // truth there's no env fallback to mask it, so say so plainly.
+  if (!mode) {
+    issues.push({
+      level: 'fail',
+      code: 'DB_NOT_CONFIGURED',
+      message: 'No database configured (setup incomplete).',
+      fix: 'Run `sigil` (built-in embedded DB) or `sigil init`, or finish setup in the GUI.',
+    });
+    return;
+  }
+  // Mode-aware completeness — these checks previously could NEVER fire because
+  // host/database/user carry hard defaults. Validate what each mode requires.
+  if (mode === 'url' && !config.db.url) {
+    issues.push({
+      level: 'fail',
+      code: 'DB_CONFIG_INCOMPLETE',
+      message: 'database.mode=url but no connection URL is set.',
+      fix: 'Re-run the database step (GUI Setup or `sigil init`) and paste your connection string.',
+    });
+  } else if ((mode === 'local' || mode === 'docker') && (!config.db.host || !config.db.database || !config.db.user)) {
+    issues.push({
+      level: 'fail',
+      code: 'DB_CONFIG_INCOMPLETE',
+      message: `database.mode=${mode} but host/database/user missing.`,
+      fix: 'Re-run the database step (GUI Setup or `sigil init`).',
+    });
   }
 }
 
-function envNameFor(configField) {
-  // Map config.embedding.openaiApiKey → OPENAI_API_KEY, etc.
-  return ({
-    openaiApiKey: 'OPENAI_API_KEY',
-    apiKey: 'ANTHROPIC_API_KEY',
-    openrouterApiKey: 'OPENROUTER_API_KEY',
-    voyageApiKey: 'VOYAGE_API_KEY',
-  })[configField] || configField;
+// Onboarding must produce a COMPLETE config — with config.json as the sole
+// source of truth, a missing field has no env fallback, so surface it loudly.
+function validateSetup(issues) {
+  if (!config.llm.provider) {
+    issues.push({ level: 'fail', code: 'LLM_NOT_CONFIGURED', message: 'No LLM provider configured (setup incomplete).', fix: 'Finish the LLM step in the GUI Setup or `sigil init`.' });
+  }
+  if (!config.embedding.provider || !config.embedding.model) {
+    issues.push({ level: 'fail', code: 'EMBEDDING_NOT_CONFIGURED', message: 'No embedding provider/model configured (setup incomplete).', fix: 'Finish the embedding step in the GUI Setup or `sigil init`.' });
+  }
 }
 
 function suggestEmbeddingFix(provider, model, actualProvider) {

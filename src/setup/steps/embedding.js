@@ -30,10 +30,11 @@ const PROVIDERS = [
 export const id = 'embedding';
 export const title = 'Embeddings';
 
-// Resolve the Ollama host the embedder will actually use.
+// Resolve the Ollama host the embedder will actually use. config.json is the
+// source of truth (no env override) — mirrors config.embedding.ollamaHost.
 function ollamaHost() {
   const cfg = getConfig();
-  return process.env.OLLAMA_HOST || cfg.embedding?.host || 'http://localhost:11434';
+  return cfg.embedding?.host || 'http://localhost:11434';
 }
 
 export function listProviders() {

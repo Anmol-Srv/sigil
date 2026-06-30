@@ -279,6 +279,20 @@ export function getConfig() {
   return cache || loadConfig();
 }
 
+// ── test seam ────────────────────────────────────────────────────────────────
+// config.json is the sole source of truth (no env override), so tests can no
+// longer configure the daemon/embedder/LLM by setting process.env. They seed the
+// in-memory cache instead. `__setTestConfig` overlays a partial onto the current
+// (disk-or-defaults) snapshot; `__resetTestConfig` clears it. Test-only — prod
+// never calls these.
+export function __setTestConfig(partial = {}) {
+  cache = deepMerge(getConfig(), partial);
+  return cache;
+}
+export function __resetTestConfig() {
+  cache = null;
+}
+
 /**
  * Merge `values` into one section, validate, persist atomically, refresh cache.
  * Only the provided keys are written (the file stays sparse). Returns the new
