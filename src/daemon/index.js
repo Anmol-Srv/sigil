@@ -243,8 +243,8 @@ export async function startDaemon({ foreground = false } = {}) {
   // preamble → "update available") when behind, removes it when in sync. Git
   // installs only; best-effort; unref'd so it never holds the process open.
   // First check 30s after boot (let the daemon settle), then every 12h. Opt out
-  // with SIGIL_NO_UPDATE_CHECK=1.
-  if (process.env.SIGIL_NO_UPDATE_CHECK !== '1') {
+  // by setting preferences.noUpdateCheck in config.json.
+  if (!config.preferences?.noUpdateCheck) {
     (async () => {
       try {
         const { isGitInstall, checkForUpdate } = await import('../lib/git-update.js');

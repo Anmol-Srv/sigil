@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { SIGIL_CONFIG_PATH, SIGIL_ENV_PATH } from '../lib/paths.js';
 import { EMBEDDING_DIM } from '../lib/constants.js';
 
-export const CONFIG_SCHEMA_VERSION = 1;
+export const CONFIG_SCHEMA_VERSION = 2;
 
 const DB_MODES = ['embedded', 'local', 'docker', 'url'];
 const STEP_STATUSES = ['pending', 'active', 'done', 'error'];
@@ -45,9 +45,48 @@ function defaults() {
       user: 'sigil_app',
       password: null,
     },
-    llm: { provider: null, model: null, apiKey: null, host: null },
-    embedding: { provider: null, model: null, apiKey: null, host: null },
+    // llm: provider identity (set by onboarding) + tuning knobs and the
+    // managed-session engine. config.json is the sole source of truth — these
+    // were env-only before (LLM_*, SIGIL_MANAGED_*, SIGIL_MAX_CLAUDE_PROCS).
+    llm: {
+      provider: null, model: null, apiKey: null, host: null,
+      cliPath: '',
+      extractionModel: '', decisionModel: '', entityModel: '',
+      maxRetries: 3, cliTimeout: 120000, requestTimeout: 60000, maxClaudeProcs: 4,
+      openrouterBaseUrl: '', openrouterReferer: 'https://github.com/Anmol-Srv/sigil', openrouterTitle: 'Sigil',
+      managedSession: {
+        enabled: false, poolSize: 1, tokenBudget: 60000,
+        taskTimeoutMs: 120000, firstTaskTimeoutMs: 10000, healthProbeMs: 15000,
+        clearBetweenTasks: true,
+      },
+    },
+    embedding: {
+      provider: null, model: null, apiKey: null, host: null,
+      openrouterBaseUrl: '', openrouterReferer: 'https://github.com/Anmol-Srv/sigil', openrouterTitle: 'Sigil',
+    },
     identity: { name: null },
+    // Infra/tuning — prepopulated here (defaults track the code, merged on read)
+    // so config.json is self-sufficient and no env file is consulted.
+    http: { enabled: true, host: '127.0.0.1', port: 7777 },
+    network: { mode: 'solo', enabled: false, masterNodeId: null },
+    defaults: { namespace: 'default' },
+    memory: {
+      skipThreshold: 0.88, ambiguousThreshold: 0.78, supersedeThreshold: 0.72,
+      supersedeScanLimit: 8, minFactSimilarity: 0.45, injectionFloor: 0.6,
+    },
+    search: { synthesize: true, synthesizeModel: '' },
+    ingest: { eagerExtract: true, extractRelations: true, graphGleanRounds: 0 },
+    output: {
+      storage: 'local', dir: './output',
+      s3: { endpoint: '', bucket: '', region: 'us-east-1', accessKey: '', secretKey: '', publicUrl: '' },
+    },
+    hebbian: {
+      entity: {
+        enabled: true, eta: 1, cap: 50, halfLifeDays: 30, minEffective: 0.5,
+        rrfWeight: 0.3, maxWriteEntities: 12, expandPerSeed: 3,
+      },
+    },
+    preferences: { noUpdateCheck: false },
     setup: { complete: false, steps: {} },
   };
 }

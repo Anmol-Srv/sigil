@@ -4,11 +4,12 @@
 // after a hard kill or reboot) made the booting daemon declare itself a
 // duplicate and exit without binding its socket — the CLI then timed out.
 //
-// We isolate the PID/heartbeat logic by disabling the HTTP /healthz probe
-// (SIGIL_HTTP_ENABLED=false) so the test can never accidentally consult a real
-// daemon listening on 127.0.0.1:7777, and we sandbox $HOME so SIGIL_HOME points
-// at a throwaway dir. Modules are re-imported per case because paths.js caches
-// SIGIL_HOME from $HOME at import time.
+// We isolate the PID/heartbeat logic by disabling the HTTP /healthz probe so the
+// test can never accidentally consult a real daemon on 127.0.0.1:7777. config.json
+// is the source of truth now, so we write {http:{enabled:false}} into the sandbox
+// home instead of setting an env var. We sandbox $HOME so SIGIL_HOME points at a
+// throwaway dir; modules are re-imported per case because paths.js caches
+// SIGIL_HOME (and config-store caches the merged config) from $HOME at import time.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
@@ -17,7 +18,6 @@ import { join } from 'node:path';
 
 let home;
 const origHome = process.env.HOME;
-const origHttp = process.env.SIGIL_HTTP_ENABLED;
 
 function seed({ pid, heartbeat }) {
   const sigilHome = join(home, '.sigil');
@@ -37,12 +37,15 @@ async function loadDetect() {
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'sigil-detect-test-'));
   process.env.HOME = home;
-  process.env.SIGIL_HTTP_ENABLED = 'false'; // skip the /healthz probe
+  // Disable the /healthz probe via config (source of truth), not env, so the
+  // test never consults a real daemon on 127.0.0.1:7777.
+  const sigilHome = join(home, '.sigil');
+  mkdirSync(sigilHome, { recursive: true });
+  writeFileSync(join(sigilHome, 'config.json'), JSON.stringify({ schemaVersion: 2, http: { enabled: false } }), 'utf8');
 });
 
 afterEach(() => {
   if (origHome === undefined) delete process.env.HOME; else process.env.HOME = origHome;
-  if (origHttp === undefined) delete process.env.SIGIL_HTTP_ENABLED; else process.env.SIGIL_HTTP_ENABLED = origHttp;
   rmSync(home, { recursive: true, force: true });
 });
 

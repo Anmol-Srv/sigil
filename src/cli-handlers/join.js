@@ -47,11 +47,12 @@ export async function runJoin(args) {
   const relayUrl = flags.relay || undefined;
   const lite = Boolean(flags.lite);
 
-  // We must boot Iroh on this side to dial. Force network on if it's not
-  // already configured.
-  if (process.env.SIGIL_MODE === undefined || process.env.SIGIL_MODE === 'solo') {
-    process.env.SIGIL_MODE = lite ? 'lite-follower' : 'follower';
-    process.env.SIGIL_NETWORK_ENABLED = 'true';
+  // We must boot Iroh on this side to dial. Persist network-on to config.json
+  // (the source of truth) if it's not already configured — no env mutation.
+  const { default: cfg } = await import('../config.js');
+  if (!cfg.network.mode || cfg.network.mode === 'solo') {
+    const { patchConfig } = await import('../setup/config-store.js');
+    patchConfig('network', { mode: lite ? 'lite-follower' : 'follower', enabled: true });
   }
 
   const { joinMaster } = await import('../net/pairing.js');

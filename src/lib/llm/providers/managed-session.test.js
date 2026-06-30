@@ -7,10 +7,12 @@ import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 
 import { chat } from './managed-session.js';
 import { setSessionManager } from '../session/index.js';
+import { __setTestConfig } from '../../../setup/config-store.js';
 
 // Short-circuit one-shot binary resolution so the fallthrough path fails fast
 // (spawns /usr/bin/false, exits 1) instead of probing the login shell for claude.
-beforeAll(() => { process.env.LLM_CLI_PATH = '/usr/bin/false'; });
+// config.json is the source of truth — seed cliPath via the seam, not env.
+beforeAll(() => { __setTestConfig({ llm: { cliPath: '/usr/bin/false' } }); });
 afterEach(() => setSessionManager(null));
 
 describe('managed-session provider', () => {

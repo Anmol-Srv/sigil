@@ -22,6 +22,7 @@
  */
 import { fileURLToPath } from 'node:url';
 
+import config from '../../../../config.js';
 import { resolveClaudeBin } from '../../providers/claude-cli.js';
 
 // CLI model aliases — same mapping the one-shot claude-cli provider uses.
@@ -48,9 +49,10 @@ const NUDGE = 'SIGIL_NEXT';
 const CLEAR = '/clear';
 
 /** Whether to /clear between tasks. Escape hatch if /clear ever misbehaves in a
- *  given claude build: SIGIL_MANAGED_CLEAR=false reverts to prompt-ordering only. */
+ *  given claude build: set llm.managedSession.clearBetweenTasks=false in
+ *  config.json to revert to prompt-ordering only. */
 function clearBetweenTasks() {
-  return process.env.SIGIL_MANAGED_CLEAR !== 'false';
+  return config.llm.managedSession.clearBetweenTasks !== false;
 }
 
 // Pane signatures that mean the worker is blocked on an interactive prompt and

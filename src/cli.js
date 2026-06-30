@@ -1,31 +1,19 @@
 #!/usr/bin/env node
 
-import { resolve, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { existsSync, readFileSync } from 'node:fs';
 import { execSync as _execSync } from 'node:child_process';
-import { config as dotenvConfig } from 'dotenv';
 
 // Package root — works whether run from project dir or globally installed
 const PKG_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 let PKG_VERSION = '0.0.0';
 try { PKG_VERSION = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')).version; } catch { /* ignore */ }
 
-// Env precedence: shell env > project .env > global ~/.sigil/.env.
-// dotenv's default behavior (no `override`) never overwrites existing
-// process.env keys, so loading project FIRST gives it priority over
-// global, and shell-set values (e.g. `DEFAULT_NAMESPACE=demo sigil ...`)
-// always win because they're set before either dotenv call runs.
-const projectEnv = resolve(process.cwd(), '.env');
-const globalEnv = join(homedir(), '.sigil', '.env');
-
-if (existsSync(projectEnv)) {
-  dotenvConfig({ path: projectEnv, quiet: true });
-}
-if (existsSync(globalEnv) && globalEnv !== projectEnv) {
-  dotenvConfig({ path: globalEnv, quiet: true });
-}
+// No .env loading: config.json is the single source of truth (loaded lazily by
+// config.js → config-store). A legacy ~/.sigil/.env is imported into config.json
+// once, on first load, then renamed .migrated (see config-store.migrateEnvIfPresent).
 
 // Agent provenance: CLI-originated writes are tagged 'cli'. The socket client
 // forwards this in each request envelope so the daemon stamps created_by_agent.

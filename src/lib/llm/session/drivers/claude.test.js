@@ -4,7 +4,11 @@
 
 import { describe, it, expect, beforeAll } from 'vitest';
 
-beforeAll(() => { process.env.LLM_CLI_PATH = '/usr/bin/true'; });
+import { __setTestConfig } from '../../../../setup/config-store.js';
+
+// config.json is the source of truth — seed cliPath (short-circuits binary
+// resolution so these never shell out) + the /clear toggle via the test seam.
+beforeAll(() => { __setTestConfig({ llm: { cliPath: '/usr/bin/true', managedSession: { clearBetweenTasks: true } } }); });
 
 const { claudeDriver, NUDGE, CLEAR, SYSTEM_PROMPT } = await import('./claude.js');
 
@@ -56,24 +60,21 @@ describe('claudeDriver.nudge', () => {
   const collectingTmux = (sent) => ({ sendKeys: async (name, text) => sent.push({ name, text }) });
 
   it('/clears the context then sends the trigger (hard per-task isolation)', async () => {
-    const prev = process.env.SIGIL_MANAGED_CLEAR;
-    delete process.env.SIGIL_MANAGED_CLEAR; // default ON
+    __setTestConfig({ llm: { managedSession: { clearBetweenTasks: true } } }); // default ON
     const sent = [];
     await claudeDriver.nudge(collectingTmux(sent), 'sigil-claude-0');
     expect(sent).toEqual([
       { name: 'sigil-claude-0', text: CLEAR },
       { name: 'sigil-claude-0', text: NUDGE },
     ]);
-    if (prev === undefined) delete process.env.SIGIL_MANAGED_CLEAR; else process.env.SIGIL_MANAGED_CLEAR = prev;
   });
 
-  it('SIGIL_MANAGED_CLEAR=false reverts to prompt-ordering only (no /clear)', async () => {
-    const prev = process.env.SIGIL_MANAGED_CLEAR;
-    process.env.SIGIL_MANAGED_CLEAR = 'false';
+  it('clearBetweenTasks=false reverts to prompt-ordering only (no /clear)', async () => {
+    __setTestConfig({ llm: { managedSession: { clearBetweenTasks: false } } });
     const sent = [];
     await claudeDriver.nudge(collectingTmux(sent), 'sigil-claude-0');
     expect(sent).toEqual([{ name: 'sigil-claude-0', text: NUDGE }]);
-    if (prev === undefined) delete process.env.SIGIL_MANAGED_CLEAR; else process.env.SIGIL_MANAGED_CLEAR = prev;
+    __setTestConfig({ llm: { managedSession: { clearBetweenTasks: true } } }); // restore
   });
 });
 
