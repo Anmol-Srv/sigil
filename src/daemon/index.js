@@ -74,6 +74,21 @@ export async function startDaemon({ foreground = false } = {}) {
 
   const { default: config } = await import('../config.js');
 
+  // Embedded (PGlite) is Postgres compiled to WASM. Some Node majors (24+ as of
+  // this writing) destabilize the WASM heap and surface as recurring Aborted()
+  // crashes + on-disk cluster corruption. Warn loudly at boot so the user can
+  // pin an LTS Node (20/22) or switch to Docker/Postgres (`sigil setup`), which
+  // are the recommended defaults. Non-fatal: the daemon still boots.
+  if (config.db.mode === 'embedded') {
+    const nodeMajor = Number(process.versions.node.split('.')[0]);
+    if (Number.isFinite(nodeMajor) && nodeMajor >= 24) {
+      log(`WARNING: embedded (PGlite/WASM) database on Node ${process.versions.node}. `
+        + `This Node major is known to destabilize the embedded WASM engine `
+        + `(recurring Aborted() crashes + cluster corruption). Pin an LTS Node `
+        + `(20 or 22) or switch to Docker/Postgres via \`sigil setup\`.`);
+    }
+  }
+
   // Claim the HTTP/GUI port FIRST — before the pidfile or the Unix socket.
   // The TCP port is the one resource that can't be silently taken over (bind
   // is exclusive), unlike the socket file which startSocketServer would

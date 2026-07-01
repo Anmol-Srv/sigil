@@ -87,16 +87,21 @@ async function stepDatabase(ctx, { urlFlag }) {
 
   while (true) {
     const options = [];
-    if (det?.embedded?.available !== false) {
-      options.push({ value: 'embedded', label: 'Built-in database (recommended)', hint: 'No install — Postgres + pgvector run in-process at ~/.sigil/db' });
+    // Recommended default is Docker: native Postgres + pgvector, no WASM, no
+    // Node-version sensitivity. Then a reachable local Postgres. The in-process
+    // embedded engine stays as the zero-install fallback (and the default on a
+    // bare machine) but is marked experimental — Postgres-in-WASM is sensitive to
+    // the host Node version (see the daemon boot guard). External URL last.
+    if (det?.docker?.installed) {
+      options.push({ value: 'docker', label: 'Spin up a Sigil container (recommended)', hint: det.docker.running ? 'Docker — dedicated pgvector Postgres, native + robust' : "Docker installed but not running — we'll start it" });
     }
     if (det?.local?.running) {
       options.push({ value: 'local', label: 'Connect to local Postgres', hint: `localhost:${det.local.port} — reuse your running server` });
     } else if (det?.local?.installed) {
       options.push({ value: 'local-start', label: 'Start & connect local Postgres', hint: 'Start your installed Postgres, then set up' });
     }
-    if (det?.docker?.installed) {
-      options.push({ value: 'docker', label: 'Spin up a Sigil container', hint: det.docker.running ? 'Docker — dedicated pgvector Postgres' : "Docker installed but not running — we'll start it" });
+    if (det?.embedded?.available !== false) {
+      options.push({ value: 'embedded', label: 'Built-in database (experimental)', hint: 'No install — Postgres-in-WASM at ~/.sigil/db. Sensitive to your Node version; prefer Docker/Postgres when available' });
     }
     options.push({ value: 'url', label: 'External database', hint: 'Managed (Neon / Supabase / RDS) or a connection string' });
 

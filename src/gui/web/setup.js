@@ -173,22 +173,25 @@ function renderDbModes() {
   else s.innerHTML = 'No local Postgres detected — the built-in database below needs nothing installed.';
 
   const cards = [];
-  // Embedded (PGlite) — the zero-prerequisite default. Always available: a full
-  // Postgres 17 + pgvector compiled to WASM, running in-process under ~/.sigil/db.
-  if (det.embedded?.available !== false) {
-    cards.push(card('mode', 'embedded',
-      'Use the built-in database <span class="badge info" style="margin-left:var(--s-2);">RECOMMENDED</span>',
-      'No install — Postgres + pgvector run inside Sigil, stored at ~/.sigil/db'));
+  // Recommended: Docker — native Postgres + pgvector, no WASM, no Node-version
+  // sensitivity. Then local Postgres. The in-process embedded engine (Postgres
+  // compiled to WASM) stays as a zero-install fallback but is marked experimental
+  // (sensitive to the host Node version; see the daemon boot guard). URL last.
+  if (det.docker?.installed) {
+    const hint = det.docker.running
+      ? 'Docker — dedicated pgvector Postgres, native + robust'
+      : "Docker is installed but not running — we'll start it for you";
+    cards.push(card('mode', 'docker',
+      'Spin up a Sigil container <span class="badge info" style="margin-left:var(--s-2);">RECOMMENDED</span>', hint));
+  } else {
+    cards.push(cardDisabled('Spin up a Sigil container', det.docker?.reason || 'Docker not installed'));
   }
   if (det.local?.running) cards.push(card('mode', 'local', 'Connect to local Postgres', `localhost:${det.local.port} · reuse your running server`, { action: 'connect' }));
   else if (det.local?.installed) cards.push(card('mode', 'local', 'Start &amp; connect local Postgres', 'Start your installed Postgres, then set up', { action: 'start' }));
-  if (det.docker?.installed) {
-    const hint = det.docker.running
-      ? 'Docker — dedicated pgvector Postgres, zero setup'
-      : "Docker is installed but not running — we'll start it for you";
-    cards.push(card('mode', 'docker', 'Spin up a Sigil container', hint));
-  } else {
-    cards.push(cardDisabled('Spin up a Sigil container', det.docker?.reason || 'Docker not installed'));
+  if (det.embedded?.available !== false) {
+    cards.push(card('mode', 'embedded',
+      'Use the built-in database <span class="badge" style="margin-left:var(--s-2);">EXPERIMENTAL</span>',
+      'No install — Postgres-in-WASM at ~/.sigil/db. Sensitive to your Node version; prefer Docker/Postgres'));
   }
   cards.push(card('mode', 'url', 'External database', 'Managed (Neon / Supabase / RDS) or a connection string'));
 
