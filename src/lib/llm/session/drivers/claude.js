@@ -5,9 +5,14 @@
  * Launch is deliberately LEAN so each session carries the least possible
  * per-task overhead and the smallest possible tool surface:
  *
- *   claude --bare                  skip hooks/skills/plugins/MCP auto-discovery,
- *                                  CLAUDE.md, auto-memory
- *          --strict-mcp-config     ignore every MCP config except the one below
+ *   claude --strict-mcp-config     ignore every MCP config except the one below.
+ *                                  We deliberately do NOT pass --bare: per the
+ *                                  headless docs it skips OAuth/keychain reads,
+ *                                  which breaks subscription auth (a bare worker
+ *                                  with no ANTHROPIC_API_KEY sits at /login and
+ *                                  never handshakes). Hook re-entrancy is instead
+ *                                  blocked by SIGIL_INTERNAL_LLM=1 in the worker
+ *                                  env (see manager.spawnWorker).
  *          --mcp-config <file>     load ONLY the worker MCP (get_task +
  *                                  submit_result) — these tools never touch the
  *                                  public 9-tool memory surface
@@ -136,7 +141,10 @@ export const claudeDriver = {
 
     const argv = [
       resolveClaudeBin(),
-      '--bare',
+      // NOT --bare — it skips OAuth/keychain, breaking subscription auth. The
+      // worker's hook re-entrancy is handled by SIGIL_INTERNAL_LLM=1 (manager),
+      // and --strict-mcp-config below still limits the tool surface to the worker
+      // MCP without --bare.
       '--strict-mcp-config',
       '--mcp-config', cfgPath,
       '--append-system-prompt', SYSTEM_PROMPT,

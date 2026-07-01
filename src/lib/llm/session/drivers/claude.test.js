@@ -21,9 +21,9 @@ describe('claudeDriver.buildLaunch', () => {
     workerServer: { command: 'node', args: ['/abs/worker-server.js'] },
   });
 
-  it('launches LEAN: --bare, --strict-mcp-config, one --mcp-config, no extra tools', () => {
+  it('launches LEAN: --strict-mcp-config + one --mcp-config, no extra tools; NOT --bare (keeps subscription OAuth auth)', () => {
     const { argv } = built();
-    expect(argv).toContain('--bare');
+    expect(argv).not.toContain('--bare'); // --bare skips OAuth/keychain → breaks subscription workers
     expect(argv).toContain('--strict-mcp-config');
     expect(argv).toContain('--mcp-config');
     // maps the long model id to the CLI alias

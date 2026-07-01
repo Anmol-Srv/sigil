@@ -373,7 +373,13 @@ export class SessionManager {
     for (const f of files) {
       await this.writeFileFn(f.path, f.content, { mode: f.mode ?? 0o600 });
     }
-    await this.tmux.newSession(driver.sessionName(id), argv);
+    await this.tmux.newSession(driver.sessionName(id), argv, {
+      // Any Claude Code hook the worker fires (UserPromptSubmit / Stop) no-ops at
+      // the shim level instead of re-entering Sigil's memory pipeline. This is
+      // what lets the claude driver drop --bare (otherwise the only thing
+      // stopping hook recursion) while keeping subscription OAuth auth.
+      env: { SIGIL_INTERNAL_LLM: '1' },
+    });
 
     // Boot handshake: nudge once so a cold `claude` boots and calls get_task,
     // and arm a short boot timer. We do NOT mark READY or dispatch here — the
