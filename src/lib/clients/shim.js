@@ -124,6 +124,11 @@ function renderHookDispatcher({ dist, node }) {
 #   name = user-prompt-submit | post-tool-use | stop | session-end
 # Fails SAFE: if the hook script can't be found (stale install), exits 0 with no
 # output so a broken Sigil install never blocks or errors the agent loop.
+# Re-entrancy guard: if this hook fires INSIDE a claude that Sigil itself spawned
+# for an internal LLM call (fact extraction / classification), no-op here before
+# Node even starts. Breaks the ingest -> claude -p -> Stop-hook -> ingest loop
+# that spikes CPU and burns tokens. (Set in providers/claude-cli.js.)
+[ "$SIGIL_INTERNAL_LLM" = "1" ] && exit 0
 SIGIL_DIST=${shQuote(dist)}
 SIGIL_NODE=${shQuote(node)}
 NAME="$1"

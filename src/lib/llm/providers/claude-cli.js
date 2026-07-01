@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import config from '../../../config.js';
 import { estimateTokens } from '../log.js';
 import { createSemaphore } from '../concurrency-gate.js';
+import { SIGIL_HOME } from '../../paths.js';
 
 /**
  * Resolve the `claude` binary to an absolute path.
@@ -86,7 +87,23 @@ function rawSpawnClaude(args, input) {
   const bin = resolveClaudeBin();
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const proc = spawn(bin, args, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // Run isolated in ~/.sigil, not the daemon's inherited cwd, so a one-shot
+      // extraction/classification call never loads a project's CLAUDE.md,
+      // .mcp.json, or project-scoped hooks.
+      //
+      // We deliberately do NOT pass `--bare`. Per the Claude Code headless docs,
+      // bare mode skips OAuth + keychain reads, which would break subscription
+      // auth (it would then require ANTHROPIC_API_KEY). cwd + the re-entrancy
+      // flag below give us the isolation without dropping the subscription.
+      cwd: SIGIL_HOME,
+      // Re-entrancy flag. Any Sigil hook that fires INSIDE this spawned claude
+      // sees SIGIL_INTERNAL_LLM=1 and no-ops at the shim level (clients/shim.js),
+      // breaking the ingest → claude -p → Stop-hook → ingest loop that spikes
+      // CPU and burns tokens.
+      env: { ...process.env, SIGIL_INTERNAL_LLM: '1' },
+    });
     const timer = setTimeout(() => {
       proc.kill('SIGTERM');
       reject(new Error(`claude CLI timed out after ${timeout}ms`));

@@ -57,9 +57,14 @@ async function searchViaDaemon(query, input) {
     const { data } = await client.call('search', {
       query,
       limit: MAX_FACTS,
-      useGraph: false,    // the router promotes to true when warranted
-      route: true,
-      expand: true,
+      useGraph: false,
+      route: false,       // LLM-free auto-injection: no query-router generation
+                          // call on the hot path (fires on EVERY prompt). Hybrid
+                          // SQL + entity detection + ACT-R/Hebbian carry recall.
+                          // Explicit `sigil search`/`why` keep the smart router.
+      expand: false,      // no LLM query-expansion here either. The query still
+                          // embeds (cheap, cached, local) — "LLM-free" means no
+                          // generation calls, not no model calls.
       synthesize: false,  // synthesis steals Claude's citation surface; off here
       podScope: 'auto',   // active session/project/person pods, not the whole brain
       applyFloor: true,   // precision-first: drop off-topic matches (auto-injection)
