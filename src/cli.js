@@ -1625,6 +1625,8 @@ Usage:
 Options:
   --namespace=<ns>    Filter by namespace (comma-separated for multiple)
   --limit=<n>         Max results (default: 10)
+  --agent=<name>      Only facts written by this agent (e.g. claude-code, cli, cursor)
+  --device=<id|name>  Only facts written by this paired device (id or friendly name)
   --graph             Enable graph enhancement
   --route             Enable LLM query routing
   --synthesize        Enable LLM answer synthesis
@@ -1636,13 +1638,17 @@ Examples:
   sigil search "authentication flow"
   sigil search "deploy process" --namespace=engineering
   sigil search "API design" --limit=5
-  sigil search "that decision" --scope          # only this project's memory`);
+  sigil search "that decision" --scope          # only this project's memory
+  sigil search "config" --agent=cursor          # only what Cursor wrote
+  sigil search "config" --device=laptop-b       # only writes from device "laptop-b"`);
     process.exit(0);
   }
 
   const nsFlag = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1];
   const namespaces = nsFlag ? nsFlag.split(',') : undefined;
   const limit = Number(flags.find((f) => f.startsWith('--limit='))?.split('=')[1] || 10);
+  const { parseSearchAuthorFlags } = await import('./cli-handlers/search-args.js');
+  const { agent, device } = parseSearchAuthorFlags(flags);
   const useGraph = flags.includes('--graph') && !flags.includes('--no-graph');
   const route = flags.includes('--route');
   const synthesize = flags.includes('--synthesize');
@@ -1658,7 +1664,7 @@ Examples:
     const podScope = flags.includes('--scope') ? 'auto' : 'global';
     const { data } = await client.call('search', {
       query, namespaces, limit, useGraph, route, synthesize, includeChunks,
-      podScope, cwd: process.cwd(),
+      agent, device, podScope, cwd: process.cwd(),
     });
 
     if (data.synthesized) console.log(data.synthesized);
@@ -1666,7 +1672,7 @@ Examples:
     if (data.facts.length) {
       console.log(`\nFacts (${data.facts.length}):`);
       for (const fact of data.facts) {
-        console.log(`  ${fact.content}${formatRelevance(fact)}`);
+        console.log(`  ${fact.content}${formatRelevance(fact)}${formatAuthor(fact)}`);
       }
     }
 
@@ -1706,6 +1712,29 @@ function formatRelevance(row) {
     return ` [${row.rrfScore}]`;
   }
   return '';
+}
+
+// Compact write-attribution suffix for a search hit: "· by <agent>@<device>".
+// Provenance has been stored on every fact (created_by_agent /
+// created_by_device_id) but was never shown — a shared brain should be
+// auditable. Device prefers the friendly name (device.name) the daemon
+// resolves; falls back to a short device id. Local writes (device null) show
+// just the agent. Returns '' when neither is known so legacy rows stay clean.
+// Dimmed only when stdout is a TTY so piped output stays plain.
+function formatAuthor(row) {
+  const agent = row?.agent ? String(row.agent) : null;
+  const device = row?.deviceName
+    ? String(row.deviceName)
+    : (row?.device != null ? `dev${row.device}` : null);
+
+  let who;
+  if (agent && device) who = `${agent}@${device}`;
+  else if (agent) who = agent;
+  else if (device) who = device;
+  else return '';
+
+  const text = `  · by ${who}`;
+  return process.stdout.isTTY ? `\x1b[2m${text}\x1b[0m` : text;
 }
 
 // ─── Context ─────────────────────────────────────────────────────────────────

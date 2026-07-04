@@ -225,3 +225,81 @@ describe('search — facade behavior', () => {
     expect(result.chunks).toEqual([]);
   });
 });
+
+describe('search — author provenance filters (--agent / --device)', () => {
+  // Facts carry created_by_agent / created_by_device_id. The SQL layer applies
+  // the predicates (mocked here), and search() re-applies them as a post-filter
+  // so entity-linked facts that bypass the SQL still respect the filter.
+  const makeAuthoredFacts = () => ([
+    { ...makeFactList([1])[0], createdByAgent: 'claude-code', createdByDeviceId: 1 },
+    { ...makeFactList([2])[0], createdByAgent: 'cursor', createdByDeviceId: 1 },
+    { ...makeFactList([3])[0], createdByAgent: 'cursor', createdByDeviceId: 2 },
+    { ...makeFactList([4])[0], createdByAgent: 'cli', createdByDeviceId: null },
+  ]);
+
+  it('threads agent + deviceId into the hybrid-sql layer', async () => {
+    hybridSearchFacts.mockResolvedValue([]);
+
+    await search('test', { namespaces: ['default'], agent: 'cursor', deviceId: 2 });
+
+    const opts = hybridSearchFacts.mock.calls[0][2];
+    expect(opts.agent).toBe('cursor');
+    expect(opts.deviceId).toBe(2);
+  });
+
+  it('no author flags ⟹ no agent/device predicate (back-compat)', async () => {
+    hybridSearchFacts.mockResolvedValue([]);
+
+    await search('test', { namespaces: ['default'] });
+
+    const opts = hybridSearchFacts.mock.calls[0][2];
+    expect(opts.agent).toBeNull();
+    expect(opts.deviceId).toBeNull();
+  });
+
+  it('--agent returns only that agent\'s facts', async () => {
+    hybridSearchFacts.mockResolvedValue(makeAuthoredFacts());
+
+    const result = await search('test', { namespaces: ['default'], agent: 'cursor' });
+
+    expect(result.facts.map((f) => f.id).sort()).toEqual([2, 3]);
+    expect(result.facts.every((f) => f.createdByAgent === 'cursor')).toBe(true);
+  });
+
+  it('--device returns only that device\'s facts', async () => {
+    hybridSearchFacts.mockResolvedValue(makeAuthoredFacts());
+
+    const result = await search('test', { namespaces: ['default'], deviceId: 1 });
+
+    expect(result.facts.map((f) => f.id).sort()).toEqual([1, 2]);
+  });
+
+  it('--agent + --device intersect (both predicates apply)', async () => {
+    hybridSearchFacts.mockResolvedValue(makeAuthoredFacts());
+
+    const result = await search('test', { namespaces: ['default'], agent: 'cursor', deviceId: 1 });
+
+    expect(result.facts.map((f) => f.id)).toEqual([2]);
+  });
+
+  it('post-filter drops entity-linked facts that bypass the SQL predicate', async () => {
+    // Simulate the entity-first path leaking a non-matching entity-linked fact
+    // into the result set (getFactsForEntity does not apply the SQL filter).
+    hybridSearchFacts.mockResolvedValue([
+      { ...makeFactList([7])[0], createdByAgent: 'cursor', createdByDeviceId: 1, source: 'entity' },
+      { ...makeFactList([8])[0], createdByAgent: 'cli', createdByDeviceId: 1, source: 'entity' },
+    ]);
+
+    const result = await search('test', { namespaces: ['default'], agent: 'cursor' });
+
+    expect(result.facts.map((f) => f.id)).toEqual([7]);
+  });
+
+  it('returns nothing when no fact matches the author filter', async () => {
+    hybridSearchFacts.mockResolvedValue(makeAuthoredFacts());
+
+    const result = await search('test', { namespaces: ['default'], agent: 'nobody' });
+
+    expect(result.facts).toEqual([]);
+  });
+});

@@ -29,10 +29,10 @@ const CONFIDENCE_HIGH_MULT = 1.0;
 const CONFIDENCE_MEDIUM_MULT = 0.85;
 const CONFIDENCE_LOW_MULT = 0.7;
 
-async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5, minConfidence = 'medium', pointInTime, categories, podIds = null }) {
+async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5, minConfidence = 'medium', pointInTime, categories, podIds = null, agent = null, deviceId = null }) {
   const vec = pgVector(queryEmbedding);
   const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
-  const { temporalClause, categoryClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories });
+  const { temporalClause, categoryClause, authorClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories, agent, deviceId });
   const overfetchLimit = limit * OVERFETCH;
 
   // Pod-scope filter — applied identically to both CTEs. THREE distinct cases,
@@ -62,14 +62,14 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
   //   2. vec                            -- semantic CTE: rank_ix order
   //   3. namespaces                     -- semantic WHERE
   //   4. minRank                        -- semantic confidence (from filterParams[0])
-  //   5...N  temporal + category params -- semantic WHERE (from filterParams tail)
+  //   5...N  temporal + category + author params -- semantic WHERE (from filterParams tail)
   //   N+1. vec                          -- semantic ORDER BY
   //   N+2. overfetchLimit               -- semantic LIMIT
   //   N+3. query                        -- keyword tsquery
   //   N+4. query                        -- keyword rank_ix tsquery
   //   N+5. namespaces                   -- keyword WHERE
   //   N+6. minRank                      -- keyword confidence
-  //   N+7...M  temporal + category      -- keyword WHERE
+  //   N+7...M  temporal + category + author  -- keyword WHERE
   //   M+1. query                        -- keyword ORDER BY tsquery
   //   M+2. overfetchLimit               -- keyword LIMIT
   //   final: RRF_K (twice), weights, fallback ranks, RRF_K sort, limit
@@ -112,6 +112,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
         AND ${CONFIDENCE_CASE} >= ?
         ${temporalClause}
         ${categoryClause}
+        ${authorClause}
         ${podScopeClause}
       ORDER BY ${embeddingDistance}
       LIMIT ?
@@ -134,6 +135,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
         AND search_vector @@ plainto_tsquery('english', ?)
         ${temporalClause}
         ${categoryClause}
+        ${authorClause}
         ${podScopeClause}
       ORDER BY keyword_rank DESC
       LIMIT ?
