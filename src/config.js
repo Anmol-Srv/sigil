@@ -175,6 +175,9 @@ const config = {
   get hebbian() { return store().hebbian; },
   // User preferences (noUpdateCheck, …) — was SIGIL_NO_UPDATE_CHECK env.
   get preferences() { return store().preferences; },
+  // Project-pod identity strategy (P1): 'remote' (git remote), 'path' (legacy
+  // absolute root), or 'explicit'. config.json owns it; resolveProjectId() applies it.
+  get project() { return store().project; },
 };
 
 export default config;

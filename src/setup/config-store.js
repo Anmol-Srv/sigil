@@ -65,6 +65,7 @@ function defaults() {
       openrouterBaseUrl: '', openrouterReferer: 'https://github.com/Anmol-Srv/sigil', openrouterTitle: 'Sigil',
     },
     identity: { name: null },
+    project: { identity: 'remote' },
     // Infra/tuning — prepopulated here (defaults track the code, merged on read)
     // so config.json is self-sufficient and no env file is consulted.
     http: { enabled: true, host: '127.0.0.1', port: 7777 },

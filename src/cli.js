@@ -41,6 +41,7 @@ Commands:
   namespace <sub>          Manage namespaces (list | delete <ns>)
   session <sub>            Inspect the active session pod (current | list | show)
   pod <sub>                List, show, create, or archive memory pods
+  project <sub>            Maintain project pods (rekey legacy path-keyed pods)
   export [--format=json]   Export knowledge base as JSON or Markdown
   context                  Refresh the hot-context snapshot in ~/.claude/CLAUDE.md
   why                      Explain a search result — per-fact RRF / pod / kind breakdown
@@ -169,6 +170,7 @@ const commands = {
   namespace: runNamespace,
   session: runSession,
   pod: runPod,
+  project: runProject,
   export: runExport,
   maintain: runMaintain,
   repair: runRepair,
@@ -1075,6 +1077,68 @@ back a canonical entity so dedup churn doesn't lose their metadata.`);
     } else {
       console.error(`Unknown subcommand: ${sub}`);
       process.exit(1);
+    }
+  } finally {
+    await cortexDb.destroy();
+  }
+}
+
+// ─── sigil project ───────────────────────────────────────────────────────────
+
+async function runProject(args) {
+  const sub = args[0];
+
+  if (!sub || args.includes('--help')) {
+    console.log(`sigil project — Maintenance for project pods
+
+Usage:
+  sigil project rekey [--dry-run]
+
+  rekey   Re-key legacy PATH-keyed project pods to their stable git-remote
+          identity (P1). For each project pod whose external_id is a local
+          filesystem path, re-read the repo's remote from its git_root and:
+            • re-key it in place if no remote-keyed pod exists yet, or
+            • MERGE it into the existing remote-keyed pod (moving facts /
+              documents, deduping) so the repo ends with exactly one pod.
+          Pods whose path is gone or has no git remote are left untouched.
+
+  --dry-run   Print the plan and write NOTHING. Recommended first.`);
+    process.exit(sub ? 0 : 1);
+  }
+
+  if (sub !== 'rekey') {
+    console.error(`Unknown subcommand: ${sub}`);
+    process.exit(1);
+  }
+
+  const dryRun = args.includes('--dry-run');
+  const cortexDb = (await import('./db/cortex.js')).default;
+
+  try {
+    const { rekeyLegacyProjectPods } = await import('./memory/pods/rekey.js');
+    const report = await rekeyLegacyProjectPods({ dryRun, db: cortexDb });
+
+    console.log(dryRun
+      ? 'sigil project rekey — DRY RUN (no writes)\n'
+      : 'sigil project rekey — applying\n');
+
+    for (const a of report.actions) {
+      if (a.action === 'skip') {
+        console.log(`  SKIP   ${a.name.padEnd(28)} ${a.from}\n         (${a.reason})`);
+      } else if (a.action === 'rekey') {
+        console.log(`  REKEY  ${a.name.padEnd(28)} ${a.from}\n         → ${a.to}`);
+      } else if (a.action === 'merge') {
+        console.log(`  MERGE  ${a.name.padEnd(28)} ${a.from}\n         → ${a.to}  (into ${a.targetUid})`);
+      }
+    }
+
+    console.log(`\n${report.planned} project pod${report.planned === 1 ? '' : 's'} examined: `
+      + `${report.rekeyed} ${dryRun ? 'would be re-keyed' : 're-keyed'}, `
+      + `${report.merged} ${dryRun ? 'would be merged' : 'merged'}, `
+      + `${report.skipped} skipped.`);
+
+    if (dryRun && (report.rekeyed > 0 || report.merged > 0)) {
+      console.log('\nRe-run without --dry-run to apply.');
     }
   } finally {
     await cortexDb.destroy();
