@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './_recursion-guard.js'; // fork-bomb backstop (L4) — MUST be the first import
 
 /**
  * UserPromptSubmit hook — injects relevant Sigil facts into Claude's context.

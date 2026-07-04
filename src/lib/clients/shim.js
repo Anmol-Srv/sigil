@@ -124,6 +124,11 @@ function renderHookDispatcher({ dist, node }) {
 #   name = user-prompt-submit | post-tool-use | stop | session-end
 # Fails SAFE: if the hook script can't be found (stale install), exits 0 with no
 # output so a broken Sigil install never blocks or errors the agent loop.
+# Recursion guard: if invoked from inside Sigil's own headless claude -p call
+# (the claude-cli LLM provider exports SIGIL_DISABLE_HOOKS=1 on the spawn), exit
+# immediately so that headless Claude cannot re-trigger Sigil -> daemon -> another
+# claude -p -> exponential process explosion (fork bomb).
+[ -n "$SIGIL_DISABLE_HOOKS" ] && exit 0
 SIGIL_DIST=${shQuote(dist)}
 SIGIL_NODE=${shQuote(node)}
 NAME="$1"

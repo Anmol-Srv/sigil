@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './_recursion-guard.js'; // fork-bomb backstop (L4) — MUST be the first import
 
 /**
  * SessionEnd hook — closes the active session pod and (if enough facts were
