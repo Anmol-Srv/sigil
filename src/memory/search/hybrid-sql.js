@@ -18,7 +18,7 @@
 
 import cortexDb from '../../db/cortex.js';
 import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
-import { CONFIDENCE_CASE, buildFactFilters } from './filters.js';
+import { CONFIDENCE_CASE, buildFactFilters, buildVisibilityClause } from './filters.js';
 import { RRF_K, VECTOR_WEIGHT, KEYWORD_WEIGHT } from './scoring-constants.js';
 
 const OVERFETCH = 3;
@@ -29,11 +29,23 @@ const CONFIDENCE_HIGH_MULT = 1.0;
 const CONFIDENCE_MEDIUM_MULT = 0.85;
 const CONFIDENCE_LOW_MULT = 0.7;
 
-async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5, minConfidence = 'medium', pointInTime, categories, podIds = null }) {
+async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5, minConfidence = 'medium', pointInTime, categories, podIds = null, currentDeviceId = null, privateKinds = null, privateScopeEnabled = true }) {
   const vec = pgVector(queryEmbedding);
   const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
   const { temporalClause, categoryClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories });
   const overfetchLimit = limit * OVERFETCH;
+
+  // Owner-scoped read enforcement (P2): hide 'private'-kind facts created by
+  // another device. Applied identically to both CTEs. Empty when disabled
+  // (SIGIL_PRIVATE_SCOPE=off), when the current device id is unknown, or when
+  // no private kinds are registered — in which case prior global visibility is
+  // unchanged. See filters.buildVisibilityClause for the exact rule + NULL
+  // (legacy) handling.
+  const { visibilityClause, visibilityParams } = buildVisibilityClause({
+    currentDeviceId,
+    privateKinds,
+    scopeEnabled: privateScopeEnabled,
+  });
 
   // Pod-scope filter — applied identically to both CTEs. THREE distinct cases,
   // and conflating the first two was a silent global leak:
@@ -63,6 +75,8 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
   //   3. namespaces                     -- semantic WHERE
   //   4. minRank                        -- semantic confidence (from filterParams[0])
   //   5...N  temporal + category params -- semantic WHERE (from filterParams tail)
+  //   ...    podScope params (optional) -- semantic WHERE
+  //   ...    visibility params (opt.)   -- semantic WHERE (currentDeviceId, privateKinds)
   //   N+1. vec                          -- semantic ORDER BY
   //   N+2. overfetchLimit               -- semantic LIMIT
   //   N+3. query                        -- keyword tsquery
@@ -70,6 +84,8 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
   //   N+5. namespaces                   -- keyword WHERE
   //   N+6. minRank                      -- keyword confidence
   //   N+7...M  temporal + category      -- keyword WHERE
+  //   ...    podScope params (optional) -- keyword WHERE
+  //   ...    visibility params (opt.)   -- keyword WHERE (currentDeviceId, privateKinds)
   //   M+1. query                        -- keyword ORDER BY tsquery
   //   M+2. overfetchLimit               -- keyword LIMIT
   //   final: RRF_K (twice), weights, fallback ranks, RRF_K sort, limit
@@ -85,8 +101,8 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
   // categories array landed where the @@ tsquery placeholder lived.
   const [minRank, ...extraFilterParams] = filterParams;
 
-  const semanticParams = [vec, vec, namespaces, minRank, ...extraFilterParams, ...podScopeParams, vec, overfetchLimit];
-  const keywordParams  = [query, query, namespaces, minRank, query, ...extraFilterParams, ...podScopeParams, overfetchLimit];
+  const semanticParams = [vec, vec, namespaces, minRank, ...extraFilterParams, ...podScopeParams, ...visibilityParams, vec, overfetchLimit];
+  const keywordParams  = [query, query, namespaces, minRank, query, ...extraFilterParams, ...podScopeParams, ...visibilityParams, overfetchLimit];
   const rrfParams = [
     overfetchLimit, // COALESCE fallback for semantic rank_ix
     overfetchLimit, // COALESCE fallback for keyword rank_ix
@@ -113,6 +129,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
         ${temporalClause}
         ${categoryClause}
         ${podScopeClause}
+        ${visibilityClause}
       ORDER BY ${embeddingDistance}
       LIMIT ?
     ),
@@ -135,6 +152,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
         ${temporalClause}
         ${categoryClause}
         ${podScopeClause}
+        ${visibilityClause}
       ORDER BY keyword_rank DESC
       LIMIT ?
     ),

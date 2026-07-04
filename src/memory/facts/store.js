@@ -8,6 +8,7 @@ import { prompt as llmPrompt } from '../../lib/llm.js';
 import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import { maskSecrets } from '../../hooks/secret-mask.js';
 import config from '../../config.js';
+import { currentOrigin } from '../provenance.js';
 import { PROMPTS_DIR } from '../../lib/paths.js';
 
 const AUDM_PROMPT_PATH = path.join(PROMPTS_DIR, 'audm-decision.md');
@@ -149,6 +150,12 @@ async function insertFact({ content, category, confidence, importance, namespace
     createdByAgent = currentAgent();
   } catch { /* request-context unavailable outside daemon — fall through */ }
 
+  // P7: stable ownership identity (paired device id, else local install UUID
+  // from config.json), stamped on EVERY write so owner-scoped read can isolate
+  // private facts per person in a shared DB. Mirrors the read-side resolution
+  // in search (resolvePrivacyScope) via the shared currentOrigin() helper.
+  const createdByOrigin = currentOrigin();
+
   const [fact] = await db('fact')
     .insert({
       uid,
@@ -166,6 +173,7 @@ async function insertFact({ content, category, confidence, importance, namespace
       embeddingDim: Number(config.embedding.dimensions) || null,
       createdByDeviceId,
       createdByAgent,
+      createdByOrigin,
     })
     .returning('*');
 

@@ -70,6 +70,7 @@ function defaults() {
     http: { enabled: true, host: '127.0.0.1', port: 7777 },
     network: { mode: 'solo', enabled: false, masterNodeId: null },
     defaults: { namespace: 'default' },
+    privacy: { scope: 'device' },
     memory: {
       skipThreshold: 0.88, ambiguousThreshold: 0.78, supersedeThreshold: 0.72,
       supersedeScanLimit: 8, minFactSimilarity: 0.45, injectionFloor: 0.6,
