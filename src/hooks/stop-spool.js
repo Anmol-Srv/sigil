@@ -99,7 +99,7 @@ async function drainStopSpool() {
     try {
       const facts = await classifyTurn(entry.message);
       if (facts.length) {
-        await saveFacts(facts, { podUids: [], throwOnError: true });
+        await saveFacts(facts, { podUids: [], throwOnError: true, cwd: entry.cwd || null });
         replayed += facts.length;
       }
       // Success (saved, or genuinely not memorable) → drop from spool.

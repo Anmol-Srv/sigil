@@ -68,15 +68,21 @@ async function classifyTurn(userMessage) {
  * stays spooled for the next attempt); the live hook keeps the legacy
  * best-effort behaviour (log + continue) so it never blocks Claude.
  */
-async function saveFacts(facts, { podUids = [], throwOnError = false } = {}) {
+async function saveFacts(facts, { podUids = [], throwOnError = false, cwd = null } = {}) {
   const { ingestDocument } = await import('../ingestion/pipeline.js');
-  const config = (await import('../config.js')).default;
+  const { resolveNamespace } = await import('../memory/namespace.js');
+
+  // Per-project namespace: the Stop hook carries the turn's cwd, so a committed
+  // `.sigil/namespace` marker (or SIGIL_NAMESPACE env) routes auto-saved facts
+  // to the team namespace. With neither set this is the install default —
+  // identical to the prior behavior.
+  const namespace = resolveNamespace({ cwd });
 
   for (const fact of facts) {
     try {
       await ingestDocument({
         content: fact,
-        namespace: config.defaults.namespace,
+        namespace,
         // Skip the LLM classifier inside the pipeline — we already classified.
         // The fact-extraction step still runs.
         classify: false,
@@ -91,7 +97,7 @@ async function saveFacts(facts, { podUids = [], throwOnError = false } = {}) {
   // Refresh hot-context so the new fact shows up at next session start
   try {
     const { updateContextSnapshot } = await import('../memory/facts/hot-context.js');
-    await updateContextSnapshot({ namespace: config.defaults.namespace });
+    await updateContextSnapshot({ namespace });
   } catch { /* best effort */ }
 }
 

@@ -14,17 +14,20 @@
 export function registerRefreshContext(registry) {
   // Proxiable read-side: pure DB → returns serializable data.
   registry.register('refreshContext.fetch', async (params) => {
-    const { default: config } = await import('../../config.js');
+    const { resolveNamespace } = await import('../../memory/namespace.js');
     const { getHotFacts } = await import('../../memory/facts/hot-context.js');
-    const namespace = params.namespace || config.defaults.namespace;
+    // Usually called by the top-level refreshContext orchestrator with an
+    // already-resolved namespace; resolve here too so direct calls honor the
+    // per-project marker/env precedence.
+    const namespace = resolveNamespace({ cwd: params.cwd || null, explicit: params.namespace });
     const limit = Number.isFinite(params.limit) ? params.limit : 20;
     const facts = await getHotFacts({ namespace, limit });
     return { namespace, facts };
   });
 
   registry.register('refreshContext.explain', async (params) => {
-    const { default: config } = await import('../../config.js');
-    const namespace = params.namespace || config.defaults.namespace;
+    const { resolveNamespace } = await import('../../memory/namespace.js');
+    const namespace = resolveNamespace({ cwd: params.cwd || null, explicit: params.namespace });
     await import('../../memory/pods/kinds/index.js');
     const { activeKinds } = await import('../../memory/pods/registry.js');
     const { factsInPodsByRecency } = await import('../../memory/facts/hot-context.js');
@@ -63,9 +66,11 @@ export function registerRefreshContext(registry) {
   // Stays in LOCAL_ONLY so the lite-proxy never replaces it — the
   // delegation happens inside, via getMemoryClient().
   registry.register('refreshContext', async (params) => {
-    const { default: config } = await import('../../config.js');
+    const { resolveNamespace } = await import('../../memory/namespace.js');
     const { getMemoryClient } = await import('../../memory/client.js');
-    const namespace = params.namespace || config.defaults.namespace;
+    // Resolve once here (we have params.cwd), then pass the concrete namespace
+    // down to the proxiable read-side so master/lite-follower agree on scope.
+    const namespace = resolveNamespace({ cwd: params.cwd || null, explicit: params.namespace });
     const limit = Number.isFinite(params.limit) ? params.limit : 20;
     const explain = Boolean(params.explain);
 

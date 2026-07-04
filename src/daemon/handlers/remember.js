@@ -15,8 +15,10 @@ export function registerRemember(registry) {
     }
 
     const { ingestDocument } = await import('../../ingestion/pipeline.js');
-    const { default: config } = await import('../../config.js');
-    const namespace = params.namespace || config.defaults.namespace;
+    const { resolveNamespace } = await import('../../memory/namespace.js');
+    // Explicit --namespace wins; else SIGIL_NAMESPACE env > committed
+    // `.sigil/namespace` marker (via params.cwd) > install default.
+    const namespace = resolveNamespace({ cwd: params.cwd || null, explicit: params.namespace });
 
     let added = 0;
     let updated = 0;

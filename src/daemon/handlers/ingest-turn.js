@@ -39,7 +39,9 @@ export function registerIngestTurn(registry) {
     // with pod attachment, then refreshes the hot-context snapshot. throwOnError
     // so a save failure reaches the hook, which spools the turn for replay.
     const { saveFacts } = await import('../../hooks/stop-classify.js');
-    await saveFacts(facts, { podUids, throwOnError: true });
+    // Thread the turn's cwd so saveFacts can resolve a per-project namespace
+    // (committed `.sigil/namespace` marker / SIGIL_NAMESPACE) for auto-saves.
+    await saveFacts(facts, { podUids, throwOnError: true, cwd: params.cwd || null });
 
     return { saved: facts.length, podUids: podUids.length };
   });

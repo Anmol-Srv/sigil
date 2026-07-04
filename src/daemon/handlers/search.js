@@ -8,11 +8,15 @@ export function registerSearch(registry) {
     }
 
     const { search } = await import('../../memory/search/hybrid.js');
-    const { default: config } = await import('../../config.js');
+    const { resolveNamespace } = await import('../../memory/namespace.js');
 
+    // Per-project namespace resolution: an explicit namespaces[] (CLI
+    // --namespace) wins; otherwise resolve from SIGIL_NAMESPACE env > committed
+    // `.sigil/namespace` marker at the repo root (located via params.cwd) >
+    // the install default. No marker/env ⟹ the historical default.
     const namespaces = Array.isArray(params.namespaces) && params.namespaces.length
       ? params.namespaces
-      : [config.defaults.namespace];
+      : [resolveNamespace({ cwd: params.cwd || null })];
     const limit = Number.isFinite(params.limit) ? params.limit : 10;
     const useGraph    = Boolean(params.useGraph);
     const route       = Boolean(params.route);
