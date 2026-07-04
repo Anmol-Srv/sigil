@@ -59,6 +59,10 @@ const config = {
     // this so they can never drift (see src/lib/constants.js).
     get dimensions() { return EMBEDDING_DIM; },
     get ollamaHost() { return (store().embedding.provider === 'ollama' ? store().embedding.host : '') || 'http://localhost:11434'; },
+    // Optional auth for an Ollama endpoint behind a reverse proxy (Traefik
+    // basicAuth / bearer gateway). config.json owns it (embedding.apiKey when
+    // provider=ollama): "user:pass" -> Basic, token -> Bearer, or verbatim header.
+    get ollamaAuth() { return embKey('ollama'); },
     get openaiApiKey() { return embKey('openai'); },
     get voyageApiKey() { return embKey('voyage'); },
     // OpenRouter as an embedding gateway. Models are namespaced (e.g.
