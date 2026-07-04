@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock all external deps before importing hybrid
 vi.mock('../../ingestion/embedder.js', () => ({
@@ -82,6 +82,7 @@ vi.mock('../../lib/llm.js', () => ({
 import { hybridSearchFacts } from './hybrid-sql.js';
 import { routeQuery } from '../cognitive/query-router.js';
 import { search } from './hybrid.js';
+import { __setTestConfig, __resetTestConfig } from '../../setup/config-store.js';
 
 const makeFactList = (ids) =>
   ids.map((id, i) => ({
@@ -98,6 +99,8 @@ const makeFactList = (ids) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // SSOT: inject test config over real defaults (device id + default privacy scope).
+  __setTestConfig({ device: { id: 'local-device-xyz' }, privacy: { scope: 'device' } });
   routeQuery.mockResolvedValue({
     intent: 'factual',
     categories: [],
@@ -107,6 +110,10 @@ beforeEach(() => {
     pointInTime: null,
     reasoning: '',
   });
+});
+
+afterEach(() => {
+  __resetTestConfig();
 });
 
 describe('search — facade behavior', () => {
@@ -223,5 +230,44 @@ describe('search — facade behavior', () => {
     const result = await search('test', { namespaces: ['default'], limit: 5 });
 
     expect(result.chunks).toEqual([]);
+  });
+});
+
+describe('search — owner-scoped read enforcement (P2) threading', () => {
+  it('threads the local device id + private kinds into hybrid-sql when scope=device', async () => {
+    __setTestConfig({ privacy: { scope: 'device' } });
+    hybridSearchFacts.mockResolvedValue([]);
+
+    await search('test', { namespaces: ['default'], limit: 5 });
+
+    const opts = hybridSearchFacts.mock.calls[0][2];
+    expect(opts.privateScopeEnabled).toBe(true);
+    expect(opts.currentDeviceId).toBe('local-device-xyz');
+    // Built-in private kinds resolved from the registry.
+    expect(opts.privateKinds).toEqual(expect.arrayContaining(['claude_session', 'person']));
+    // Shared/public kinds are NOT in the private set.
+    expect(opts.privateKinds).not.toContain('project');
+    expect(opts.privateKinds).not.toContain('vital');
+  });
+
+  it('prefers the RPC caller device id over the local config device id', async () => {
+    __setTestConfig({ privacy: { scope: 'device' } });
+    hybridSearchFacts.mockResolvedValue([]);
+
+    await search('test', { namespaces: ['default'], limit: 5, ctx: { device: { id: 'remote-device-1' } } });
+
+    const opts = hybridSearchFacts.mock.calls[0][2];
+    expect(opts.currentDeviceId).toBe('remote-device-1');
+  });
+
+  it('disables enforcement when scope=off (SIGIL_PRIVATE_SCOPE=off)', async () => {
+    __setTestConfig({ privacy: { scope: 'off' } });
+    hybridSearchFacts.mockResolvedValue([]);
+
+    await search('test', { namespaces: ['default'], limit: 5 });
+
+    const opts = hybridSearchFacts.mock.calls[0][2];
+    expect(opts.privateScopeEnabled).toBe(false);
+    expect(opts.currentDeviceId).toBeNull();
   });
 });

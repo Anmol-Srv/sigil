@@ -175,6 +175,9 @@ const config = {
   get hebbian() { return store().hebbian; },
   // User preferences (noUpdateCheck, …) — was SIGIL_NO_UPDATE_CHECK env.
   get preferences() { return store().preferences; },
+  // Read-time owner-scoping of private-kind pods (P2). config.json owns it;
+  // change via patchConfig('privacy',{scope}) — 'device' enforces, 'off' disables.
+  get privacy() { return store().privacy; },
 };
 
 export default config;

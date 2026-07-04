@@ -19,7 +19,9 @@ import { expandQuery } from './query-expander.js';
 import { routeQuery } from '../cognitive/query-router.js';
 import { prompt as llmPrompt } from '../../lib/llm.js';
 import '../pods/kinds/index.js'; // side-effect: register built-in kinds
-import { activeKinds } from '../pods/registry.js';
+import { activeKinds, privateKindNames } from '../pods/registry.js';
+import { getConfig } from '../../setup/config-store.js';
+import { currentDeviceId as rpcDeviceId } from '../../daemon/request-context.js';
 import cortexDb from '../../db/cortex.js';
 
 // Entity detection only for short, name-like queries — not full sentences
@@ -55,11 +57,18 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
 
   const podIds = await resolvePodScope(podScope, { ...ctx, namespace: namespaces?.[0] });
 
+  // Owner-scoped read enforcement (P2). Resolve the local device id and the set
+  // of 'private' pod kinds ONCE here, then thread them through both search
+  // strategies into hybrid-sql. ctx.device.id (RPC caller, when present) wins,
+  // else the local device id from config.json. When scope is 'off', enforcement
+  // is disabled and prior global visibility is preserved.
+  const privacy = resolvePrivacyScope(ctx);
+
   let result;
   if (matchedEntity) {
-    result = await entityFirstSearch(matchedEntity, query, { namespaces, limit, minConfidence, includeChunks, pointInTime, categories, podIds });
+    result = await entityFirstSearch(matchedEntity, query, { namespaces, limit, minConfidence, includeChunks, pointInTime, categories, podIds, privacy });
   } else {
-    result = await standardSearch(query, { namespaces, limit, minConfidence, useGraph, includeChunks, pointInTime, expand, categories, podIds });
+    result = await standardSearch(query, { namespaces, limit, minConfidence, useGraph, includeChunks, pointInTime, expand, categories, podIds, privacy });
   }
 
   // Precision-first relevance floor. For auto-injection paths (hooks /
@@ -311,6 +320,58 @@ async function resolvePodScope(podScope, ctx = {}) {
   return null;
 }
 
+// Resolve owner-scoped read enforcement parameters (P2) for this search.
+//
+// Returns { enabled, currentDeviceId, privateKinds } which hybrid-sql turns
+// into the visibility WHERE-clause. When config.privacy.scope === 'off' the
+// feature is disabled (enabled:false → no clause emitted → global visibility).
+//
+// Device id resolution mirrors the WRITE-side stamping in facts/store.js so
+// read scope and write provenance use the same identity:
+//   1. the authenticated RPC caller's device id (request-context ALS / daemon
+//      dispatch) — set for paired remote devices, so a remote reader sees its
+//      OWN UUID-stamped private facts.
+//   2. ctx.device.id, if a caller threaded one explicitly.
+//   3. the local install's device id from config.json (the common local-CLI /
+//      hooks case). NOTE: local writes stamp created_by_device_id = NULL, and
+//      those NULL rows are always visible (see buildVisibilityClause), so the
+//      local device still sees its own private facts; this id is what hides
+//      OTHER devices' private facts from it.
+// If none resolve, the clause is skipped (fail-open to global — never
+// accidentally hide everything).
+function resolvePrivacyScope(ctx = {}) {
+  const enabled = config.privacy.scope !== 'off';
+  if (!enabled) {
+    return { enabled: false, currentDeviceId: null, privateKinds: [] };
+  }
+
+  let currentDeviceId = null;
+  try {
+    currentDeviceId = rpcDeviceId();
+  } catch {
+    currentDeviceId = null;
+  }
+  if (!currentDeviceId) currentDeviceId = ctx?.device?.id ?? null;
+  if (!currentDeviceId) {
+    try {
+      currentDeviceId = getConfig().device?.id ?? null;
+    } catch {
+      currentDeviceId = null; // config unreadable — fail open to global
+    }
+  }
+
+  return { enabled: true, currentDeviceId, privateKinds: privateKindNames() };
+}
+
+// Spread a resolved privacy scope into the hybrid-sql option keys.
+function privacyOptions(privacy) {
+  return {
+    currentDeviceId: privacy?.currentDeviceId ?? null,
+    privateKinds: privacy?.privateKinds ?? null,
+    privateScopeEnabled: privacy?.enabled !== false,
+  };
+}
+
 // Check if the query matches a known entity by name (DB lookup, no LLM call)
 async function detectEntity(query, namespaces) {
   if (query.length < 2 || query.length > MAX_ENTITY_QUERY_LENGTH) return null;
@@ -334,7 +395,7 @@ async function detectEntity(query, namespaces) {
 // search for "Sigil" can't see fact text that still says "Smara." Running
 // a parallel search for each alias and merging the result sets lets those
 // historical facts surface — without rewriting fact text.
-async function entityFirstSearch(entity, query, { namespaces, limit, minConfidence, includeChunks, pointInTime, categories, podIds }) {
+async function entityFirstSearch(entity, query, { namespaces, limit, minConfidence, includeChunks, pointInTime, categories, podIds, privacy }) {
   const queryVariants = buildAliasQueryVariants(query, entity);
 
   const variantEmbeddings = await embedBatch(queryVariants, { inputType: 'query' });
@@ -344,7 +405,7 @@ async function entityFirstSearch(entity, query, { namespaces, limit, minConfiden
     listRelationsForEntity(entity.id, { limit: 15 }),
     ...queryVariants.map((q, i) => coreHybridSearch(q, {
       queryEmbedding: variantEmbeddings[i],
-      namespaces, limit, minConfidence, includeChunks, pointInTime, categories, podIds,
+      namespaces, limit, minConfidence, includeChunks, pointInTime, categories, podIds, privacy,
     })),
   ]);
 
@@ -453,12 +514,12 @@ function buildAliasQueryVariants(query, entity) {
 }
 
 // No entity match: expand query into variants, search all in parallel, merge
-async function standardSearch(query, { namespaces, limit, minConfidence, useGraph, includeChunks, pointInTime, expand = false, categories, podIds }) {
+async function standardSearch(query, { namespaces, limit, minConfidence, useGraph, includeChunks, pointInTime, expand = false, categories, podIds, privacy }) {
   const queries = expand ? await expandQuery(query) : [query];
   const embeddings = await embedBatch(queries, { inputType: 'query' });
 
   const results = await Promise.all(
-    queries.map((q, i) => coreHybridSearch(q, { queryEmbedding: embeddings[i], namespaces, limit, minConfidence, includeChunks, pointInTime, categories, podIds })),
+    queries.map((q, i) => coreHybridSearch(q, { queryEmbedding: embeddings[i], namespaces, limit, minConfidence, includeChunks, pointInTime, categories, podIds, privacy })),
   );
 
   let facts = multiQueryMerge(results.map((r) => r.facts), limit);
@@ -617,11 +678,11 @@ function multiQueryMerge(resultSets, limit) {
 // Core vector+keyword hybrid with RRF merge.
 // Facts use single-SQL-query RRF (see hybrid-sql.js). Chunks stay on the
 // two-query + JS-merge path since they have no category/confidence filters.
-async function coreHybridSearch(query, { queryEmbedding: precomputed, namespaces, limit, minConfidence, includeChunks = false, pointInTime, categories, podIds }) {
+async function coreHybridSearch(query, { queryEmbedding: precomputed, namespaces, limit, minConfidence, includeChunks = false, pointInTime, categories, podIds, privacy }) {
   const queryEmbedding = precomputed || await embed(query, { inputType: 'query' });
 
   const factsPromise = hybridSearchFacts(query, queryEmbedding, {
-    namespaces, limit, minConfidence, pointInTime, categories, podIds,
+    namespaces, limit, minConfidence, pointInTime, categories, podIds, ...privacyOptions(privacy),
   });
 
   const chunkPromises = includeChunks

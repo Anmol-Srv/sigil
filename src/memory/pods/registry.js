@@ -116,6 +116,17 @@ export function list() {
   return Array.from(kinds.values());
 }
 
+// Pod-kind names whose default visibility is 'private' (owner-scoped). Used by
+// read-time enforcement (P2): facts belonging to a pod of one of these kinds
+// are only returned to the device that created them. Built-ins: claude_session,
+// person. Resolved from the live registry so dynamically-registered private
+// kinds (0.12.0+) are covered automatically.
+export function privateKindNames() {
+  return Array.from(kinds.values())
+    .filter((k) => k.visibility === 'private')
+    .map((k) => k.name);
+}
+
 // Returns kinds whose resolveActiveScope yields a non-empty pod set for
 // the given context. Each entry is { kind, scope: string[] } where scope
 // holds pod uids the hot-context blend should pull from. Order matches
