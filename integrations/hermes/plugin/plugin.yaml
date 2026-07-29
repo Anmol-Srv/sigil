@@ -1,10 +1,9 @@
 name: sigil
 version: 0.1.0
 description: >
-  Persistent shared-brain memory via a local Sigil install. Hermes turns are
-  saved to a per-platform namespace; recall reads across that namespace plus
-  `default` (where the user's laptop tools — Claude Code, Cursor, Codex, Kiro —
-  write). One Postgres backs every machine; sources/pods classify the source.
+  Persistent local memory via a Sigil install. Recall reads a per-platform
+  namespace plus `default`; durable writes occur only through the explicit
+  sigil_remember tool.
 hooks:
   - prefetch
   - sync_turn

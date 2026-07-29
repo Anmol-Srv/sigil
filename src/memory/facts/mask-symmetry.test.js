@@ -2,7 +2,7 @@
 //
 // Read-side masking (hooks → injection) already existed; the gap was the
 // capture/embed path, where ingested secrets reached the embedding API and
-// got stored in plaintext. saveFact now masks content BEFORE embedding, so:
+// got stored in plaintext. The deterministic writer masks content BEFORE embedding, so:
 //   1. the text handed to the embedder is masked (no exfiltration), and
 //   2. the stored fact content is masked.
 //
@@ -17,7 +17,7 @@ const embedCalls = [];
 const insertedRows = [];
 
 beforeAll(() => {
-  // Capture what the embedder receives. saveFact writes through embedOrThrow
+  // Capture what the embedder receives. The deterministic writer uses embedOrThrow
   // (the guarded EMBEDDING_DIM=1024 boundary), so capture there and emit 1024-d.
   const capture = (text) => { embedCalls.push(text); return Array(1024).fill(0.01); };
   vi.doMock('../../ingestion/embedder.js', () => ({
@@ -39,11 +39,11 @@ beforeAll(() => {
   vi.doMock('../../db/cortex.js', () => ({ default: fakeDb }));
 });
 
-describe('saveFact secret masking (write path)', () => {
+describe('deterministic fact secret masking (write path)', () => {
   it('masks secrets before embedding AND before storing', async () => {
-    const { saveFact } = await import('./store.js');
+    const { saveFactDeterministic } = await import('./store.js');
 
-    await saveFact({
+    await saveFactDeterministic({
       content: SECRET,
       category: 'domain_knowledge',
       confidence: 'high',
@@ -51,7 +51,7 @@ describe('saveFact secret masking (write path)', () => {
       namespace: 'default',
       sourceDocumentIds: [],
       sourceSection: null,
-      // no precomputed embedding → saveFact calls embed(content)
+      // no precomputed embedding → the writer calls embed(content)
     });
 
     // The embedder must have been called with masked text (no raw secret).

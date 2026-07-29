@@ -5,7 +5,7 @@ export function registerListFacts(registry) {
 
     const namespace = params.namespace || config.defaults.namespace;
     const category = params.category || undefined;
-    const limit = Number.isFinite(params.limit) ? params.limit : 20;
+    const limit = Math.max(1, Math.min(1_000, Number(params.limit) || 20));
 
     const facts = await listFacts({ namespace, category, limit });
     return {

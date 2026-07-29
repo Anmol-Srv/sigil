@@ -14,6 +14,39 @@
  */
 import { getConfig, resetConfig } from './config-store.js';
 
+/**
+ * Stop the installed supervisor (if any), then gracefully stop the daemon.
+ * Used by the destructive CLI reset before it removes the database directory.
+ * Returns a summary and never starts a daemon.
+ */
+export async function stopRuntimeForReset({ timeoutMs = 10_000 } = {}) {
+  let serviceRemoved = false;
+  try {
+    const { isServiceInstalled, uninstallService } = await import('../supervisor/index.js');
+    if (await isServiceInstalled()) {
+      await uninstallService();
+      serviceRemoved = true;
+    }
+  } catch { /* no supported/installed supervisor */ }
+
+  const { readPidFile, isPidAlive } = await import('../daemon/lifecycle.js');
+  const { setTimeout: delay } = await import('node:timers/promises');
+  const pid = await readPidFile();
+  if (!pid || !isPidAlive(pid)) return { serviceRemoved, daemonStopped: true, pid: null, forced: false };
+
+  try { process.kill(pid, 'SIGTERM'); } catch {
+    return { serviceRemoved, daemonStopped: !isPidAlive(pid), pid, forced: false };
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && isPidAlive(pid)) await delay(50);
+  let forced = false;
+  if (isPidAlive(pid)) {
+    forced = true;
+    try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+  }
+  return { serviceRemoved, daemonStopped: !isPidAlive(pid), pid, forced };
+}
+
 /** Remove Sigil from every coding agent it's installed into. */
 export async function disconnectAllClients() {
   const { listClients } = await import('../lib/clients/index.js');
@@ -51,6 +84,14 @@ export async function dropConfiguredDatabase() {
   const cfg = getConfig();
   const mode = cfg.database?.mode;
 
+  if (mode === 'embedded') {
+    return {
+      kind: 'embedded',
+      dropped: true,
+      detail: 'built-in database scheduled for removal with ~/.sigil',
+    };
+  }
+
   if (mode === 'docker') {
     const { removeLocalPostgres } = await import('../db/provision/docker.js');
     await removeLocalPostgres({ deleteVolume: true });
@@ -83,8 +124,8 @@ export async function dropConfiguredDatabase() {
 /**
  * In-app reset (GUI). Disconnect agents, optionally wipe stored memory, wipe
  * config. Leaves the daemon running on its current pool; the GUI then returns
- * to setup. Does NOT drop the database (use the CLI `sigil reset --wipe-db` for
- * a full teardown that also destroys the DB).
+ * to setup. The CLI `sigil reset` performs the full teardown; `--keep-db`
+ * explicitly preserves the configured database.
  */
 export async function factoryReset({ wipeMemory = true } = {}) {
   const disconnected = await disconnectAllClients();

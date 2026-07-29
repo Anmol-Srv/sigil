@@ -10,6 +10,8 @@ import { execSync as _execSync } from 'node:child_process';
 const PKG_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 let PKG_VERSION = '0.0.0';
 try { PKG_VERSION = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')).version; } catch { /* ignore */ }
+const MEMORY_RPC_TIMEOUT_MS = 120_000;
+const MAINTENANCE_RPC_TIMEOUT_MS = 30 * 60_000;
 
 // No .env loading: config.json is the single source of truth (loaded lazily by
 // config.js → config-store). A legacy ~/.sigil/.env is imported into config.json
@@ -22,13 +24,13 @@ if (!process.env.SIGIL_AGENT) process.env.SIGIL_AGENT = 'cli';
 
 const [command, ...rest] = process.argv.slice(2);
 
-const HELP = `sigil — Persistent memory for your Claude sessions
+const HELP = `sigil — Local-first memory for AI coding agents
 
 Usage:
   sigil <command> [options]
 
 Commands:
-  init                     Interactive setup wizard (DB, LLM, embeddings, agents)
+  init                     Interactive local-memory setup (DB, embeddings, agents)
   update [--check]         Update Sigil from the git release branch
   connect [--clients ...]  Re-pin launcher shims + re-sync AI client configs (fix stale paths)
   uninstall [--dry-run]    Remove Sigil's entries from selected AI clients
@@ -37,22 +39,17 @@ Commands:
   ingest <file|url|glob>   Ingest documents into the knowledge base
   search "query"           Search the knowledge base
   facts                    List stored facts with IDs
+  correct <id> "text"      Replace a fact explicitly and preserve history
   forget <id>              Delete a specific fact by ID
   namespace <sub>          Manage namespaces (list | delete <ns>)
-  session <sub>            Inspect the active session pod (current | list | show)
-  pod <sub>                List, show, create, or archive memory pods
   export [--format=json]   Export knowledge base as JSON or Markdown
-  context                  Refresh the hot-context snapshot in ~/.claude/CLAUDE.md
-  why                      Explain a search result — per-fact RRF / pod / kind breakdown
-  kind                     List or show pod kinds (claude_session, project, person, playbook, vital)
+  why                      Explain deterministic search ranking
   status                   Show knowledge base statistics
-  maintain                 Run periodic memory maintenance (stage promotion, edge consolidation)
   migrate                  Run database migrations
   reset                    Reset the database (drops all data)
+  mcp <sub>                Configure or test a generic MCP connection
   register                 Register as a Claude Code MCP server (advanced)
   daemon <sub>             Control the Sigil daemon (start | stop | status | logs)
-  pair <sub>               Create / list / revoke pairing codes (master)
-  join <node-id> <code>    Pair this device with a master Sigil install
 
 Options:
   --help                   Show this help message
@@ -98,7 +95,6 @@ async function launchAndOpenBrowser() {
   }
 
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
-  const { getGuiToken } = await import('./daemon/gui-token.js');
   const { canOpenBrowser, openBrowser } = await import('./lib/open-browser.js');
   process.stderr.write('[sigil] starting daemon…\n');
   let client = await connectOrStartDaemon({ quiet: true });
@@ -117,9 +113,13 @@ async function launchAndOpenBrowser() {
     ({ data } = await client.call('ping', {}));
   }
 
-  const { default: config } = await import('./config.js');
-  const token = await getGuiToken();
-  const url = `http://${config.http.host}:${config.http.port}/?t=${token}`;
+  // The core daemon does not load HTTP/WebSocket at boot. Starting the browser
+  // is the explicit signal to enable that adapter.
+  const gui = await client.call('gui.start', {});
+  if (!gui.ok || !gui.data?.url) {
+    throw new Error(gui.error?.message || 'failed to start the local Sigil UI');
+  }
+  const url = gui.data.url;
 
   // Headless (server / SSH / CI / no display): the browser wizard isn't
   // reachable — print the URL and fall back to the terminal `init` flow if
@@ -161,27 +161,22 @@ const commands = {
   remember: runRemember,
   ingest: runIngest,
   search: runSearch,
-  context: runContext,
   preamble: runPreamble,
   status: runStatus,
   facts: runFacts,
+  correct: runCorrect,
   forget: runForget,
   namespace: runNamespace,
-  session: runSession,
-  pod: runPod,
   export: runExport,
-  maintain: runMaintain,
   repair: runRepair,
   migrate: runMigrate,
   reset: runReset,
+  mcp: runMcp,
   register: runRegister,
   why: runWhy,
-  kind: runKind,
   update: runUpdateVerb,
   daemon: runDaemonVerb,
   service: runServiceVerb,
-  pair: runPairVerb,
-  join: runJoinVerb,
 };
 
 async function runUpdateVerb(args) {
@@ -199,14 +194,63 @@ async function runServiceVerb(args) {
   return runService(args);
 }
 
-async function runPairVerb(args) {
-  const { runPair } = await import('./cli-handlers/pair.js');
-  return runPair(args);
-}
+// ─── Generic MCP connection ────────────────────────────────────────────────
 
-async function runJoinVerb(args) {
-  const { runJoin } = await import('./cli-handlers/join.js');
-  return runJoin(args);
+async function runMcp(args) {
+  const subcommand = args[0];
+  if (!subcommand || args.includes('--help') || args.includes('-h')) {
+    console.log(`sigil mcp — Connect any MCP-compatible tool without a Sigil adapter
+
+Usage:
+  sigil mcp config [--format json|toml] [--agent <id>]
+  sigil mcp test
+
+Commands:
+  config   Print a ready-to-paste stdio MCP entry. It creates/refreshes only
+           Sigil's own stable launcher shim; it never edits the tool's config.
+  test     Start the generated stdio server and make a real status-tool call.
+
+Options:
+  --format json|toml  Config syntax to print (default: json)
+  --agent <id>        Provenance label for writes from this tool (default: mcp)
+
+Use a built-in connection only when Sigil supports that tool's native config or
+prompt hook. For any other MCP client, paste this generated entry and restart
+the client. Generic MCP has explicit tools; it does not install automatic
+capture or tool hooks.`);
+    return;
+  }
+
+  if (!['config', 'test'].includes(subcommand)) {
+    throw new Error(`unknown mcp command: ${subcommand}. Use \`sigil mcp --help\`.`);
+  }
+
+  const readFlag = (name, fallback) => {
+    const index = args.findIndex((arg) => arg === name || arg.startsWith(`${name}=`));
+    if (index === -1) return fallback;
+    return args[index].includes('=') ? args[index].slice(name.length + 1) : args[index + 1];
+  };
+  const format = readFlag('--format', 'json');
+  const agent = readFlag('--agent', 'mcp');
+
+  const { writeLauncherShim, resolveServerPath } = await import('./lib/clients/shim.js');
+  await writeLauncherShim({});
+
+  if (subcommand === 'config') {
+    const { renderStdioMcpConfig } = await import('./mcp/config-snippet.js');
+    console.log('\nPaste this into your MCP client configuration:\n');
+    console.log(renderStdioMcpConfig({ format, agent }));
+    console.log('This uses local stdio. Sigil starts its local daemon on demand; no remote service or plugin is required.');
+    return;
+  }
+
+  if (format !== 'json' || agent !== 'mcp') {
+    throw new Error('`sigil mcp test` accepts no config options; test the default generated stdio entry.');
+  }
+  const { verifyMcpRoundTrip } = await import('./lib/clients/roundtrip.js');
+  const result = await verifyMcpRoundTrip(resolveServerPath());
+  if (!result.ok) throw new Error(`MCP test failed: ${result.reason}`);
+  console.log('Sigil MCP is ready: stdio server initialized and the status tool responded.');
 }
 
 
@@ -233,22 +277,6 @@ if (command !== 'doctor' && command !== 'export' && command !== 'register') {
     }
   } catch { /* never let the warning break the command */ }
 
-  // Surface a pending git update (flag set by the daemon's background staleness
-  // check). Suppressed for `update` itself — it has its own richer output.
-  if (command !== 'update') {
-    try {
-      const { existsSync, readFileSync } = await import('node:fs');
-      const { SIGIL_UPDATE_FLAG } = await import('./lib/paths.js');
-      if (existsSync(SIGIL_UPDATE_FLAG)) {
-        let detail = '';
-        try {
-          const f = JSON.parse(readFileSync(SIGIL_UPDATE_FLAG, 'utf8'));
-          if (f.local && f.remote) detail = ` (${f.local} → ${f.remote})`;
-        } catch { /* flag may be empty — fine */ }
-        process.stderr.write(`⬆ Sigil update available${detail} — run \`sigil update\`\n`);
-      }
-    } catch { /* never let the warning break the command */ }
-  }
 }
 
 try {
@@ -278,7 +306,7 @@ try {
     console.error('Sigil 0.10.0+ requires Postgres. Start your Postgres server first:');
     console.error('  • Docker:   docker run -d --name sigil-pg -p 5432:5432 -e POSTGRES_PASSWORD=… pgvector/pgvector:pg15');
     console.error('  • brew:     brew services start postgresql@15');
-    console.error('  • RDS / cloud:  check the host/port in `grep SIGIL_DB_ ~/.sigil/.env`');
+    console.error('  • RDS / cloud:  check database settings in ~/.sigil/config.json');
     console.error('');
     console.error('Underlying error: ' + msg.split('\n')[0]);
     process.exit(1);
@@ -288,7 +316,7 @@ try {
     console.error('Error: Postgres rejected the Sigil credentials.');
     console.error('');
     console.error('Re-run `sigil init` to reset the password (it will use Postgres admin');
-    console.error('credentials once to update the sigil_app user), or edit ~/.sigil/.env manually.');
+    console.error('credentials once to update the sigil_app user), or rerun `sigil init`.');
     console.error('');
     console.error('Underlying error: ' + msg.split('\n')[0]);
     process.exit(1);
@@ -330,8 +358,6 @@ function pad(s, n) { return String(s).padEnd(n); }
 //   2. Re-runs each selected client's install() to re-sync its generated files
 //      (Claude Code hooks + CLAUDE.md, Cursor, Codex CLI, Kiro) against the
 //      fresh shims.
-//   3. Refreshes the hot-context snapshot (best-effort; skipped if the DB is
-//      unreachable — connect must work even when other things are broken).
 //
 // Safe non-interactively (agents / CI): with --clients/--all, or when stdin is
 // not a TTY, it skips the picker and uses the given/detected set.
@@ -428,7 +454,7 @@ skipped (agent/CI-friendly).`);
         label: c.label,
         hint: detected[i] ? `${c.hint} — detected` : c.hint,
       })),
-      initialValues: detectedIds.length ? detectedIds : ['claude-code'],
+    initialValues: detectedIds,
       required: false,
     });
     if (isCancel(pickedIds)) { cancel('Connect cancelled.'); process.exit(0); }
@@ -441,14 +467,10 @@ skipped (agent/CI-friendly).`);
   s.start(dryRun ? 'Computing connect plan...' : 'Re-syncing client integrations...');
   for (const id of pickedIds) {
     const client = clients.find((c) => c.id === id);
-    const { actions } = await client.install({ dryRun });
+    const { actions } = dryRun
+      ? await client.plan()
+      : await client.apply();
     for (const a of actions) planned.push({ client: client.label, ...a });
-  }
-  // Refresh the hot-context snapshot. Best-effort: connect must not require the
-  // DB, so a failure here (DB down) is swallowed.
-  if (!dryRun) {
-    const { updateContextSnapshot } = await import('./memory/facts/hot-context.js');
-    await updateContextSnapshot({}).catch(() => {});
   }
   s.stop(dryRun
     ? 'Plan computed.'
@@ -473,8 +495,9 @@ async function runUninstall(args) {
 Usage:
   sigil uninstall [--dry-run]
 
-Walks through every detected AI client (Claude Code, Cursor, Codex CLI, Kiro)
-and lets you pick which ones to remove Sigil from. Each picked client gets:
+Lists every AI-client integration Sigil has configured (including stale entries
+for an app no longer installed) and lets you choose which ones to remove. Each
+picked client gets:
   - its MCP entry removed from the client's config (other entries preserved)
   - its instructions / rules / steering file deleted
   - hook entries stripped (Claude Code only)
@@ -496,11 +519,11 @@ Options:
   const { listClients } = await import('./lib/clients/index.js');
   const clients = await listClients();
 
-  // Only offer clients that look installed. If none → tell the user and bail.
+  // Keep stale Sigil-owned integrations removable even after their client was
+  // uninstalled or moved. Detection is intentionally stricter than cleanup.
   const installed = [];
   for (const client of clients) {
-    if (!(await client.detect())) continue;
-    const { installed: isInstalled } = await client.verify();
+    const { installed: isInstalled } = await client.verify().catch(() => ({ installed: false }));
     if (isInstalled) installed.push(client);
   }
 
@@ -513,7 +536,9 @@ Options:
   const pickedIds = await multiselect({
     message: 'Remove Sigil from which clients? (space to toggle, enter to confirm)',
     options: installed.map((c) => ({ value: c.id, label: c.label, hint: c.hint })),
-    initialValues: installed.map((c) => c.id),
+    // Destructive cleanup must never be one Enter key away from removing every
+    // integration. Users explicitly choose each client they want to disconnect.
+    initialValues: [],
     required: false,
   });
   if (isCancel(pickedIds)) { cancel('Uninstall cancelled.'); process.exit(0); }
@@ -551,7 +576,7 @@ Usage:
   sigil doctor [--deep]
   sigil doctor --ack
 
-Checks: Postgres connection, LLM provider, embedding provider, hook registration, hook error budget.
+Checks: database connection, embedding provider, optional LLM (when configured), prompt-hook registration, hook error budget.
 --deep also round-trips each connector (spawns the MCP server / runs a hook) to
 prove the integration actually works, not just that its files exist.
 --ack acknowledges the current hook errors (silences the warning) without
@@ -644,7 +669,7 @@ running the checks — use when you've seen them and don't want a full pass.`);
     const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
     let client;
     try {
-      client = await connectOrStartDaemon({ quiet: true });
+      client = await connectOrStartDaemon({ quiet: true, timeoutMs: MEMORY_RPC_TIMEOUT_MS });
       const { data: status } = await client.call('status', {});
       if (status?.db?.healthy) {
         log('ok', 'Stored data', `${status.documents} docs, ${status.chunks} chunks, ${status.facts} facts`);
@@ -666,7 +691,7 @@ running the checks — use when you've seen them and don't want a full pass.`);
         log('fail', 'Database', `unreachable — ${msg}`);
         log('warn', 'Recovery',
           config.db.url
-            ? 'verify SIGIL_DATABASE_URL is valid and the provider is reachable'
+            ? 'verify the database URL in ~/.sigil/config.json and provider reachability'
             : 'built-in DB unreadable — run `sigil repair db` to restore from a snapshot'
               + ' (for the underlying cause behind `Aborted()`, set SIGIL_PGLITE_DEBUG=1 and `sigil daemon restart`)');
       }
@@ -678,51 +703,45 @@ running the checks — use when you've seen them and don't want a full pass.`);
     log('warn', 'Recovery', 'start it with `sigil daemon start` (or just run `sigil`), then re-run doctor');
   }
 
-  // LLM + embedding providers — LIVE probe (actually call them), not just
+  // Embedding + optional LLM providers — LIVE probe (actually call them), not just
   // "is one detected". A revoked key / unreachable host / wrong model is the
   // silent failure this turns loud; detect-only reported green for all of them.
   try {
     const { probeProviders } = await import('./lib/provider-probe.js');
-    const health = await probeProviders();
+    const { getConfig } = await import('./setup/config-store.js');
+    const llmConfigured = Boolean(getConfig().llm?.provider);
+    const health = await probeProviders({ llm: llmConfigured });
     const l = health.llm;
     const e = health.embedding;
-    if (l?.ok) log('ok', 'LLM provider', `${l.provider}${l.model ? `/${l.model}` : ''} — probe ok`);
-    else log('fail', 'LLM provider', l?.provider ? `${l.provider}: ${(l.error || 'unreachable').split('\n')[0]}` : 'not configured — run `sigil init`');
+    if (!llmConfigured) log('ok', 'LLM provider', 'not configured (optional)');
+    else if (l?.ok) log('ok', 'LLM provider', `${l.provider}${l.model ? `/${l.model}` : ''} — probe ok`);
+    else log('fail', 'LLM provider', `${l?.provider || 'configured'}: ${(l?.error || 'unreachable').split('\n')[0]}`);
     if (e?.ok) log('ok', 'Embedding provider', `${e.provider}/${e.model} (dim=${e.dim}) — probe ok`);
     else log('fail', 'Embedding provider', e?.provider ? `${e.provider}: ${(e.error || 'unreachable').split('\n')[0]}` : 'not configured — run `sigil init`');
   } catch (err) {
     log('warn', 'Providers', `live probe failed: ${err.message.split('\n')[0]}`);
   }
 
-  // Stop-hook spool — turns waiting to be replayed (saved during an outage).
-  try {
-    const { spoolCount } = await import('./hooks/stop-spool.js');
-    const n = spoolCount();
-    if (n === 0) log('ok', 'Stop-hook spool', 'empty');
-    else log('warn', 'Stop-hook spool', `${n} unsaved turn${n > 1 ? 's' : ''} pending — restart the daemon or run \`sigil repair embeddings\` to replay`);
-  } catch (err) {
-    log('warn', 'Stop-hook spool', `unreadable: ${err.message}`);
-  }
-
-  // Client integrations — for each detected client, run verify() to confirm
-  // Sigil's config entries are actually present. Undetected clients are
-  // silent (no point warning about Cursor on a box that doesn't have it).
+  // Client integrations — report only configurations Sigil actually owns.
+  // A configured integration whose app is gone is a cleanup action, not proof
+  // that the client is installed.
   try {
     const { listClients } = await import('./lib/clients/index.js');
     const clients = await listClients();
     let reported = 0;
     for (const client of clients) {
-      if (!(await client.detect())) continue;
+      const [detected, result] = await Promise.all([
+        client.detect().catch(() => false),
+        client.verify({ deep }).catch((error) => ({ installed: false, reason: error.message })),
+      ]);
+      if (!result.installed) continue;
       reported++;
-      const result = await client.verify({ deep });
-      if (result.installed) {
-        log('ok', `${client.label} integration`, deep ? 'configured + round-trip ok' : 'configured');
-      } else {
-        log('warn', `${client.label} integration`, `${result.reason} — run 'sigil init' to refresh`);
-      }
+      if (detected) log('ok', `${client.label} integration`, deep ? 'configured + round-trip ok' : 'configured');
+      else log('warn', `${client.label} integration`, 'configured, but its client is not detected — run `sigil uninstall` to remove it');
+      if (result.attention) log('warn', `${client.label} automatic recall`, result.attention);
     }
     if (reported === 0) {
-      log('warn', 'Client integrations', 'no AI clients detected (Claude Code / Cursor / Codex / Kiro)');
+      log('ok', 'Client integrations', 'none configured');
     }
   } catch (err) {
     log('warn', 'Client integrations', `check failed: ${err.message}`);
@@ -732,7 +751,7 @@ running the checks — use when you've seen them and don't want a full pass.`);
   if (existsSync(cortexMd)) log('ok', 'Sigil CLAUDE.md', cortexMd);
   else log('warn', 'Sigil CLAUDE.md', `not found — run 'sigil init'`);
 
-  // Recent hook errors — silent failures from the 4 hooks that auto-run
+  // Recent errors from the single prompt-recall hook.
   // during Claude Code sessions. Surfaces problems that would otherwise
   // rot unnoticed because hooks never block Claude.
   //
@@ -806,29 +825,33 @@ Options:
   }
 
   const fs = await import('node:fs/promises');
-  const { listFacts } = await import('./memory/facts/store.js');
-  const config = (await import('./config.js')).default;
-  const cortexDb = (await import('./db/cortex.js')).default;
-
-  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1] || config.defaults.namespace;
+  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1];
   const format = args.find((a) => a.startsWith('--format='))?.split('=')[1] || 'json';
   const outputPath = args.find((a) => a.startsWith('--output='))?.split('=')[1];
 
-  const facts = await listFacts({ namespace, limit: 10000 });
-  const entities = await cortexDb('entity').where({ namespace });
-  const documents = await cortexDb('document').where({ namespace });
+  if (!['json', 'markdown'].includes(format)) {
+    console.error(`Unknown export format: ${format}. Use json or markdown.`);
+    process.exit(1);
+  }
+
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon({ timeoutMs: MEMORY_RPC_TIMEOUT_MS });
+  let data;
+  try {
+    ({ data } = await client.call('exportData', { namespace }));
+  } finally {
+    await client.close();
+  }
+  const facts = data.facts;
+  const documents = data.documents;
 
   let output;
   if (format === 'markdown') {
-    const lines = [`# Sigil export — namespace: ${namespace}`, `Generated: ${new Date().toISOString()}`, ''];
+    const lines = [`# Sigil export — namespace: ${data.namespace}`, `Generated: ${new Date().toISOString()}`, ''];
     lines.push(`## Facts (${facts.length})`, '');
     for (const f of facts) {
       const importance = f.importance === 'vital' ? ' **[VITAL]**' : '';
       lines.push(`- **[${f.category}]**${importance} ${f.content} *(${f.confidence})*`);
-    }
-    lines.push('', `## Entities (${entities.length})`, '');
-    for (const e of entities) {
-      lines.push(`- **${e.name}** (${e.entityType})${e.description ? ` — ${e.description}` : ''}`);
     }
     lines.push('', `## Documents (${documents.length})`, '');
     for (const d of documents) {
@@ -837,7 +860,7 @@ Options:
     output = lines.join('\n');
   } else {
     output = JSON.stringify({
-      namespace,
+      namespace: data.namespace,
       exportedAt: new Date().toISOString(),
       facts: facts.map((f) => ({
         uid: f.uid,
@@ -846,13 +869,6 @@ Options:
         confidence: f.confidence,
         importance: f.importance,
         createdAt: f.createdAt,
-      })),
-      entities: entities.map((e) => ({
-        uid: e.uid,
-        name: e.name,
-        type: e.entityType,
-        description: e.description,
-        mentionCount: e.mentionCount,
       })),
       documents: documents.map((d) => ({
         sourcePath: d.sourcePath,
@@ -866,12 +882,10 @@ Options:
 
   if (outputPath) {
     await fs.writeFile(outputPath, output, 'utf8');
-    console.log(`Exported ${facts.length} facts, ${entities.length} entities, ${documents.length} documents to ${outputPath}`);
+    console.log(`Exported ${facts.length} facts and ${documents.length} documents to ${outputPath}`);
   } else {
     process.stdout.write(output + '\n');
   }
-
-  await cortexDb.destroy();
 }
 
 // ─── Namespace ───────────────────────────────────────────────────────────────
@@ -890,315 +904,40 @@ Namespaces isolate facts. A project, team, or context each gets its own.`);
     process.exit(sub ? 0 : 1);
   }
 
-  const { listNamespaces, deleteNamespace } = await import('./memory/facts/store.js');
-  const cortexDb = (await import('./db/cortex.js')).default;
-
-  if (sub === 'list') {
-    const namespaces = await listNamespaces();
-    if (!namespaces.length) {
-      console.log('No namespaces with facts.');
-    } else {
-      console.log('Namespaces:');
-      for (const { namespace, factCount } of namespaces) {
-        console.log(`  ${namespace.padEnd(30)} ${factCount} fact${factCount === 1 ? '' : 's'}`);
-      }
-    }
-  } else if (sub === 'delete') {
-    const ns = args[1];
-    if (!ns || ns.startsWith('--')) {
-      console.error(`Provide a namespace: sigil namespace delete <ns> --confirm`);
-      await cortexDb.destroy();
-      process.exit(1);
-    }
-    if (!args.includes('--confirm')) {
-      console.error(`This will delete ALL data in namespace "${ns}". Run with --confirm to proceed.`);
-      await cortexDb.destroy();
-      process.exit(1);
-    }
-    const result = await deleteNamespace(ns);
-    console.log(`Deleted namespace "${ns}":`);
-    console.log(`  ${result.factsDeleted} facts, ${result.chunksDeleted} chunks, ${result.docsDeleted} documents, ${result.entitiesDeleted} entities`);
-  } else {
-    console.error(`Unknown subcommand: ${sub}`);
-    await cortexDb.destroy();
-    process.exit(1);
-  }
-
-  await cortexDb.destroy();
-}
-
-// ─── Session ─────────────────────────────────────────────────────────────────
-
-async function runSession(args) {
-  const sub = args[0];
-
-  if (!sub || args.includes('--help')) {
-    console.log(`sigil session — Inspect the active Claude Code session pod
-
-Usage:
-  sigil session current                Show active session uid + summary
-  sigil session list [--limit=10]      List recent session pods
-  sigil session show [<uid>]           Detailed view (defaults to active)`);
-    process.exit(sub ? 0 : 1);
-  }
-
-  const cortexDb = (await import('./db/cortex.js')).default;
-
-  try {
-    if (sub === 'current') {
-      const { getActiveCursor } = await import('./memory/pods/active-session.js');
-      const cursor = await getActiveCursor();
-      if (!cursor) {
-        console.log('No active session.');
-        return;
-      }
-      const pod = await (await import('./memory/pods/store.js')).findByUid(cursor.pod_uid);
-      if (!pod) {
-        console.log(`Cursor points to ${cursor.pod_uid} but pod row not found.`);
-        return;
-      }
-      const sessionType = await import('./memory/pods/kinds/claude_session.js');
-      const view = sessionType.formatForDisplay(pod);
-      console.log(`Active session: ${pod.uid}`);
-      console.log(`  session_id:     ${view.sessionId}`);
-      console.log(`  started_at:     ${pod.startedAt}`);
-      console.log(`  turn_count:     ${view.turnCount}`);
-      console.log(`  cwd:            ${view.cwd || '—'}`);
-      console.log(`  transcript:     ${view.transcriptPath || '—'}`);
-      console.log(`  facts in pod:   ${pod.memberFactCount}`);
-      console.log(`  docs in pod:    ${pod.memberDocCount}`);
-    } else if (sub === 'list') {
-      const limit = Number(parseArg(args, '--limit') || 10);
-      const pods = await (await import('./memory/pods/store.js')).listPods({ podType: 'claude_session', limit });
-      if (!pods.length) {
-        console.log('No session pods.');
-        return;
-      }
-      for (const p of pods) {
-        const ended = p.endedAt ? p.endedAt.toISOString().slice(0, 16).replace('T', ' ') : 'active';
-        console.log(`  ${p.uid}  ${p.name.padEnd(40)}  facts=${p.memberFactCount}  ${ended}`);
-      }
-    } else if (sub === 'show') {
-      let uid = args[1];
-      if (!uid) {
-        const { getActiveCursor } = await import('./memory/pods/active-session.js');
-        const cursor = await getActiveCursor();
-        uid = cursor?.pod_uid;
-        if (!uid) {
-          console.log('No active session. Pass a uid: sigil session show <uid>');
-          process.exit(1);
-        }
-      }
-      await showPod(uid);
-    } else {
-      console.error(`Unknown subcommand: ${sub}`);
-      process.exit(1);
-    }
-  } finally {
-    await cortexDb.destroy();
-  }
-}
-
-// ─── Pod ────────────────────────────────────────────────────────────────────
-
-async function runPod(args) {
-  const sub = args[0];
-
-  if (!sub || args.includes('--help')) {
-    console.log(`sigil pod — Inspect and manage memory pods
-
-Usage:
-  sigil pod list [--type=session|person] [--namespace=<ns>] [--limit=20]
-  sigil pod show <uid>
-  sigil pod create --type=person --name="<name>" [--slack=U123]
-                   [--github=<username>] [--email=<addr>] [--role="..."]
-                   [--relationship=manager|report|peer|external|...]
-                   [--notes="..."] [--namespace=<ns>]
-  sigil pod archive <uid>
-  sigil pod delete <uid> --confirm
-
-Pods are typed memory containers (session, person, ...). Person pods
-back a canonical entity so dedup churn doesn't lose their metadata.`);
-    process.exit(sub ? 0 : 1);
-  }
-
-  const cortexDb = (await import('./db/cortex.js')).default;
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon({ timeoutMs: MEMORY_RPC_TIMEOUT_MS });
 
   try {
     if (sub === 'list') {
-      const podType = parseArg(args, '--type');
-      const namespace = parseArg(args, '--namespace');
-      const limit = Number(parseArg(args, '--limit') || 20);
-      const pods = await (await import('./memory/pods/store.js')).listPods({ podType, namespace, limit });
-      if (!pods.length) {
-        console.log('No pods.');
-        return;
+      const { data } = await client.call('listNamespaces', {});
+      if (!data.namespaces.length) {
+        console.log('No namespaces with facts.');
+      } else {
+        console.log('Namespaces:');
+        for (const { namespace, factCount } of data.namespaces) {
+          console.log(`  ${namespace.padEnd(30)} ${factCount} fact${factCount === 1 ? '' : 's'}`);
+        }
       }
-      for (const p of pods) {
-        console.log(`  ${p.uid}  type=${p.podType.padEnd(20)}  ${p.name.padEnd(40)}  facts=${p.memberFactCount}`);
-      }
-    } else if (sub === 'show') {
-      const uid = args[1];
-      if (!uid || uid.startsWith('--')) {
-        console.error('Provide a uid: sigil pod show <uid>');
-        process.exit(1);
-      }
-      await showPod(uid);
-    } else if (sub === 'create') {
-      await createPod(args);
-    } else if (sub === 'archive') {
-      const uid = args[1];
-      if (!uid || uid.startsWith('--')) {
-        console.error('Provide a uid: sigil pod archive <uid>');
-        process.exit(1);
-      }
-      const store = await import('./memory/pods/store.js');
-      const pod = await store.findByUid(uid);
-      if (!pod) { console.error(`Not found: ${uid}`); process.exit(1); }
-      await store.archivePod(pod.id);
-      console.log(`Archived: ${uid}`);
     } else if (sub === 'delete') {
-      const uid = args[1];
-      if (!uid || uid.startsWith('--')) {
-        console.error('Provide a uid: sigil pod delete <uid> --confirm');
+      const ns = args[1];
+      if (!ns || ns.startsWith('--')) {
+        console.error('Provide a namespace: sigil namespace delete <ns> --confirm');
         process.exit(1);
       }
       if (!args.includes('--confirm')) {
-        console.error('Pass --confirm to delete (cascades pod_membership).');
+        console.error(`This will delete ALL data in namespace "${ns}". Run with --confirm to proceed.`);
         process.exit(1);
       }
-      const store = await import('./memory/pods/store.js');
-      const pod = await store.findByUid(uid);
-      if (!pod) { console.error(`Not found: ${uid}`); process.exit(1); }
-      await store.deletePod(pod.id);
-      console.log(`Deleted: ${uid}`);
+      const { data } = await client.call('deleteNamespace', { namespace: ns, confirm: true });
+      console.log(`Deleted namespace "${ns}":`);
+      console.log(`  ${data.factsDeleted} facts, ${data.chunksDeleted} chunks, ${data.docsDeleted} documents`);
     } else {
       console.error(`Unknown subcommand: ${sub}`);
       process.exit(1);
     }
   } finally {
-    await cortexDb.destroy();
+    await client.close();
   }
-}
-
-async function showPod(uid) {
-  const podStore = await import('./memory/pods/store.js');
-  const membership = await import('./memory/pods/membership.js');
-  const pod = await podStore.findByUid(uid);
-  if (!pod) { console.error(`Not found: ${uid}`); process.exit(1); }
-
-  const attrs = typeof pod.attrs === 'object' ? pod.attrs : safeJsonParse(pod.attrs);
-
-  console.log(`${pod.uid}  type=${pod.podType}`);
-  console.log(`  name:           ${pod.name}`);
-  console.log(`  namespace:      ${pod.namespace}`);
-  console.log(`  status:         ${pod.status}`);
-  console.log(`  started_at:     ${pod.startedAt || '—'}`);
-  console.log(`  ended_at:       ${pod.endedAt || '—'}`);
-  if (pod.entityId) console.log(`  entity_id:      ${pod.entityId}`);
-  if (pod.connectionId) console.log(`  connection_id:  ${pod.connectionId}`);
-  if (pod.externalId) console.log(`  external_id:    ${pod.externalId}`);
-  console.log(`  facts:          ${pod.memberFactCount}`);
-  console.log(`  documents:      ${pod.memberDocCount}`);
-  console.log(`  attrs:`);
-  for (const [k, v] of Object.entries(attrs)) {
-    const val = typeof v === 'object' ? JSON.stringify(v) : v;
-    console.log(`    ${k}: ${val ?? '—'}`);
-  }
-
-  const facts = await membership.listMembers(pod.id, { memberType: 'fact', limit: 10 });
-  if (facts.length) {
-    console.log(`\n  Latest member facts (${facts.length}):`);
-    for (const f of facts) {
-      const truncated = (f.content || '').slice(0, 100);
-      console.log(`    - ${truncated}${f.content && f.content.length > 100 ? '…' : ''}`);
-    }
-  }
-}
-
-async function createPod(args) {
-  const podType = parseArg(args, '--type');
-  if (podType !== 'person') {
-    console.error('Only --type=person is supported in PR1. Session pods are auto-created by hooks.');
-    process.exit(1);
-  }
-
-  const name = parseArg(args, '--name');
-  if (!name) {
-    console.error('--name is required');
-    process.exit(1);
-  }
-
-  const namespace = parseArg(args, '--namespace');
-  const slack = parseArg(args, '--slack');
-  const github = parseArg(args, '--github');
-  const email = parseArg(args, '--email');
-  const role = parseArg(args, '--role');
-  const relationship = parseArg(args, '--relationship');
-  const notes = parseArg(args, '--notes');
-
-  const platforms = {};
-  if (slack) platforms.slack = { user_id: slack };
-  if (github) platforms.github = { username: github };
-  if (email) platforms.email = email;
-
-  const config = (await import('./config.js')).default;
-  const ns = namespace || config.defaults.namespace;
-
-  // Find or create the person entity.
-  const entityStore = await import('./memory/entities/store.js');
-  let entity = await entityStore.findByName(name, ns);
-
-  if (entity && entity.entityType && entity.entityType !== 'person') {
-    console.error(`An entity named "${name}" already exists with entity_type="${entity.entityType}". Use a different name or merge manually.`);
-    process.exit(1);
-  }
-
-  if (!entity) {
-    const { embed } = await import('./ingestion/embedder.js');
-    const embedding = await embed(name).catch(() => null);
-    entity = await entityStore.insertEntity({
-      name,
-      entityType: 'person',
-      description: role ? `${role}` : null,
-      namespace: ns,
-      externalId: slack || null,
-      embedding,
-    });
-    console.log(`Created entity: ${entity.uid} (${entity.name})`);
-  } else {
-    console.log(`Linked to existing entity: ${entity.uid} (${entity.name})`);
-  }
-
-  const { upsertPersonPod } = await import('./memory/pods/resolver.js');
-  const { pod, isNew } = await upsertPersonPod({
-    entityId: entity.id,
-    name,
-    namespace: ns,
-    attrs: { platforms, role, relationship, notes },
-  });
-
-  console.log(`${isNew ? 'Created' : 'Updated'} person pod: ${pod.uid}`);
-  console.log(`  entity_id:     ${entity.id}`);
-  console.log(`  platforms:     ${JSON.stringify(platforms)}`);
-  if (role) console.log(`  role:          ${role}`);
-  if (relationship) console.log(`  relationship:  ${relationship}`);
-}
-
-function parseArg(args, flag) {
-  // Supports both `--flag=value` and `--flag value` forms.
-  const eqMatch = args.find((a) => a.startsWith(`${flag}=`));
-  if (eqMatch) return eqMatch.slice(flag.length + 1);
-  const idx = args.indexOf(flag);
-  if (idx !== -1 && idx + 1 < args.length && !args[idx + 1].startsWith('--')) {
-    return args[idx + 1];
-  }
-  return null;
-}
-
-function safeJsonParse(s) {
-  if (!s) return {};
-  try { return JSON.parse(s); } catch { return {}; }
 }
 
 // ─── Facts (list) ────────────────────────────────────────────────────────────
@@ -1222,7 +961,7 @@ Options:
   const limit = Number(args.find((a) => a.startsWith('--limit='))?.split('=')[1] || 20);
 
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
-  const client = await connectOrStartDaemon();
+  const client = await connectOrStartDaemon({ timeoutMs: MEMORY_RPC_TIMEOUT_MS });
   try {
     const { data } = await client.call('listFacts', { namespace, category, limit });
     if (!data.facts.length) {
@@ -1257,7 +996,7 @@ The <id> can be any of:
 
   const idArg = args[0];
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
-  const client = await connectOrStartDaemon();
+  const client = await connectOrStartDaemon({ timeoutMs: MEMORY_RPC_TIMEOUT_MS });
   try {
     const { data } = await client.call('forgetFact', { id: idArg });
     if (data.notFound) {
@@ -1265,6 +1004,41 @@ The <id> can be any of:
       process.exit(1);
     }
     console.log(`Forgotten: ${data.deleted.content}`);
+  } finally {
+    await client.close();
+  }
+}
+
+// ─── Correct ─────────────────────────────────────────────────────────────────
+
+async function runCorrect(args) {
+  if (args.includes('--help') || !args[0] || args.length < 2) {
+    console.log(`sigil correct — Replace an outdated fact while preserving history
+
+Usage:
+  sigil correct <id> "complete replacement fact"
+
+The <id> may be a numeric id, full UID, or unambiguous UID prefix.
+Sigil inserts the replacement and marks the old fact superseded in one
+transaction. It does not use an LLM to guess whether facts contradict.`);
+    process.exit(args.includes('--help') ? 0 : 1);
+  }
+
+  const id = args[0];
+  const content = args.slice(1).join(' ').trim();
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon({ timeoutMs: MEMORY_RPC_TIMEOUT_MS });
+  try {
+    const { data } = await client.call('correctFact', { id, content });
+    if (data.notFound) {
+      console.error(`No fact matches: ${id}`);
+      process.exit(1);
+    }
+    if (data.unchanged) console.log(`Unchanged: ${data.previous.content}`);
+    else {
+      console.log(`Corrected: ${data.previous.content}`);
+      console.log(`Current:   ${data.replacement.content}`);
+    }
   } finally {
     await client.close();
   }
@@ -1282,27 +1056,20 @@ async function runRemember(args) {
 Usage:
   sigil remember "fact1" ["fact2" ...]   Save one or more facts
   echo "fact" | sigil remember           Read fact from stdin
-  sigil remember --bg "fact1" "fact2"    Save in background (returns immediately)
 
 Options:
-  --namespace=<ns>   Target namespace (default: from config / DEFAULT_NAMESPACE)
-  --bg               Save in background and return immediately
+  --namespace=<ns>   Target namespace (default: from config)
 
 Examples:
   sigil remember "I prefer tabs over spaces"
   sigil remember "Uses React" "Prefers TypeScript" "Deadline is April 20"
-  sigil remember --bg "user likes dark mode" "project uses Postgres"
   sigil remember --namespace=hermes-cli "agent decided to use Postgres LISTEN/NOTIFY"`);
     process.exit(0);
   }
 
-  const background = flags.includes('--bg') || flags.includes('--background');
-
-  // Target namespace. The daemon resolves `params.namespace || config.defaults.namespace`,
-  // so an absent flag falls back to the daemon's default. Passing it here is the ONLY way
-  // an external caller (e.g. the Hermes SigilProvider) can steer the write namespace — the
-  // persistent daemon already resolved its own DEFAULT_NAMESPACE at startup, so injecting
-  // DEFAULT_NAMESPACE into this subprocess's env has no effect on the daemon.
+  // Target namespace. The daemon resolves
+  // `params.namespace || config.defaults.namespace`; integrations must forward
+  // explicit per-write namespace intent in this payload.
   const namespace = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1] || undefined;
 
   // Collect facts: each positional arg is a separate fact
@@ -1321,47 +1088,14 @@ Examples:
     process.exit(1);
   }
 
-  if (background) {
-    // Spawn detached subprocess that itself routes through the daemon.
-    // The user gets an instant return; the actual ingest happens in the
-    // daemon process anyway (the detached child just sends the RPC and
-    // exits once the call resolves).
-    const { spawn } = await import('node:child_process');
-    // Forward all passthrough flags except the backgrounding flags themselves, then the
-    // RESOLVED facts (which may have come from stdin, not argv). Forwarding the whole flag
-    // set — not just facts — means --namespace (and any future flag) survives the detached
-    // re-exec; the old `['remember', ...facts]` silently dropped every flag. See
-    // buildRememberRespawnArgs (unit-tested) for the exact contract.
-    const { buildRememberRespawnArgs } = await import('./cli-handlers/remember-args.js');
-    const child = spawn(
-      process.execPath,
-      [process.argv[1], ...buildRememberRespawnArgs(flags, facts)],
-      { detached: true, stdio: 'ignore', env: { ...process.env } },
-    );
-    child.unref();
-    console.log(`Saving ${facts.length} fact${facts.length > 1 ? 's' : ''} in background...`);
-    return;
-  }
-
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
-  const client = await connectOrStartDaemon();
+  const client = await connectOrStartDaemon({ timeoutMs: MEMORY_RPC_TIMEOUT_MS });
   try {
     const { data } = await client.call('remember', { facts, namespace });
     const parts = [];
     if (data.added)        parts.push(`${data.added} new`);
-    if (data.updated)      parts.push(`${data.updated} updated`);
     if (data.alreadyKnown) parts.push(`${data.alreadyKnown} already known`);
     console.log(parts.length ? `Remembered. (${parts.join(', ')})` : 'Already known.');
-  } catch (err) {
-    // The --bg path re-execs this command detached with stdio:'ignore', so a
-    // failure here would otherwise vanish — the user (and Claude) saw an
-    // optimistic "Saving in background…" and never learns the save was lost.
-    // Record it to the shared hook-errors log so `sigil doctor` surfaces it.
-    try {
-      const { recordHookError } = await import('./hooks/error-log.js');
-      await recordHookError('remember', err, facts.join('\n'));
-    } catch { /* never let logging mask the original failure */ }
-    throw err;
   } finally {
     await client.close();
   }
@@ -1512,15 +1246,11 @@ Usage:
 
 Options:
   --namespace=<ns>    Target namespace (default: from config)
-  --wait              Wait for ingestion to finish and report results
-                      (default: queue in the background and return immediately)
-  --skip-facts        Skip fact extraction
-  --skip-entities     Skip entity linking
-
+  --extract-facts     Opt in to LLM fact extraction
 Examples:
   sigil ingest ./docs/README.md
   sigil ingest "docs/**/*.md"
-  sigil ingest https://example.com/page --wait
+  sigil ingest https://example.com/page --extract-facts
   sigil ingest file1.md file2.md --namespace=engineering`);
     process.exit(0);
   }
@@ -1529,22 +1259,15 @@ Examples:
   const { fetchSource } = await import('./ingestion/sources/url.js');
 
   const namespace = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1];
-  const skipFacts = flags.includes('--skip-facts');
-  const skipEntities = flags.includes('--skip-entities');
-  // Graph-building ingestion is LLM-heavy and can run well past the 30s RPC
-  // timeout. By default we fire-and-forget: the daemon queues + processes each
-  // source and returns instantly. `--wait` keeps the old synchronous reporting
-  // (with a generous timeout) for scripts that need the per-doc result.
-  const wait = flags.includes('--wait');
-
-  const results = { success: [], failed: [], skipped: [], queued: [] };
+  const extractFacts = flags.includes('--extract-facts');
+  const results = { success: [], failed: [], skipped: [] };
   const startTime = Date.now();
 
   // File/URL/glob resolution stays in CLI — these are local filesystem
   // operations and don't need to run in the daemon. The daemon does the
   // heavy lifting (chunking, embedding, fact extraction) per source.
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
-  const client = await connectOrStartDaemon(wait ? { timeoutMs: 300_000 } : undefined);
+  const client = await connectOrStartDaemon({ timeoutMs: 300_000 });
   try {
     for (const input of inputs) {
       try {
@@ -1571,20 +1294,15 @@ Examples:
             sourceType: source.sourceType,
             namespace,
             metadata: source.metadata,
-            skipFacts,
-            skipEntities,
-            background: !wait,
+            extractFacts,
           });
-          if (data.queued) {
-            results.queued.push(source.title);
-            console.log('  Queued');
-          } else if (data.skipped) {
+          if (data.skipped) {
             results.skipped.push(source.title);
             console.log('  Skipped (unchanged)');
           } else {
             results.success.push(source.title);
             const f = data.facts;
-            console.log(`  Done — ${data.chunkCount} chunks${f ? `, ${f.total} facts (${f.added} new, ${f.updated ?? 0} updated)` : ''}`);
+            console.log(`  Done — ${data.chunkCount} chunks${f ? `, ${f.total} facts (${f.added} new, ${f.skipped} known)` : ''}`);
           }
         }
       } catch (err) {
@@ -1594,20 +1312,13 @@ Examples:
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    if (results.queued.length) {
-      console.log(`\nQueued ${results.queued.length} document${results.queued.length === 1 ? '' : 's'} for background ingestion (${results.failed.length} failed). Run \`sigil status\` to watch the graph grow.`);
-    } else {
-      console.log(`\nDone in ${elapsed}s — ${results.success.length} ingested, ${results.skipped.length} skipped, ${results.failed.length} failed`);
-    }
+    console.log(`\nDone in ${elapsed}s — ${results.success.length} ingested, ${results.skipped.length} skipped, ${results.failed.length} failed`);
 
-    if (results.success.length > 0) {
-      await client.call('refreshContext', {}).catch(() => {});
-    }
   } finally {
     await client.close();
   }
 
-  if (results.failed.length && !results.success.length && !results.queued.length) process.exit(1);
+  if (results.failed.length && !results.success.length) process.exit(1);
 }
 
 // ─── Search ──────────────────────────────────────────────────────────────────
@@ -1625,43 +1336,26 @@ Usage:
 Options:
   --namespace=<ns>    Filter by namespace (comma-separated for multiple)
   --limit=<n>         Max results (default: 10)
-  --graph             Enable graph enhancement
-  --route             Enable LLM query routing
-  --synthesize        Enable LLM answer synthesis
   --chunks            Include raw chunk matches
-  --no-graph          Disable graph enhancement
-  --scope             Scope to the active project/session pods (default: search everything)
 
 Examples:
   sigil search "authentication flow"
   sigil search "deploy process" --namespace=engineering
-  sigil search "API design" --limit=5
-  sigil search "that decision" --scope          # only this project's memory`);
+  sigil search "API design" --limit=5`);
     process.exit(0);
   }
 
   const nsFlag = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1];
   const namespaces = nsFlag ? nsFlag.split(',') : undefined;
   const limit = Number(flags.find((f) => f.startsWith('--limit='))?.split('=')[1] || 10);
-  const useGraph = flags.includes('--graph') && !flags.includes('--no-graph');
-  const route = flags.includes('--route');
-  const synthesize = flags.includes('--synthesize');
-  const includeChunks = flags.includes('--chunks') || synthesize;
+  const includeChunks = flags.includes('--chunks');
 
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
-  const client = await connectOrStartDaemon();
+  const client = await connectOrStartDaemon({ timeoutMs: MEMORY_RPC_TIMEOUT_MS });
   try {
-    // Explicit human search defaults to the WHOLE brain; --scope narrows to
-    // the active project/session pods (cwd lets 'auto' resolve them). This is
-    // distinct from the hook's auto-injection, which is always project-scoped
-    // + floored. No floor here — a human searching sees every match.
-    const podScope = flags.includes('--scope') ? 'auto' : 'global';
     const { data } = await client.call('search', {
-      query, namespaces, limit, useGraph, route, synthesize, includeChunks,
-      podScope, cwd: process.cwd(),
+      query, namespaces, limit, includeChunks,
     });
-
-    if (data.synthesized) console.log(data.synthesized);
 
     if (data.facts.length) {
       console.log(`\nFacts (${data.facts.length}):`);
@@ -1708,80 +1402,18 @@ function formatRelevance(row) {
   return '';
 }
 
-// ─── Context ─────────────────────────────────────────────────────────────────
-
-async function runContext(args) {
-  if (args.includes('--help')) {
-    console.log(`sigil context — Refresh the hot-context snapshot in ~/.claude/CLAUDE.md
-
-Usage:
-  sigil context [--namespace=<ns>] [--limit=<n>] [--explain]
-
-Rebuilds the Active Context block injected into every new Claude session.
-This runs automatically after sigil remember and sigil ingest.
-
-Options:
-  --namespace=<ns>   Namespace to pull facts from (default: from config)
-  --limit=<n>        Max facts to include (default: 20)
-  --explain          Don't write the snapshot — print which kind each
-                     fact came from instead`);
-    process.exit(0);
-  }
-
-  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1];
-  const limitArg = args.find((a) => a.startsWith('--limit='))?.split('=')[1];
-  const limit = limitArg ? Number(limitArg) : 20;
-  const explain = args.includes('--explain');
-
-  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
-  const client = await connectOrStartDaemon();
-  try {
-    const { data } = await client.call('refreshContext', {
-      namespace,
-      limit,
-      explain,
-      cwd: process.cwd(),
-    });
-
-    if (data.mode === 'explain') {
-      console.log(`Hot-context blend for namespace=${data.namespace}:\n`);
-      for (const section of data.sections) {
-        console.log(`  ${section.name} (budget=${section.budget}, ${section.visibility})`);
-        if (section.error) console.log(`    (failed: ${section.error})`);
-        if (!section.facts.length) {
-          console.log('    (no facts)');
-        } else {
-          for (const f of section.facts) {
-            console.log(`    - ${(f.content || '').slice(0, 120)}`);
-          }
-        }
-        console.log('');
-      }
-      return;
-    }
-
-    if (data.count) {
-      console.log(`Context refreshed — ${data.count} facts written to ~/.sigil/CLAUDE.md`);
-    } else {
-      console.log('No facts found. Ingest some content first.');
-    }
-  } finally {
-    await client.close();
-  }
-}
-
 // ─── Preamble ────────────────────────────────────────────────────────────────
 
 async function runPreamble(args) {
   if (args.includes('--help')) {
-    console.log(`sigil preamble — Session-start sanity + fresh-facts pass
+  console.log(`sigil preamble — Session-start health check
 
 Usage:
   sigil preamble [options]
 
-Runs the same engine as the \`prime\` MCP tool: checks daemon/DB/setup health,
-then pulls fresh project-scoped facts. Prints a status block an agent (or a
-shell preamble) can branch on. Self-heals — auto-starts the daemon if down.
+Runs the same engine as the \`prime\` MCP tool: checks daemon/DB/setup health
+and tells the agent to use targeted search for memory. It does not inject a
+generic top-N snapshot. Self-heals by auto-starting the daemon if down.
 
 Options:
   --format=md      Markdown block: status + memory + how-to (default)
@@ -1789,20 +1421,15 @@ Options:
   --format=json    Raw structured result
   --transport=mcp  How-to footer for hook-less clients (Codex/Cursor)
   --transport=hooks  How-to footer for Claude Code (default for CLI: cli)
-  --limit=<n>      Max fresh facts to load (default 12)
-
 Exit code is always 0 — a degraded result is reported in-band, never thrown.`);
     process.exit(0);
   }
 
   const format = args.find((a) => a.startsWith('--format='))?.split('=')[1] || 'md';
   const transport = args.find((a) => a.startsWith('--transport='))?.split('=')[1] || 'cli';
-  const limitArg = args.find((a) => a.startsWith('--limit='))?.split('=')[1];
-  const limit = limitArg ? Number(limitArg) : 12;
-
   const { buildPreamble } = await import('./preamble/run.js');
   const { renderPreamble } = await import('./preamble/render.js');
-  const result = await buildPreamble({ cwd: process.cwd(), limit });
+  const result = await buildPreamble();
   console.log(renderPreamble(result, { format, transport }));
 }
 
@@ -1820,43 +1447,18 @@ Usage:
   const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1];
 
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
-  const client = await connectOrStartDaemon();
+  const client = await connectOrStartDaemon({ timeoutMs: MEMORY_RPC_TIMEOUT_MS });
   try {
     const { data } = await client.call('status', { namespace: namespace || null });
-    const podSummary = Object.entries(data.podsByType || {})
-      .map(([t, n]) => `${n} ${t}`)
-      .join(', ') || '—';
-
     console.log(`Sigil Knowledge Base${data.namespace ? ` (${data.namespace})` : ''}`);
     console.log(`  Documents:  ${data.documents}`);
     console.log(`  Chunks:     ${data.chunks}`);
     console.log(`  Facts:      ${data.facts} active`);
-    console.log(`  Entities:   ${data.entities.documents} documents, ${data.entities.people} people, ${data.entities.topics} topics`);
-    console.log(`  Relations:  ${data.relations}`);
-    console.log(`  Pods:       ${podSummary}`);
     // Live agent-process gauges. The Claude-procs line is the hard cap that
     // prevents the 1600-session blowup — show it whenever the daemon reports it.
     if (data.claudeProcs) {
       const { active, waiting, limit } = data.claudeProcs;
       console.log(`  Claude procs: ${active}/${limit} active${waiting ? `, ${waiting} queued` : ''}`);
-    }
-    if (data.managedSession?.enabled) {
-      const ms = data.managedSession;
-      const byState = (ms.workers || []).reduce((a, w) => { a[w.state] = (a[w.state] || 0) + 1; return a; }, {});
-      const stateSummary = Object.entries(byState).map(([s, n]) => `${n} ${s}`).join(', ') || 'none';
-      const queued = Object.values(ms.queued || {}).reduce((a, n) => a + n, 0);
-      console.log(`  Managed session: ${(ms.workers || []).length} workers (${stateSummary}), ${queued} queued, ${ms.pending} pending`);
-    }
-    if (data.hebbian) {
-      const avg = data.hebbian.avgStrength ? data.hebbian.avgStrength.toFixed(2) : '0';
-      const max = data.hebbian.maxStrength ? data.hebbian.maxStrength.toFixed(2) : '0';
-      console.log(`  Co-retrieval edges: ${data.hebbian.edgeCount} (avg ${avg}, max ${max})`);
-      if (data.hebbian.topPairs.length) {
-        console.log('  Top pairs by decayed strength:');
-        for (const p of data.hebbian.topPairs) {
-          console.log(`    ${p.a} ↔ ${p.b}  (decayed ${Number(p.decayed).toFixed(2)})`);
-        }
-      }
     }
   } finally {
     await client.close();
@@ -1903,7 +1505,7 @@ deleted, so nothing is lost irrecoverably.
   const sequencesMode = args.includes('--sequences');
 
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
-  const client = await connectOrStartDaemon();
+  const client = await connectOrStartDaemon({ timeoutMs: MAINTENANCE_RPC_TIMEOUT_MS });
   try {
     if (sequencesMode) {
       const { data } = await client.call('repair.sequences', {});
@@ -1915,13 +1517,11 @@ deleted, so nothing is lost irrecoverably.
       console.log(`Repair (dry run)${namespace ? ` [ns=${namespace}]` : ''} — target model: ${data.model}`);
       console.log(`  Facts needing repair:  ${data.facts.scanned}`);
       console.log(`  Chunks needing repair: ${data.chunks.scanned}`);
-      if (data.spool?.pending) console.log(`  Stop-hook spool:       ${data.spool.pending} turns pending replay`);
       console.log('\nRun without --dry-run to re-embed them.');
     } else {
       console.log(`Repair complete${namespace ? ` [ns=${namespace}]` : ''} — model: ${data.model}`);
       console.log(`  Facts re-embedded:  ${data.facts.repaired} / ${data.facts.scanned}`);
       console.log(`  Chunks re-embedded: ${data.chunks.repaired} / ${data.chunks.scanned}`);
-      if (data.spool) console.log(`  Stop-spool replayed: ${data.spool.drained} turns (${data.spool.replayed} facts, ${data.spool.remaining} still pending)`);
     }
   } finally {
     await client.close();
@@ -1933,7 +1533,7 @@ async function runRepairDb(args) {
   const which = restoreArg?.includes('=') ? restoreArg.split('=')[1] : 'latest';
 
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
-  const client = await connectOrStartDaemon();
+  const client = await connectOrStartDaemon({ timeoutMs: MAINTENANCE_RPC_TIMEOUT_MS });
   try {
     if (restoreArg) {
       const { data } = await client.call('repair.db', { action: 'restore', which });
@@ -1962,47 +1562,6 @@ async function runRepairDb(args) {
   }
 }
 
-// ─── Maintain ────────────────────────────────────────────────────────────────
-
-async function runMaintain(args) {
-  if (args.includes('--help')) {
-    console.log(`sigil maintain — Run periodic memory maintenance
-
-Usage:
-  sigil maintain
-
-Promotes 'fresh' facts (older than 1h with importance=vital or any access) to 'stable',
-closes 'editing' windows older than 30 minutes back to 'stable', and consolidates
-co-retrieval edges. Safe to run as a cron — fully idempotent.`);
-    process.exit(0);
-  }
-
-  const cortexDb = (await import('./db/cortex.js')).default;
-  const { promoteFreshFacts, closeEditingWindows, getLifecycleStats } = await import('./memory/lifecycle/stage-manager.js');
-  const { consolidateCoRetrievalEdges } = await import('./memory/lifecycle/hebbian.js').catch(() => ({}));
-  const { consolidateEntityCoRetrievalEdges } = await import('./memory/lifecycle/entity-hebbian.js').catch(() => ({}));
-
-  const { pruneLogs } = await import('./lib/llm/log.js');
-
-  const before = await getLifecycleStats();
-  const promoted = await promoteFreshFacts();
-  const closed = await closeEditingWindows();
-  const factEdgesConsolidated = consolidateCoRetrievalEdges ? await consolidateCoRetrievalEdges() : 0;
-  const entityEdgesConsolidated = consolidateEntityCoRetrievalEdges ? await consolidateEntityCoRetrievalEdges() : 0;
-  const pruned = await pruneLogs();
-  const after = await getLifecycleStats();
-
-  console.log('Memory maintenance:');
-  console.log(`  Stages — fresh: ${before.fresh}→${after.fresh}, stable: ${before.stable}→${after.stable}, editing: ${before.editing}→${after.editing}`);
-  console.log(`  Promoted (fresh→stable): ${promoted}`);
-  console.log(`  Closed editing windows (editing→stable): ${closed}`);
-  if (factEdgesConsolidated) console.log(`  Fact co-retrieval edges consolidated: ${factEdgesConsolidated}`);
-  if (entityEdgesConsolidated) console.log(`  Entity co-retrieval edges consolidated: ${entityEdgesConsolidated}`);
-  console.log(`  Pruned logs — llm_log: ${pruned.llmDeleted}, trace_event: ${pruned.traceDeleted}`);
-
-  await cortexDb.destroy();
-}
-
 // ─── Migrate ─────────────────────────────────────────────────────────────────
 
 async function runMigrate(args) {
@@ -2014,24 +1573,36 @@ Usage:
     process.exit(0);
   }
 
-  const cortexDb = (await import('./db/cortex.js')).default;
-  const { MIGRATIONS_DIR: migrationDir } = await import('./lib/paths.js');
-
-  if (args.includes('--rollback')) {
-    const [batch, migrations] = await cortexDb.migrate.rollback({ directory: migrationDir });
-    console.log(`Rolled back batch ${batch}: ${migrations.length} migrations`);
-    for (const m of migrations) console.log(`  ${m}`);
-  } else {
-    const [batch, migrations] = await cortexDb.migrate.latest({ directory: migrationDir });
-    if (migrations.length) {
-      console.log(`Ran batch ${batch}: ${migrations.length} migrations`);
-      for (const m of migrations) console.log(`  ${m}`);
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon({ timeoutMs: MAINTENANCE_RPC_TIMEOUT_MS });
+  try {
+    if (args.includes('--rollback')) {
+      const { data } = await client.call('rollbackMigrations', {});
+      console.log(`Rolled back batch ${data.batchNo}: ${data.ran.length} migrations`);
+      for (const migration of data.ran) console.log(`  ${migration}`);
+      if (data.snapshot) console.log(`Pre-rollback snapshot: ${data.snapshot}`);
     } else {
-      console.log('Already up to date.');
+      const { data } = await client.call('migrateSafe', {});
+      if (data.status === 'migrated') {
+        if (data.ran?.length) {
+          console.log(`Ran ${data.ran.length} migrations`);
+          for (const migration of data.ran) console.log(`  ${migration}`);
+        } else {
+          console.log('Already up to date.');
+        }
+      } else if (data.status === 'skipped') {
+        const remedy = data.reason === 'not-configured'
+          ? 'Run `sigil init` first.'
+          : 'Use a direct (non-pooler) database URL for migrations.';
+        throw new Error(`Migration skipped: ${data.reason}. ${remedy}`);
+      } else {
+        const snapshot = data.snapshot ? ` Snapshot: ${data.snapshot}.` : '';
+        throw new Error(`Migration failed and was ${data.status}.${snapshot} ${data.error || ''}`.trim());
+      }
     }
+  } finally {
+    await client.close();
   }
-
-  await cortexDb.destroy();
 }
 
 // ─── Reset ───────────────────────────────────────────────────────────────────
@@ -2081,28 +1652,39 @@ Re-run 'sigil' afterwards to set up fresh.`);
     }
   }
 
-  // 1. Drop the database while config still points at it (FORCE handles the
-  //    live daemon's connections). Skip with --keep-db.
-  if (!keepDb) {
-    try {
-      const { dropConfiguredDatabase } = await import('./setup/reset.js');
-      const r = await dropConfiguredDatabase();
-      console.log(`  database: ${r.detail}`);
-    } catch (err) { console.log(`  database: drop failed (${err.message}) — continuing`); }
-  } else {
-    console.log('  database: kept (--keep-db)');
-  }
-
-  // 2. Remove Sigil from every coding agent.
+  // 1. Remove Sigil from every coding agent while its config still exists.
   try {
     const { disconnectAllClients } = await import('./setup/reset.js');
     const removed = await disconnectAllClients();
     console.log(`  agents: ${removed.length ? `disconnected ${removed.join(', ')}` : 'none connected'}`);
   } catch (err) { console.log(`  agents: ${err.message}`); }
 
-  // 3. Stop the daemon (best effort) and wipe ~/.sigil.
-  try { _execSync('pkill -f "dist/daemon.js"', { stdio: 'pipe' }); } catch { /* none running */ }
-  try { _execSync('pkill -f "sigil/dist/server.js --mcp"', { stdio: 'pipe' }); } catch {}
+  // 2. Remove the always-up service and stop the exact daemon PID gracefully.
+  // Never use a broad `pkill -f`: it can kill unrelated checkouts/processes and
+  // races PGlite shutdown while ~/.sigil is being removed.
+  try {
+    const { stopRuntimeForReset } = await import('./setup/reset.js');
+    const stopped = await stopRuntimeForReset();
+    if (!stopped.daemonStopped) {
+      throw new Error(`daemon pid ${stopped.pid} is still alive`);
+    }
+    console.log(`  runtime: daemon stopped${stopped.serviceRemoved ? ', service removed' : ''}${stopped.forced ? ' (forced after timeout)' : ''}`);
+  } catch (err) {
+    throw new Error(`Reset stopped before deleting data because the runtime could not be shut down safely: ${err.message}`);
+  }
+
+  // 3. Drop the configured database only after its owning process is gone.
+  if (!keepDb) {
+    try {
+      const { dropConfiguredDatabase } = await import('./setup/reset.js');
+      const result = await dropConfiguredDatabase();
+      console.log(`  database: ${result.detail}`);
+    } catch (err) { console.log(`  database: drop failed (${err.message}) — continuing`); }
+  } else {
+    console.log('  database: kept (--keep-db)');
+  }
+
+  // 4. Remove local config/state and the generated Claude import.
   const fs = await import('node:fs/promises');
   if (existsSync(sigilDir)) await fs.rm(sigilDir, { recursive: true, force: true });
   await removeClaudeMdImport();
@@ -2150,18 +1732,14 @@ async function runWhy(args) {
     console.log(`sigil why — Explain a search result
 
 Usage:
-  sigil why "<query>" [--namespace=<ns>] [--limit=5] [--pod-scope=auto|global|<name>,<name>]
+  sigil why "<query>" [--namespace=<ns>] [--limit=5]
 
-Runs the same hybrid search the UserPromptSubmit hook uses and prints
-the per-fact breakdown — vector score, keyword score, importance,
-recency, kind / pod source — so you can see WHY each fact made the
-top-K for a given query.`);
+Runs the same deterministic hybrid search as normal recall and prints the
+evidence used to rank each fact: cosine similarity and vector/keyword RRF.`);
     process.exit(0);
   }
 
   const config = (await import('./config.js')).default;
-  const cortexDb = (await import('./db/cortex.js')).default;
-
   const flagIdx = args.findIndex((a) => a.startsWith('--'));
   const queryParts = flagIdx === -1 ? args : args.slice(0, flagIdx);
   const query = queryParts.join(' ').replace(/^["']|["']$/g, '');
@@ -2172,120 +1750,35 @@ top-K for a given query.`);
   const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1] || config.defaults.namespace;
   const limitArg = args.find((a) => a.startsWith('--limit='))?.split('=')[1];
   const limit = limitArg ? Number(limitArg) : 5;
-  const podScopeArg = args.find((a) => a.startsWith('--pod-scope='))?.split('=')[1];
-  let podScope = null;
-  if (podScopeArg) {
-    if (podScopeArg === 'auto' || podScopeArg === 'global') podScope = podScopeArg;
-    else podScope = podScopeArg.split(',').map((s) => s.trim()).filter(Boolean);
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon({ timeoutMs: MEMORY_RPC_TIMEOUT_MS });
+  let result;
+  try {
+    const { data } = await client.call('search', {
+      query,
+      namespaces: [namespace],
+      limit,
+      applyFloor: false,
+    });
+    result = data;
+  } finally {
+    await client.close();
   }
-
-  const { search } = await import('./memory/search/hybrid.js');
-  const result = await search(query, {
-    namespaces: [namespace],
-    limit,
-    route: true,
-    expand: true,
-    synthesize: false,
-    podScope: podScope ?? 'auto',
-  });
 
   console.log(`Query: ${query}`);
   console.log(`Namespace: ${namespace}`);
-  console.log(`Pod scope: ${JSON.stringify(podScope ?? 'auto')}`);
   console.log('');
-
-  if (result.matchedEntity) {
-    console.log(`Matched entity: ${result.matchedEntity.name} (${result.matchedEntity.type}, id:${result.matchedEntity.id})`);
-    console.log('');
-  }
 
   if (!result.facts.length) {
     console.log('No facts returned.');
-    await cortexDb.destroy();
     return;
   }
 
-  const podMembership = await import('./memory/pods/membership.js');
   console.log(`Facts (${result.facts.length}):`);
   for (const [i, f] of result.facts.entries()) {
-    const pods = await podMembership.listPodsForMember('fact', f.id).catch(() => []);
-    const podStr = pods.length
-      ? pods.map((p) => `${p.podType}:${p.name}`).join(', ')
-      : '—';
-    const importance = f.importance || `score=${f.importanceScore ?? '?'}`;
-    const boost = f.coRetrievalBoost != null ? ` hebbian=${f.coRetrievalBoost}` : '';
-    console.log(`  ${i + 1}. [rrf=${f.rrfScore ?? '?'}${boost}] [${f.category}] [${importance}] [conf=${f.confidence}]`);
-    console.log(`     pods: ${podStr}`);
+    console.log(`  ${i + 1}. [rrf=${f.rrfScore ?? '?'}] [cosine=${Number(f.similarity).toFixed(4)}] [${f.category}] [conf=${f.confidence}]`);
     console.log(`     content: ${(f.content || '').slice(0, 140)}`);
   }
-
-  await cortexDb.destroy();
-}
-
-// ─── Kind ────────────────────────────────────────────────────────────────────
-
-async function runKind(args) {
-  const sub = args[0];
-  if (!sub || sub === '--help') {
-    console.log(`sigil kind — Inspect registered pod kinds
-
-Usage:
-  sigil kind list
-  sigil kind show <name>
-
-list     Show every registered pod kind with budget / visibility / TTL.
-show     Show one kind's full contract, schema doc path, and active scope
-         for the current shell context.`);
-    process.exit(0);
-  }
-
-  await import('./memory/pods/kinds/index.js');
-  const { list, get, activeKinds, getSchemaDoc } = await import('./memory/pods/registry.js');
-
-  if (sub === 'list') {
-    const kinds = list();
-    console.log(`Registered kinds (${kinds.length}):`);
-    for (const k of kinds) {
-      const ttl = k.ttlDays ? `${k.ttlDays}d TTL` : 'no decay';
-      console.log(`  ${k.name.padEnd(18)} budget=${k.hotContextBudget}  ${k.visibility.padEnd(8)}  ${ttl}`);
-      console.log(`    ${k.description}`);
-    }
-    const ns = (await import('./config.js')).default.defaults.namespace;
-    const active = await activeKinds({ namespace: ns, cwd: process.cwd() });
-    console.log('');
-    console.log(`Active for cwd=${process.cwd()}: ${active.length ? active.map((a) => a.kind.name).join(', ') : '(none)'}`);
-    return;
-  }
-
-  if (sub === 'show') {
-    const name = args[1];
-    if (!name) {
-      console.error('Provide a kind name: sigil kind show <name>');
-      process.exit(1);
-    }
-    const k = get(name);
-    if (!k) {
-      console.error(`Unknown kind: ${name}`);
-      process.exit(1);
-    }
-    console.log(`Kind: ${k.name}`);
-    console.log(`  description:       ${k.description}`);
-    console.log(`  identityField:     ${k.identityField ?? '—'}`);
-    console.log(`  visibility:        ${k.visibility}`);
-    console.log(`  activeMode:        ${k.activeMode}`);
-    console.log(`  hotContextBudget:  ${k.hotContextBudget}`);
-    console.log(`  retrievalWeights:  ${JSON.stringify(k.retrievalWeights)}`);
-    console.log(`  importanceDefault: ${k.importanceDefault}`);
-    console.log(`  ttlDays:           ${k.ttlDays ?? 'no decay'}`);
-    console.log(`  writePolicy:       ${k.writePolicy}`);
-    console.log(`  schemaDocPath:     ${k.schemaDocPath ?? '—'}`);
-    const doc = await getSchemaDoc(k);
-    console.log(`  schemaDoc chars:   ${doc ? doc.length : 0}`);
-    return;
-  }
-
-  console.error(`Unknown subcommand: ${sub}`);
-  process.exit(1);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

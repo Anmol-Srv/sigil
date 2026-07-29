@@ -1,27 +1,17 @@
 /**
  * Multi-signal client detection.
  *
- * Config-dir existence alone misses an editor that's installed but hasn't run
- * yet (no ~/.cursor until first launch). So we OR three filesystem signals —
- * none of which rely on $PATH, since the daemon runs under a stripped PATH:
- *
- *   1. config dir present   → the tool has run at least once
- *   2. app bundle present   → installed GUI app (macOS), even if never launched
- *   3. CLI binary present   → installed CLI, probed in the usual install dirs
- *
- * Filesystem-only and fast (a few existsSync calls), safe to run on every
- * listConnectors().
+ * A config directory is not evidence that a client is installed: Sigil itself
+ * creates some of those directories when it connects an agent, and they can
+ * outlive the app. Only a real app bundle or executable may opt a client into
+ * installer defaults. Callers may still explicitly select any supported
+ * client.
  */
 import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 
 const HOME = homedir();
-
-/** Any of these absolute paths exist? */
-export function anyPathExists(paths = []) {
-  return paths.some((p) => p && existsSync(p));
-}
 
 /** macOS: is any of these app bundles installed (system or user Applications)? */
 export function appInstalled(appNames = []) {
@@ -44,7 +34,10 @@ export function binInstalled(binNames = []) {
   return binNames.some((b) => dirs.some((d) => exts.some((e) => existsSync(join(d, b + e)))));
 }
 
-/** OR across config dirs, app bundles, and CLI binaries. */
-export function detectInstalled({ dirs = [], apps = [], bins = [] } = {}) {
-  return anyPathExists(dirs) || appInstalled(apps) || binInstalled(bins);
+/** OR across real app bundles and CLI binaries; `dirs` is deliberately ignored. */
+export function detectInstalled({ apps = [], bins = [] } = {}, {
+  checkApp = appInstalled,
+  checkBin = binInstalled,
+} = {}) {
+  return checkApp(apps) || checkBin(bins);
 }

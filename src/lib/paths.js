@@ -1,7 +1,7 @@
 /**
  * Resolve filesystem paths that are stable across both source and bundled distribution.
  *
- * In dev:    src/memory/cognitive/query-router.js → 3 levels up to package root
+ * In dev:    src/lib/paths.js → 2 levels up to package root
  * In dist:   dist/cli.js (everything bundled into one file) → 1 level up to package root
  *
  * Walking up from import.meta.url until we hit a package.json gives us the package
@@ -37,7 +37,7 @@ const PKG_ROOT = findPackageRoot();
  * `sigil init`/`connect` do) produces a setup that:
  *   1. silently dies the moment the cache is reaped (the shim fails safe), and
  *   2. cold-boots a heavy bundled node process from that path on every hook fire
- *      (PostToolUse on every Edit/Write/Bash, ×N sessions) — a runaway pileup.
+ *      (for example, a faulty integration spawning one writer per turn).
  * So the persistence-writing entrypoints refuse it and ask the user to install
  * Sigil globally first.
  *
@@ -90,14 +90,13 @@ export const SIGIL_HOOK_ERRORS_LOG = join(SIGIL_HOME, '.hook-errors.log');
 export const SIGIL_UPDATE_FLAG = join(SIGIL_HOME, '.update-available');
 export const SIGIL_LAST_CLEAN_DOCTOR = join(SIGIL_HOME, '.last-clean-doctor');
 export const SIGIL_ACTIVE_SESSION_CURSOR = join(SIGIL_HOME, '.active-session.json');
-export const SIGIL_STOP_CURSOR = join(SIGIL_HOME, '.stop-cursor.json');
-export const SIGIL_STOP_SPOOL = join(SIGIL_HOME, '.stop-spool.jsonl');
 export const SIGIL_HOOK_DEDUP = join(SIGIL_HOME, '.hook-dedup.json');
 
 // Daemon
 export const SIGIL_DAEMON_SOCK = join(SIGIL_HOME, 'sock');
 export const SIGIL_DAEMON_PID  = join(SIGIL_HOME, 'sigild.pid');
 export const SIGIL_DAEMON_LOG  = join(SIGIL_HOME, 'sigild.log');
+export const SIGIL_DAEMON_LOCK = join(SIGIL_HOME, '.daemon.lock');
 export const SIGIL_HEARTBEAT   = join(SIGIL_HOME, 'heartbeat.json');
 // F5 (respawn-storm guard): serializes daemon spawns across concurrent CLI/hook
 // processes; records a short cooldown when the daemon is found alive-but-wedged
@@ -111,10 +110,6 @@ export const GUI_WEB_DIR_BUILT   = join(PKG_ROOT, 'dist', 'gui');     // future:
 export const GUI_WEB_DIR_DEV     = join(PKG_ROOT, 'src', 'gui', 'web'); // today: vanilla source
 // Back-compat alias
 export const GUI_WEB_DIR         = GUI_WEB_DIR_BUILT;
-
-// Iroh — persistent node storage (identity + blob store)
-export const SIGIL_IROH_DIR      = join(SIGIL_HOME, 'iroh');
-export const SIGIL_IDENTITY_KEY  = join(SIGIL_HOME, 'identity.key'); // Ed25519 secret (32 bytes, hex-encoded)
 
 export const CLAUDE_HOME = join(HOME, '.claude');
 export const CLAUDE_SETTINGS_PATH = join(CLAUDE_HOME, 'settings.json');

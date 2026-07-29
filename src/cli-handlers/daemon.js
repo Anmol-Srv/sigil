@@ -37,9 +37,9 @@ Usage:
   sigil daemon open                 Open the GUI in your browser
   sigil daemon url                  Print the GUI URL (with auth token)
 
-The daemon holds the Postgres pool, Iroh endpoint, and caches shared by
-every CLI verb, MCP client, and hook on this machine. It auto-starts on
-first use; you only need these commands for explicit lifecycle control.
+The daemon is the single owner of local storage shared by every CLI verb,
+MCP client, and hook on this machine. The browser server starts only when
+you run \`sigil\`, \`sigil daemon open\`, or \`sigil daemon url\`.
 
 Files:
   ${SIGIL_DAEMON_SOCK}    Unix socket
@@ -57,7 +57,7 @@ export async function runDaemon(args) {
     case 'start':    return cmdStart(rest);
     case 'stop':     return cmdStop(rest);
     case 'status':   return cmdStatus(rest);
-    case 'restart':  await cmdStop(rest); await delay(200); return cmdStart(rest);
+    case 'restart':  return cmdRestart(rest);
     case 'logs':     return cmdLogs(rest);
     case 'open':     return cmdOpen({ launch: true });
     case 'url':      return cmdOpen({ launch: false });
@@ -71,13 +71,12 @@ export async function runDaemon(args) {
 async function cmdOpen({ launch }) {
   // Ensure daemon is running (auto-spawn).
   const c = await connectOrStartDaemon({ quiet: true });
-  await c.call('ping', {});
+  const response = await c.call('gui.start', {});
   await c.close();
-
-  const { default: config } = await import('../config.js');
-  const { getGuiToken } = await import('../daemon/gui-token.js');
-  const token = await getGuiToken();
-  const url = `http://${config.http.host}:${config.http.port}/?t=${token}`;
+  if (!response.ok || !response.data?.url) {
+    throw new Error(response.error?.message || 'failed to start the local Sigil UI');
+  }
+  const url = response.data.url;
   console.log(url);
 
   if (!launch) return;
@@ -114,6 +113,46 @@ async function cmdStart(args) {
       await c.close();
       console.log(`sigild started (pid ${data.pid}, version ${data.version})`);
     });
+}
+
+/**
+ * Restart semantics must respect the process owner. When automatic start is
+ * enabled, launchd/systemd owns the daemon; sending SIGTERM from this CLI and
+ * immediately calling `start` only observes the still-managed process and
+ * leaves the old executable running. Delegate that case to the supervisor.
+ */
+export async function restartDaemonLifecycle({
+  isServiceInstalled,
+  restartService,
+  stop,
+  start,
+  sleep = delay,
+} = {}) {
+  if (await isServiceInstalled()) {
+    const result = await restartService();
+    if (!result?.ok) {
+      throw new Error(`could not restart the ${result?.manager || 'managed'} Sigil service`);
+    }
+    return { managed: true, manager: result.manager };
+  }
+
+  await stop();
+  await sleep(200);
+  await start();
+  return { managed: false };
+}
+
+async function cmdRestart(args) {
+  const supervisor = await import('../supervisor/index.js');
+  const result = await restartDaemonLifecycle({
+    isServiceInstalled: supervisor.isServiceInstalled,
+    restartService: supervisor.restartService,
+    stop: () => cmdStop(args),
+    start: () => cmdStart(args),
+  });
+  if (result.managed) {
+    console.log(`sigild restarted through ${result.manager} (automatic start remains enabled)`);
+  }
 }
 
 async function cmdStop() {

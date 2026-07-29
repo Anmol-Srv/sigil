@@ -61,12 +61,8 @@ const CLI_MODEL_MAP = {
   'claude-opus-4-6': 'opus',
 };
 
-// Process-wide hard cap on CONCURRENT `claude` spawns. EVERY spawn path funnels
-// through this one gate — the one-shot provider below, the managed-session
-// fallback (session/index.js → chat()), and the stop-hook classifier — so a
-// burst of calls QUEUES instead of forking 1600 processes. Limit is read live
-// from config, so SIGIL_MAX_CLAUDE_PROCS (and tests) take effect without a
-// restart. See concurrency-gate.js for the why.
+// Process-wide hard cap on CONCURRENT explicit `claude` generations. A burst
+// queues instead of forking unbounded processes.
 const claudeGate = createSemaphore(() => config.llm.maxClaudeProcs);
 
 /** Live gauge of the claude-spawn gate (for `sigil status` / diagnostics). */
@@ -152,7 +148,7 @@ async function chat(input, { model, jsonMode = false } = {}) {
   // NOTE: we deliberately do NOT pass `--json-schema`. With a permissive schema
   // the CLI coerces nested arrays/objects into JSON *strings* (e.g.
   // {"facts":"[...]"}), which breaks every promptJson consumer (fact
-  // extraction, classifier routing, AUDM). Instead the prompt asks for JSON and
+  // optional fact extraction. Instead the prompt asks for JSON and
   // the caller's parseJson() extracts it from the result text (claude returns a
   // ```json fenced block, which parseJson handles).
   const args = ['-p', '--model', cliModel, '--output-format', 'json'];
@@ -193,18 +189,4 @@ async function chat(input, { model, jsonMode = false } = {}) {
   };
 }
 
-// ─── Init metadata + setup ──────────────────────────────────────────────────
-// `meta` drives the LLM-provider picker in `sigil init`; `setup` collects
-// the env keys this provider needs. Claude CLI piggybacks on the user's
-// existing `claude` binary + subscription — no key, no extra config.
-const meta = {
-  id: 'claude-cli',
-  label: 'Claude Code',
-  hint: 'uses your existing subscription — no extra API key',
-};
-
-async function setup() {
-  return { env: {} };
-}
-
-export { chat, meta, setup };
+export { chat };

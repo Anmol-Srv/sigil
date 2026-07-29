@@ -44,6 +44,14 @@ export function connectorCard(c, onAction) {
   card.append(top);
 
   card.append(E('div', 'cc-hint', c.reason && status === 'error' ? c.reason : c.hint));
+  const capabilities = c.capabilities || {};
+  const capabilityText = c.automaticRecall || capabilities.automaticRecall
+    ? 'Automatic recall: one read-only check per prompt.'
+    : capabilities.mcp === false
+      ? 'Native provider integration: no generic MCP setup.'
+      : 'Memory actions: MCP tools and the Sigil skill.';
+  card.append(E('div', 'cc-capability', capabilityText));
+  if (c.attention) card.append(E('div', 'cc-attention', c.attention));
 
   const actions = E('div', 'cc-actions');
   if (status === 'connected') {

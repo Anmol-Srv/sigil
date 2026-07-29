@@ -7,18 +7,17 @@
  * jobs in one call:
  *
  *   1. SANITY — turn Sigil's silent-failure modes into VISIBLE status:
- *      daemon reachable? DB reachable? setup complete? LLM + embedder
- *      configured? Every one of these has, at some point, made memory
+ *      daemon reachable? DB reachable? setup complete? embedder configured?
+ *      Optional LLM healthy when configured? Every one of these has, at some point, made memory
  *      silently return empty while the user kept working. The preamble
  *      reports them as `DB: ok` / `SIGIL: degraded` lines + remediation.
  *
- *   2. COLLECTION — pull fresh, project-scoped facts live (pull-on-init,
- *      no cache) so a session that lacks Sigil's hooks (Codex, Cursor, …)
- *      still starts with the user's relevant memory in context.
+ *   2. GUIDANCE — report that targeted `search` is the source of memory. Sigil
+ *      no longer dumps a stale or generic top-N snapshot into every session.
  *
  * One engine, two faces: the `prime` MCP tool (Codex/Cursor call it natively)
- * and the `sigil preamble` CLI (gstack-style bash preamble + Claude
- * SessionStart hook) both call buildPreamble() and render the same result.
+ * and the `sigil preamble` CLI both call buildPreamble() and render the same
+ * result.
  *
  * Contract: NEVER throws. A broken daemon/DB must produce a `degraded`
  * result with remediation, not an exception — the preamble's whole point is
@@ -30,34 +29,31 @@ import { EMBEDDING_DIM } from '../lib/constants.js';
 
 /**
  * @param {object}   opts
- * @param {string}   [opts.cwd]    Working dir — resolves the active project pod for scoping.
- * @param {number}   [opts.limit]  Max facts to collect (default 12).
  * @param {(method:string, params:object)=>Promise<any>} [opts.call]
  *        RPC caller returning the handler's `data` directly. When omitted the
  *        engine opens (and closes) its own daemon connection. The MCP server
  *        passes its long-lived `daemonCall` so no extra socket is opened.
  * @returns {Promise<PreambleResult>}
  */
-export async function buildPreamble({ cwd = process.cwd(), limit = 12, call } = {}) {
+export async function buildPreamble({ call } = {}) {
   /** @type {PreambleResult} */
   const r = {
     state: 'ready',           // 'ready' | 'setup' | 'degraded'
     checks: {},               // { daemon, db, setup, llm, embedding, collection }
     config: {},               // { llmProvider, llmModel, embProvider, embModel, dim, name }
     totals: { facts: 0, documents: 0 },
-    facts: [],                // [{ content, section }]
+    facts: [],                // retained for response compatibility; always empty
     issues: [],               // human-readable remediation lines
   };
 
-  // ── Local config (no daemon needed — config.json is device-local) ──────────
+  // ── Local config (no daemon needed — config.json is installation-local) ───
   r.config = await readConfigSummary();
   r.checks.llm = r.config.llmProvider
     ? { ok: true, detail: `${r.config.llmProvider}${r.config.llmModel ? `/${r.config.llmModel}` : ''}` }
-    : { ok: false, detail: 'not configured' };
+    : { ok: true, detail: 'not configured (optional)' };
   r.checks.embedding = r.config.embProvider
     ? { ok: true, detail: `${r.config.embProvider}/${r.config.embModel} (dim=${r.config.dim})` }
     : { ok: false, detail: 'not configured' };
-  if (!r.config.llmProvider) r.issues.push('No LLM provider configured — fact extraction is off. Run `sigil init`.');
   if (!r.config.embProvider) r.issues.push('No embedding provider configured — semantic search is off. Run `sigil init`.');
 
   // ── Daemon connection (auto-spawns if down; self-healing by design) ────────
@@ -85,10 +81,10 @@ export async function buildPreamble({ cwd = process.cwd(), limit = 12, call } = 
         ? { ok: true, detail: `${status.facts ?? 0} facts` }
         : { ok: false, detail: status.db?.error || 'unreachable' };
       if (!status.db?.healthy) {
-        r.issues.push(`Database unreachable: ${status.db?.error || 'unknown'} — check Postgres, then \`sigil doctor\`.`);
+        r.issues.push(`Database unreachable: ${status.db?.error || 'unknown'} — run \`sigil doctor\` for the storage-specific recovery step.`);
       }
-      // Upgrade the provider checks from "configured?" (config-only) to
-      // "probed ok?" using the daemon's cached boot probe, when available.
+      // Upgrade provider checks from "configured?" to the last explicit
+      // diagnostic/setup probe, when one is available. Status never probes.
       const p = status.providers;
       if (p?.embedding) {
         r.checks.embedding = p.embedding.ok
@@ -114,28 +110,10 @@ export async function buildPreamble({ cwd = process.cwd(), limit = 12, call } = 
       if (!st.complete) r.issues.push(`Setup incomplete — next step "${st.currentStep}". Run \`sigil init\` or open the GUI.`);
     } catch { /* pre-setup-store daemon — skip */ }
 
-    // COLLECTION: live, project-scoped fresh facts. refreshContext.explain
-    // blends the active pod kinds (vital / recent / project) WITHOUT writing a
-    // snapshot file — exactly the pull-on-init we want. Only if the DB is up.
-    if (r.checks.db?.ok) {
-      try {
-        const ex = await callFn('refreshContext.explain', { cwd });
-        const seen = new Set();
-        for (const s of ex.sections || []) {
-          for (const f of s.facts || []) {
-            const content = (typeof f === 'string' ? f : f.content || '').trim();
-            if (content && !seen.has(content)) {
-              seen.add(content);
-              r.facts.push({ content, section: s.name });
-              if (r.facts.length >= limit) break;
-            }
-          }
-          if (r.facts.length >= limit) break;
-        }
-      } catch (err) {
-        r.checks.collection = { ok: false, detail: err.message };
-      }
-    }
+    r.checks.collection = {
+      ok: true,
+      detail: 'targeted search on demand; no generic session snapshot',
+    };
   } finally {
     if (ownClient) { try { await ownClient.close(); } catch { /* */ } }
   }
@@ -151,17 +129,18 @@ export async function buildPreamble({ cwd = process.cwd(), limit = 12, call } = 
 function finalize(r) {
   const daemonDown = r.checks.daemon && !r.checks.daemon.ok;
   const dbDown = r.checks.db && !r.checks.db.ok;
-  const providerConfigured = Boolean(r.config.llmProvider && r.config.embProvider);
-  const providerWorking = r.checks.llm?.ok && r.checks.embedding?.ok;
-  const setupIncomplete = (r.checks.setup && !r.checks.setup.ok) || !providerConfigured;
+  const coreConfigured = Boolean(r.config.embProvider);
+  const providersWorking = r.checks.embedding?.ok
+    && (!r.config.llmProvider || r.checks.llm?.ok);
+  const setupIncomplete = (r.checks.setup && !r.checks.setup.ok) || !coreConfigured;
 
-  if (daemonDown || dbDown || (providerConfigured && !providerWorking)) r.state = 'degraded';
+  if (daemonDown || dbDown || (coreConfigured && !providersWorking)) r.state = 'degraded';
   else if (setupIncomplete) r.state = 'setup';
   else r.state = 'ready';
   return r;
 }
 
-/** Device-local provider/dim summary, read straight from config.json. */
+/** Installation-local provider/dim summary, read straight from config.json. */
 async function readConfigSummary() {
   try {
     // getConfig() lazy-loads (cache || loadConfig()), so this works in a fresh
@@ -174,7 +153,6 @@ async function readConfigSummary() {
       embProvider: c.embedding?.provider || '',
       embModel: c.embedding?.model || '',
       dim: EMBEDDING_DIM,
-      name: c.identity?.name || '',
     };
   } catch {
     return { llmProvider: '', llmModel: '', embProvider: '', embModel: '', dim: EMBEDDING_DIM, name: '' };

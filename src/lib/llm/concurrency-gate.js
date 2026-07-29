@@ -1,15 +1,12 @@
 /**
  * Concurrency gate — a tiny FIFO semaphore that bounds how many async tasks run
- * at once. The managed-session engine bounds only its WARM worker pool; this is
- * the hard cap on the OTHER path — every direct `claude` CLI spawn.
+ * at once. It is the hard cap on every explicit `claude` CLI generation.
  *
  * Why it exists: a user once hit 1600+ live `claude` processes because an ingest
  * fan-out (5–20 LLM calls per document, ×N concurrent documents, plus fallback
- * storms when a warm worker wedged) spawned one process per call with no bound,
- * pinning RAM and burning subscription tokens. Routing every spawn through one
- * semaphore turns "fork 1600 processes" into "run `limit` at a time, queue the
- * rest" — structurally impossible to blow up, whether the managed engine is on,
- * off, or degraded.
+ * storms spawned one process per call with no bound, pinning RAM and burning
+ * subscription tokens. Routing every spawn through one semaphore turns "fork
+ * 1600 processes" into "run `limit` at a time, queue the rest."
  *
  *   acquire ─┬─ active < limit → admit immediately (active++)
  *            └─ else            → FIFO-queue until a release frees a slot
@@ -19,7 +16,7 @@
  *
  * Queue wait is deliberately UNBOUNDED here: callers layer their own deadline
  * (the one-shot spawn has a per-process timeout that starts only AFTER a slot is
- * acquired; the managed manager has its dead-man timeout). Worst-case wait is
+ * acquired). Worst-case wait is
  * therefore bounded by (queueDepth / limit) × that per-call timeout — slower,
  * but never a RAM blowup. That trade (latency under load over unbounded forking)
  * is the whole point.

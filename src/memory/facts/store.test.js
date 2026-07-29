@@ -45,8 +45,7 @@ vi.mock('../../db/cortex.js', () => ({
 }));
 
 import { embedOrThrow } from '../../ingestion/embedder.js';
-import { prompt as llmPrompt } from '../../lib/llm.js';
-import { saveFact } from './store.js';
+import { saveFactDeterministic } from './store.js';
 
 // EMBEDDING_DIM is 1024; the precomputed-embedding path serializes through
 // lib/vectors.js, which rejects anything that isn't 1024-d.
@@ -71,109 +70,32 @@ const baseArgs = {
   sourceSection: 'preference',
 };
 
-// findSimilar runs inside a transaction that first issues `SET LOCAL hnsw.ef_search = 40`
-// and then the actual SELECT. insertFact then issues an UPDATE for search_vector.
-function mockFindSimilar(rows) {
+// Exact duplicate lookup runs first; insertFact then updates search_vector.
+function mockFindExact(rows) {
   mockRaw
-    .mockResolvedValueOnce({ rows: [] })  // SET LOCAL hnsw.ef_search = 40  (no rows)
-    .mockResolvedValueOnce({ rows })      // findSimilar SELECT
+    .mockResolvedValueOnce({ rows })
     .mockResolvedValueOnce({ rows: [] }); // UPDATE search_vector (after insertFact)
 }
 
-describe('saveFact — AUDM decision branches', () => {
-  it('no similar facts → ADD', async () => {
-    mockFindSimilar([]);
-    const result = await saveFact(baseArgs);
+describe('saveFactDeterministic — direct atomic writes', () => {
+  it('adds a distinct fact without invoking the LLM judge', async () => {
+    mockFindExact([]);
+
+    const result = await saveFactDeterministic(baseArgs);
+
     expect(result.action).toBe('ADD');
-    expect(result.fact).toBeDefined();
+    expect(result.dedup.decision).toBe('deterministic-add');
   });
 
-  it('uses pre-computed embedding when provided (no embed() call)', async () => {
-    mockFindSimilar([]);
-    await saveFact({ ...baseArgs, embedding: FAKE_VEC });
-    expect(embedOrThrow).not.toHaveBeenCalled();
-  });
+  it('skips a normalized exact duplicate before calling the embedder', async () => {
+    mockRaw.mockResolvedValueOnce({
+      rows: [{ id: 2, uid: 'fact-existing', content: baseArgs.content, status: 'active' }],
+    });
 
-  it('similarity >= 0.88 → SKIP without LLM call', async () => {
-    mockRaw
-      .mockResolvedValueOnce({ rows: [] }) // SET LOCAL ef_search
-      .mockResolvedValueOnce({
-        rows: [{ id: 2, uid: 'fact-existing', content: 'I like mango', similarity: 0.92, status: 'active' }],
-      });
+    const result = await saveFactDeterministic(baseArgs);
 
-    const result = await saveFact(baseArgs);
     expect(result.action).toBe('SKIP');
-    expect(llmPrompt).not.toHaveBeenCalled();
-  });
-
-  it('weak match below the supersede floor → ADD without LLM call', async () => {
-    // findSimilar applies the supersede floor (0.72) in SQL, so a neighbor at
-    // 0.50 is dropped before saveFact ever sees it — the SELECT comes back empty.
-    // No candidate ⇒ ADD, and the AUDM judge (LLM) is never consulted.
-    mockRaw
-      .mockResolvedValueOnce({ rows: [] }) // SET LOCAL ef_search
-      .mockResolvedValueOnce({ rows: [] }) // findSimilar SELECT — floor filters out the weak match
-      .mockResolvedValueOnce({ rows: [] }); // search_vector update
-
-    const result = await saveFact(baseArgs);
-    expect(result.action).toBe('ADD');
-    expect(llmPrompt).not.toHaveBeenCalled();
-  });
-
-  it('similarity in [0.78, 0.88) + LLM says UPDATE → UPDATE (new fact inserted, old superseded)', async () => {
-    mockRaw
-      .mockResolvedValueOnce({ rows: [] }) // SET LOCAL ef_search
-      .mockResolvedValueOnce({
-        rows: [{ id: 2, uid: 'fact-old', content: 'I like apples', similarity: 0.82, status: 'active' }],
-      })
-      .mockResolvedValueOnce({ rows: [] }); // search_vector for inserted fact
-    llmPrompt.mockResolvedValueOnce('DECISION: UPDATE — new fact extends existing');
-
-    const result = await saveFact(baseArgs);
-    expect(result.action).toBe('UPDATE');
-    expect(result.supersededId).toBe(2);
-    expect(result.fact).toBeDefined();
-    expect(llmPrompt).toHaveBeenCalledTimes(1);
-  });
-
-  it('similarity in [0.78, 0.88) + LLM says CONTRADICT → CONTRADICT', async () => {
-    mockRaw
-      .mockResolvedValueOnce({ rows: [] }) // SET LOCAL ef_search
-      .mockResolvedValueOnce({
-        rows: [{ id: 3, uid: 'fact-stale', content: 'We use MySQL', similarity: 0.80, status: 'active' }],
-      })
-      .mockResolvedValueOnce({ rows: [] });
-    llmPrompt.mockResolvedValueOnce('CONTRADICT — directly contradicts existing fact');
-
-    const result = await saveFact(baseArgs);
-    expect(result.action).toBe('CONTRADICT');
-    expect(result.contradictedId).toBe(3);
-    expect(result.fact).toBeDefined();
-  });
-
-  it('"CONTRADICTION" (longer form) also parses as CONTRADICT', async () => {
-    mockRaw
-      .mockResolvedValueOnce({ rows: [] }) // SET LOCAL ef_search
-      .mockResolvedValueOnce({
-        rows: [{ id: 4, uid: 'fact-4', content: 'old content', similarity: 0.81, status: 'active' }],
-      })
-      .mockResolvedValueOnce({ rows: [] });
-    llmPrompt.mockResolvedValueOnce('This is a CONTRADICTION of the existing fact');
-
-    const result = await saveFact(baseArgs);
-    expect(result.action).toBe('CONTRADICT');
-  });
-
-  it('similarity in [0.78, 0.88) + LLM returns neither UPDATE nor CONTRADICT → ADD', async () => {
-    mockRaw
-      .mockResolvedValueOnce({ rows: [] }) // SET LOCAL ef_search
-      .mockResolvedValueOnce({
-        rows: [{ id: 5, uid: 'fact-5', content: 'related but different', similarity: 0.79, status: 'active' }],
-      })
-      .mockResolvedValueOnce({ rows: [] });
-    llmPrompt.mockResolvedValueOnce('These are separate facts, add as new');
-
-    const result = await saveFact(baseArgs);
-    expect(result.action).toBe('ADD');
+    expect(result.dedup.decision).toBe('normalized-exact-duplicate');
+    expect(embedOrThrow).not.toHaveBeenCalled();
   });
 });

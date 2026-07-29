@@ -11,8 +11,8 @@
 # a throwaway cache the package manager deletes, silently breaking the daemon +
 # hooks that are pinned to a path.)
 #
-# Division of labour (deliberate — see init.js: "the terminal wizard and the
-# browser wizard can never diverge"):
+# Division of labour (deliberate — the terminal wizard and the browser wizard
+# use the same setup service):
 #   • THIS script detects only INSTALL-relevant host facts (OS, node, git) and
 #     installs persistently: clone → deps → PATH.
 #   • `sigil init` (Node, run at the end) does the rich DB + connector detection
@@ -79,11 +79,21 @@ step "Node $(node -v) + git detected."
 # Idempotent: a re-run of the installer acts as an update. We fetch + hard-reset
 # rather than merge — the release branch is a derived, force-pushed artifact
 # (CI commits the built dist/), so a 3-way merge would spuriously conflict.
+# Before that reset, preserve any local tracked/untracked edits as a recoverable
+# git stash. `sigil update` already has this guard; the one-command installer
+# must never be the destructive bypass around it.
 mkdir -p "$SIGIL_HOME"
 if [ -d "$APP_DIR/.git" ]; then
   step "Updating existing install at $APP_DIR…"
   git -C "$APP_DIR" fetch --depth 1 --quiet origin "$BRANCH" \
     || die "Could not fetch '$BRANCH' from $REPO — check your network."
+  if [ -n "$(git -C "$APP_DIR" status --porcelain 2>/dev/null)" ]; then
+    step "Preserving local install changes before update…"
+    STASH_LABEL="sigil installer update $(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    git -C "$APP_DIR" stash push --include-untracked --quiet -m "$STASH_LABEL" \
+      || die "Could not preserve local changes in $APP_DIR. Commit, stash, or remove them, then re-run the installer."
+    warn "Local changes were saved in git stash. Recover them after the update with: git -C $APP_DIR stash pop"
+  fi
   git -C "$APP_DIR" reset --hard --quiet FETCH_HEAD
 else
   # A non-git dir here is a leftover from a different install method — replace it.
@@ -98,8 +108,8 @@ fi
 # build step — we only need the runtime deps (the bundle keeps native/WASM/large
 # packages external). --omit=dev skips everything bundled into dist/ at build time.
 step "Installing runtime dependencies…"
-( cd "$APP_DIR" && npm install --omit=dev --no-audit --no-fund --loglevel=error ) \
-  || die "\`npm install\` failed in $APP_DIR. Re-run the installer, or cd there and inspect."
+( cd "$APP_DIR" && npm ci --omit=dev --no-audit --no-fund --loglevel=error ) \
+  || die "\`npm ci\` failed in $APP_DIR. Re-run the installer, or cd there and inspect."
 
 # ── 3b. evict any leftover GLOBAL npm install ─────────────────────────────────
 # Before git-native, Sigil shipped via npm. A stale `npm i -g @anmol-srv/sigil`
@@ -143,34 +153,7 @@ esac
 ensure_path "$HOME/.profile"
 PATH="$BIN_DIR:$PATH"; export PATH
 
-# ── 4b. optional: tmux for the managed-session engine ─────────────────────────
-# Sigil's managed-session engine (SIGIL_MANAGED_SESSION=true) keeps a warm
-# `claude`/`codex` worker alive inside tmux to avoid re-paying agentic cold-start
-# per LLM call. tmux is OPTIONAL: without it the engine silently uses the
-# one-shot path. Best-effort install on macOS/Linux; never fatal.
-ensure_tmux() {
-  have tmux && return 0
-  say "Installing tmux (optional — powers the warm managed-session engine)..."
-  case "$OS" in
-    Darwin) have brew && brew install tmux >/dev/null 2>&1 ;;
-    Linux)
-      if   have apt-get; then sudo apt-get install -y tmux >/dev/null 2>&1
-      elif have dnf;     then sudo dnf install -y tmux     >/dev/null 2>&1
-      elif have yum;     then sudo yum install -y tmux     >/dev/null 2>&1
-      elif have pacman;  then sudo pacman -S --noconfirm tmux >/dev/null 2>&1
-      elif have apk;     then sudo apk add tmux            >/dev/null 2>&1
-      fi ;;
-  esac
-  if have tmux; then
-    step "tmux ready: $(command -v tmux)"
-  else
-    warn "tmux not installed — the managed-session engine will use the one-shot path."
-    warn "To enable it later: install tmux, then set SIGIL_MANAGED_SESSION=true."
-  fi
-}
-ensure_tmux
-
-# ── 5. hand off to the SHARED Node first-run flow ─────────────────────────────
+# ── 5. hand off to the shared Node first-run flow ─────────────────────────────
 # Zero-arg `sigil` opens the browser dashboard (the marketed experience) and
 # auto-falls back to the terminal `sigil init` wizard when headless — both drive
 # the same step engine that does the rich DB + connector detection AND writes the

@@ -22,11 +22,10 @@
 
 import { maskSecrets } from './secret-mask.js';
 import { recordHookError, failClosedOnBadConfig } from './error-log.js';
-import { loadHookEnv } from './env-loader.js';
 import { breakerOpen, tripBreaker, resetBreaker } from './daemon-breaker.js';
 import { readStdin } from './io.js';
 
-loadHookEnv();
+if (!process.env.SIGIL_AGENT) process.env.SIGIL_AGENT = 'claude-code';
 
 const MIN_QUERY_LENGTH = 8;
 const MAX_FACTS = 20;
@@ -49,7 +48,7 @@ function withDeadline(ms, promise) {
 
 // Ask the daemon to search. The daemon is the sole DB owner, so this is safe in
 // embedded (single-process PGlite) mode. Returns the search response or throws.
-async function searchViaDaemon(query, input) {
+async function searchViaDaemon(query) {
   const { connectOrStartDaemon } = await import('../clients/auto-spawn.js');
   let client;
   try {
@@ -57,19 +56,11 @@ async function searchViaDaemon(query, input) {
     const { data } = await client.call('search', {
       query,
       limit: MAX_FACTS,
-      useGraph: false,
-      route: false,       // LLM-free auto-injection: no query-router generation
-                          // call on the hot path (fires on EVERY prompt). Hybrid
-                          // SQL + entity detection + ACT-R/Hebbian carry recall.
-                          // Explicit `sigil search`/`why` keep the smart router.
-      expand: false,      // no LLM query-expansion here either. The query still
-                          // embeds (cheap, cached, local) — "LLM-free" means no
-                          // generation calls, not no model calls.
-      synthesize: false,  // synthesis steals Claude's citation surface; off here
-      podScope: 'auto',   // active session/project/person pods, not the whole brain
       applyFloor: true,   // precision-first: drop off-topic matches (auto-injection)
-      cwd: input.cwd || null,
-      sessionId: input.session_id || null,
+      // Runtime-only evidence for the Agents page. This never writes the
+      // prompt, matching facts, or a database trace. Verification probes opt
+      // out so `doctor --deep` cannot fake a real Codex/Claude recall event.
+      observePromptRecall: process.env.SIGIL_HOOK_VERIFY !== '1',
       // namespaces omitted on purpose — the daemon resolves its own default
       // namespace, which is the authoritative one.
     });
@@ -95,8 +86,8 @@ async function main() {
 
   // Circuit breaker (F5): a recent hook found the daemon wedged. Skip the daemon
   // entirely for the cooldown rather than re-paying the probe on every prompt —
-  // that pile-on is what caused the CPU storm. Hot-context from CLAUDE.md still
-  // covers the user during the window.
+  // that pile-on is what caused the CPU storm. The user's prompt proceeds
+  // without memory injection during the short cooldown.
   if (breakerOpen()) {
     process.stderr.write('[sigil:user-prompt-submit] daemon breaker open — skipping injection\n');
     return respond();
@@ -104,7 +95,7 @@ async function main() {
 
   let data;
   try {
-    data = await withDeadline(OVERALL_DEADLINE_MS, searchViaDaemon(query, input));
+    data = await withDeadline(OVERALL_DEADLINE_MS, searchViaDaemon(query));
   } catch (err) {
     // Classify. A handler-level error (SigilRpcError — e.g. a broken embedding
     // config) means recall is BROKEN: record it so `sigil doctor` can tell
@@ -131,7 +122,7 @@ async function main() {
   }
 
   const facts = data?.facts || [];
-  // Empty scope is precision-correct (the active pod has no match), not an error.
+  // An empty result is precision-correct, not an error.
   if (!facts.length) return respond();
 
   // Token budget — take facts in score order until the cumulative char count

@@ -2,8 +2,6 @@ export function registerGetFactContext(registry) {
   registry.register('getFactContext', async (params) => {
     const { default: cortexDb } = await import('../../db/cortex.js');
     const { findByUid } = await import('../../memory/facts/store.js');
-    const { getEntitiesForFact } = await import('../../memory/facts/entity-linker.js');
-    const { getRelationsByFact } = await import('../../memory/entities/relations.js');
 
     const { uid, factId } = params;
     if (!uid && !Number.isFinite(factId)) {
@@ -22,9 +20,7 @@ export function registerGetFactContext(registry) {
       return { notFound: true };
     }
 
-    const [entities, relations, documents] = await Promise.all([
-      getEntitiesForFact(fact.id),
-      getRelationsByFact(fact.id),
+    const [documents] = await Promise.all([
       fact.sourceDocumentIds?.length
         ? cortexDb('document').whereIn('id', fact.sourceDocumentIds).select('id', 'title', 'sourceType')
         : [],
@@ -39,9 +35,9 @@ export function registerGetFactContext(registry) {
         confidence: fact.confidence ?? null,
         status: fact.status ?? null,
         sourceSection: fact.sourceSection ?? null,
+        agent: fact.createdByAgent ?? null,
+        namespace: fact.namespace ?? null,
       },
-      entities: entities.map((e) => ({ id: e.id, name: e.name, entityType: e.entityType })),
-      relations,
       documents: documents.map((d) => ({ id: d.id, title: d.title, sourceType: d.sourceType })),
     };
   });

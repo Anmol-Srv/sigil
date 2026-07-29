@@ -1,4 +1,4 @@
-import { copyFile, writeFile, rename, unlink, access, lstat, realpath, stat, chmod } from 'node:fs/promises';
+import { copyFile, writeFile, rename, unlink, access, lstat, realpath, stat, chmod, readFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 
 const BAK_SUFFIX = '.sigil.bak';
@@ -26,6 +26,18 @@ export async function safeWrite(path, content, { dryRun = false } = {}) {
   const existed = await fileExists(path);
   const action = existed ? 'modify' : 'create';
   const bytes = Buffer.byteLength(content, 'utf8');
+
+  // Generated connector files are re-synced often. If their bytes already
+  // match, do not churn the inode/mtime, create a misleading backup, or report
+  // a modification in a dry-run. readFile follows symlinks, which is exactly
+  // the target safeWrite would update below.
+  if (existed) {
+    try {
+      if (await readFile(path, 'utf8') === content) {
+        return { path, action: 'skip', bytes, wrote: false, backedUp: false };
+      }
+    } catch { /* fall through to the normal atomic write/error path */ }
+  }
 
   if (dryRun) return { path, action, bytes, wrote: false, backedUp: false };
 

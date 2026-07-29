@@ -6,9 +6,9 @@
  *                   For users who want to re-run migrations after a schema bump.
  *   - With params:  build a fresh knex against the supplied URL or host/port.
  *                   This is what the onboarding wizard uses, because the
- *                   daemon's existing pool was bound at boot to whatever
- *                   was in env at startup — the new SIGIL_DATABASE_URL just
- *                   written by the wizard isn't picked up until restart.
+ *                   daemon's existing pool may be bound to the prior config;
+ *                   an explicit candidate connection must be tested before
+ *                   it becomes the active configuration.
  */
 import knexFactory from 'knex';
 
@@ -24,9 +24,6 @@ export function registerRunMigrations(registry) {
   // consistent; returns a status the updater uses to keep code ⇄ schema in sync.
   registry.register('migrateSafe', async () => {
     const { default: config } = await import('../../config.js');
-
-    // Followers hold no local DB; nothing to migrate.
-    if (config.network?.mode === 'lite-follower') return { status: 'skipped', reason: 'lite-follower' };
 
     // Not set up yet — the onboarding wizard runs the first migration.
     let mode;
@@ -90,5 +87,19 @@ export function registerRunMigrations(registry) {
     const { default: cortexDb } = await import('../../db/cortex.js');
     const [batchNo, ranFiles] = await cortexDb.migrate.latest({ directory: MIGRATIONS_DIR });
     return { batchNo, ran: ranFiles, against: 'daemon-pool' };
+  });
+
+  // Explicit rollback remains available for operators, but it runs through the
+  // daemon's pool so the CLI never opens a second embedded engine.
+  registry.register('rollbackMigrations', async () => {
+    const { default: cortexDb } = await import('../../db/cortex.js');
+    let snapshot = null;
+    try {
+      const { takeSnapshot } = await import('../../db/snapshots.js');
+      const result = await takeSnapshot({ reason: 'pre-rollback' });
+      snapshot = result?.name || null;
+    } catch { /* external DB or snapshot unavailable */ }
+    const [batchNo, ranFiles] = await cortexDb.migrate.rollback({ directory: MIGRATIONS_DIR });
+    return { batchNo, ran: ranFiles, snapshot, against: 'daemon-pool' };
   });
 }

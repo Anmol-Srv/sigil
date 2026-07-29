@@ -13,32 +13,49 @@ async function findByUid(uid) {
 }
 
 async function upsert({ sourcePath, sourceType, title = null, contentHash, namespace }) {
-  const uid = `doc-${nanoid(16)}`;
+  return cortexDb.transaction(async (trx) => {
+    const existing = await trx('document').where({ sourcePath, namespace }).first();
+    if (existing?.contentHash === contentHash) {
+      return { doc: existing, changed: false };
+    }
 
-  // ON CONFLICT target matches the (source_path, namespace) composite unique
-  // (migration 20260504120000). The same path can live in multiple namespaces;
-  // the upsert only collapses dupes within one.
-  const { rows: [doc] } = await cortexDb.raw(`
-    INSERT INTO document (uid, source_path, source_type, title, content_hash, namespace, last_ingested_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
-    ON CONFLICT (source_path, namespace) DO UPDATE SET
-      title = EXCLUDED.title,
-      content_hash = EXCLUDED.content_hash,
-      last_ingested_at = NOW(),
-      updated_at = NOW()
-    RETURNING *, (xmax = 0) AS "isNew", content_hash != ? AS "contentChanged"
-  `, [uid, sourcePath, sourceType, title, contentHash, namespace, contentHash]);
+    if (existing) {
+      const [doc] = await trx('document')
+        .where({ id: existing.id })
+        .update({
+          sourceType,
+          title,
+          contentHash,
+          lastIngestedAt: trx.fn.now(),
+          updatedAt: trx.fn.now(),
+        })
+        .returning('*');
+      return { doc, changed: true };
+    }
 
-  const isNew = doc.isNew;
-  const changed = isNew || doc.contentChanged;
-
-  return { doc, changed };
+    const [doc] = await trx('document')
+      .insert({
+        uid: `doc-${nanoid(16)}`,
+        sourcePath,
+        sourceType,
+        title,
+        contentHash,
+        namespace,
+        lastIngestedAt: trx.fn.now(),
+      })
+      .returning('*');
+    return { doc, changed: true };
+  });
 }
 
 async function updateCounts(documentId, { chunkCount, factCount }) {
+  const patch = {};
+  if (chunkCount !== undefined) patch.chunkCount = chunkCount;
+  if (factCount !== undefined) patch.factCount = factCount;
+  if (!Object.keys(patch).length) return;
   await cortexDb('document')
     .where({ id: documentId })
-    .update({ chunkCount, factCount });
+    .update(patch);
 }
 
 async function getStats(namespace) {
@@ -71,17 +88,11 @@ async function resetHash(documentId) {
     .update({ contentHash: null });
 }
 
-// Persist the metadata payload that flows through the ingest pipeline.
-// Previously dropped on the floor after `parse()` consumed its format hint;
-// now lands on the document row so pod attachment can derive source-
-// instance context from it (which Slack workspace, which sender, etc.).
-// connectionId is optional and references the `connection` table when the
-// document came in through a registered connector.
-async function updateSourceMetadata(documentId, metadata, connectionId = null) {
-  if (!metadata && !connectionId) return;
+// Persist optional source metadata supplied by an explicit ingestion caller.
+async function updateSourceMetadata(documentId, metadata) {
+  if (!metadata) return;
   const patch = {};
   if (metadata && Object.keys(metadata).length) patch.sourceMetadata = JSON.stringify(metadata);
-  if (connectionId) patch.connectionId = connectionId;
   if (!Object.keys(patch).length) return;
   await cortexDb('document').where({ id: documentId }).update(patch);
 }

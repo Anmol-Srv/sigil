@@ -4,9 +4,9 @@
  *
  * Only embedding models that emit Sigil's fixed EMBEDDING_DIM (1024) are
  * offered. nomic-embed-text (768) and all-minilm (384) are deliberately NOT in
- * the list — picking them would fail the dimension check downstream. apply()
- * still probes the actual output dimension after a pull, so the curated list is
- * a convenience, not the sole guarantee.
+ * the list — picking them would fail the dimension check downstream. Setup
+ * probes the actual output dimension, so the curated list is a convenience,
+ * not the sole guarantee.
  */
 
 const DEFAULT_HOST = 'http://localhost:11434';
@@ -48,38 +48,4 @@ export async function listCompatibleModels(host = DEFAULT_HOST) {
   try { installed = await listInstalledModels(host); } catch { /* server down */ }
   const set = new Set(installed);
   return OLLAMA_EMBED_MODELS.map((m) => ({ ...m, installed: set.has(m.name) }));
-}
-
-/**
- * Pull a model, streaming progress. onProgress({ status, percent }) is
- * best-effort (percent is null until Ollama reports byte totals). Resolves when
- * the pull completes; rejects on an Ollama-reported error.
- */
-export async function pullModel(model, onProgress = () => {}, host = DEFAULT_HOST) {
-  const res = await fetch(`${host}/api/pull`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, stream: true }),
-  });
-  if (!res.ok || !res.body) throw new Error(`Ollama pull failed: ${res.status}`);
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl;
-    while ((nl = buf.indexOf('\n')) !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (!line) continue;
-      let j;
-      try { j = JSON.parse(line); } catch { continue; }
-      if (j.error) throw new Error(j.error);
-      const percent = j.total ? Math.round(((j.completed || 0) / j.total) * 100) : null;
-      onProgress({ status: j.status || '', percent });
-    }
-  }
 }

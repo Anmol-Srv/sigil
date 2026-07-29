@@ -37,6 +37,7 @@ const meta = {
   id: 'cursor',
   label: 'Cursor',
   hint: 'global MCP + always-applied rule (no native hooks)',
+  automaticRecall: false,
 };
 
 async function detect() {
@@ -132,6 +133,13 @@ async function install({ dryRun = false } = {}) {
   return { actions };
 }
 
+// The rule file is wholly Sigil-owned. Refresh it after a Sigil update without
+// reserializing the user's MCP configuration.
+async function refresh({ dryRun = false } = {}) {
+  const rule = await writeRulesFile({ dryRun });
+  return { actions: rule ? [rule] : [] };
+}
+
 async function verify({ deep = false } = {}) {
   const fs = await import('node:fs/promises');
 
@@ -204,6 +212,7 @@ export {
   meta,
   detect,
   install,
+  refresh,
   uninstall,
   verify,
   // Exposed for low-level callers (uninstall, tests).

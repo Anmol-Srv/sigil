@@ -162,6 +162,22 @@ one **muted sub-line** (`--text-xs`, `--fg-4`) for context or a quiet delta
   carries a state (e.g. green dot on a healthy recall rate, amber on dupes-to-review).
 - The strip is read-only; clicking a card navigates to its detail view.
 
+## Home recall search
+
+Home leads with a single **Search memory** panel before activity. It is the
+dashboard's everyday job: ask for a past decision, preference, or constraint
+and inspect the same deterministic Sigil search results an agent receives.
+
+- The control is submit-only, never typeahead: every request needs one query
+  embedding and a hybrid retrieval pass, so partial text must not create hidden
+  provider work.
+- Results distinguish **Saved memories** from **Notes and files**. Source
+  passages are shown only when document ingestion actually produced them.
+- Loading, no-result, and provider-error states remain inline and explain the
+  next action. No modal, toast-only failure, or client-side substring fallback.
+- Result excerpts cap at 520 characters so a single long source passage cannot
+  overwhelm the compact console layout.
+
 ## Knowledge Base browser (list + detail)
 Two-column: a searchable list on the left, a detail panel on the right.
 

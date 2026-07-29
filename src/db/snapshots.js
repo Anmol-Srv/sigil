@@ -25,6 +25,7 @@ const EXT = '.tgz';
 // Keep a small rolling window — enough to step back past a bad snapshot without
 // hoarding disk. Each is a gzipped dump of the whole cluster.
 export const SNAPSHOT_KEEP = 3;
+let snapshotInFlight = null;
 
 /** A sortable snapshot filename for a Date (lexical order == chronological). */
 export function snapshotName(date) {
@@ -104,7 +105,7 @@ function formatBytes(n) {
  * snapshot is preserved — the caller logs and moves on. Returns the write result
  * or a `{ skipped }` reason.
  */
-export async function takeSnapshot({ reason = 'periodic', dir = SIGIL_SNAPSHOTS_DIR, keep = SNAPSHOT_KEEP, log = () => {} } = {}) {
+async function takeSnapshotOnce({ reason = 'periodic', dir = SIGIL_SNAPSHOTS_DIR, keep = SNAPSHOT_KEEP, log = () => {} } = {}) {
   const { default: config } = await import('../config.js');
   if (config.db.mode !== 'embedded') return { skipped: 'not-embedded' };
 
@@ -118,6 +119,18 @@ export async function takeSnapshot({ reason = 'periodic', dir = SIGIL_SNAPSHOTS_
   const res = writeSnapshotBytes(bytes, { dir, keep });
   log(`db: snapshot (${reason}) → ${res.name} (${formatBytes(res.bytes)}${res.pruned.length ? `, pruned ${res.pruned.length}` : ''})`);
   return res;
+}
+
+/**
+ * Coalesce concurrent timer, migration, and shutdown requests into one dump.
+ * PGlite snapshotting is whole-cluster work; overlapping copies only increase
+ * CPU, memory, and disk pressure without creating a better recovery point.
+ */
+export function takeSnapshot(options = {}) {
+  if (snapshotInFlight) return snapshotInFlight;
+  snapshotInFlight = takeSnapshotOnce(options)
+    .finally(() => { snapshotInFlight = null; });
+  return snapshotInFlight;
 }
 
 /**

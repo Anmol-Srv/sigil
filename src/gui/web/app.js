@@ -32,11 +32,6 @@ const formatUptime = (ms) => {
   const s = Math.floor(ms / 1000), h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
   return h ? `${h}h ${m}m ${sec}s` : m ? `${m}m ${sec}s` : `${sec}s`;
 };
-const formatTime = (iso) => {
-  if (!iso) return '—';
-  try { return new Date(iso).toISOString().slice(0, 16).replace('T', ' '); }
-  catch { return iso; }
-};
 async function copyToClipboard(text) {
   try { await navigator.clipboard.writeText(text); return true; }
   catch {
@@ -61,10 +56,10 @@ function renderKv(node, entries) {
   node.innerHTML = entries.map(([k, v]) => `<div class="row"><div class="k">${escape(k)}</div><div class="v">${escape(v)}</div></div>`).join('');
 }
 
-const validRoutes = ['health', 'kb', 'graph', 'agents', 'devices', 'activity', 'engine', 'setup', 'settings', 'methods'];
+const validRoutes = ['health', 'kb', 'agents', 'activity', 'settings'];
 const ROUTE_TITLES = {
-  health: 'Home', kb: 'Knowledge Base', graph: 'Graph', agents: 'Agents', devices: 'Devices',
-  activity: 'Activity', engine: 'Engine', setup: 'Database', settings: 'Settings', methods: 'RPC methods',
+  health: 'Home', kb: 'Knowledge Base', agents: 'Agents',
+  activity: 'Activity', settings: 'Settings',
 };
 function setRoute(name) {
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
@@ -79,13 +74,9 @@ function setRoute(name) {
   window.location.hash = name;
   if (name === 'health')   refreshHealth();
   if (name === 'kb')       refreshKb();
-  if (name === 'graph')    initGraphView();
-  if (name === 'methods')  refreshMethods();
-  if (name === 'settings') refreshEnv();
+  if (name === 'settings') { refreshEnv(); refreshRuntime(); }
   if (name === 'agents')   refreshAgents();
-  if (name === 'devices')  refreshDevices();
   if (name === 'activity') { ensureActivityWs(); loadTraces(); }
-  if (name === 'engine')   startEnginePolling(); else stopEnginePolling();
 }
 function routeFromHash() {
   const r = (window.location.hash || '#health').slice(1);
@@ -102,34 +93,24 @@ const fmtNum = (x) => (typeof x === 'number' ? x.toLocaleString() : '—');
 
 async function refreshHealth() {
   try {
-    const [ping, nodeInfo, mode, status] = await Promise.all([
+    const [ping, status] = await Promise.all([
       rpc('ping'),
-      rpc('nodeInfo').catch(() => ({ enabled: false })),
-      rpc('mode').catch(() => ({})),
       rpc('status', {}).catch(() => ({})),
     ]);
 
-    // ── stat strip: memory as the hero (real counts from status) ──
-    const ents = (status.entities?.documents || 0) + (status.entities?.people || 0) + (status.entities?.topics || 0);
+    // ── stat strip: user concepts, not document-ingestion internals ──
+    // `remember` writes atomic facts directly, so it correctly produces no
+    // documents or chunks. Document passages remain a detail of source
+    // ingestion rather than a headline metric.
     $('#hm-facts').textContent = fmtNum(status.facts);
-    $('#hm-entities').textContent = fmtNum(ents);
-    $('#hm-relations').textContent = fmtNum(status.relations);
-    $('#brand-badge').textContent = mode.mode || 'solo';
+    $('#hm-documents').textContent = fmtNum(status.documents);
+    $('#brand-badge').textContent = 'local';
 
     // ── diagnostics drawer: the daemon plumbing, demoted ──
     const rows = [
       ['daemon pid', ping.pid], ['version', ping.version], ['node.js', ping.node],
-      ['uptime', formatUptime(ping.uptimeMs)], ['mode', mode.mode || '—'],
-      ['memory client', mode.memoryClient || '—'],
+      ['uptime', formatUptime(ping.uptimeMs)], ['storage', 'local-first'],
     ];
-    if (mode.masterNodeId) rows.push(['master nodeId', mode.masterNodeId]);
-    if (nodeInfo.enabled) {
-      rows.push(['this nodeId', nodeInfo.nodeId || nodeInfo.error || '—']);
-      if (nodeInfo.relayUrl) rows.push(['relay', nodeInfo.relayUrl]);
-      if (nodeInfo.addresses?.length) rows.push(['addresses', nodeInfo.addresses.join(', ')]);
-    } else {
-      rows.push(['identity', 'Iroh disabled']);
-    }
     renderKv($('#health-pane'), rows);
 
     $('#footer-version').textContent = `v${ping.version}`;
@@ -138,43 +119,18 @@ async function refreshHealth() {
     setConn('ok', 'connected');
   } catch (err) { setConn('err', err.message); }
 
-  // recall health + recent activity are independent of the daemon ping;
-  // load them in one fetch so one failing doesn't blank the other.
+  // Recent durable-write activity is independent of the daemon ping.
   loadHomeActivity();
 }
 
-// One trace.list call feeds both the recall metrics and the activity feed.
-// Recall hit-rate, avg results, and median latency are computed CLIENT-SIDE
-// from the search traces in the recent window — no backend metric needed.
-// A "hit" is any search whose ranking returned ≥1 fact (detail.ranking.facts).
 async function loadHomeActivity() {
   let traces;
   try { ({ traces } = await rpc('trace.list', { limit: 50 })); } catch { return; }
 
-  const searches = traces.filter((t) => t.kind === 'search');
-  const n = searches.length;
-  const factCount = (t) => (t.detail?.ranking?.facts?.length || 0);
-  const withHits = searches.filter((t) => factCount(t) > 0).length;
-  const hitRate = n ? Math.round((withHits / n) * 100) : null;
-  const avgFacts = n ? (searches.reduce((s, t) => s + factCount(t), 0) / n) : null;
-  const durs = searches.map((t) => t.durationMs).filter((x) => x != null).sort((a, b) => a - b);
-  const med = durs.length ? durs[Math.floor(durs.length / 2)] : null;
-
-  $('#hm-recall').textContent = hitRate != null ? `${hitRate}%` : '—';
-  $('#hm-recall-sub').textContent = n ? `${n} recent searches` : 'no searches yet';
-  const dot = $('#hm-recall-dot');
-  dot.className = 'hm-dot' + (hitRate == null ? '' : hitRate >= 80 ? ' ok' : hitRate >= 50 ? ' warn' : ' err');
-
-  $('#hm-searches').textContent = fmtNum(n);
-  $('#hm-hitrate').textContent = hitRate != null ? `${hitRate}%` : '—';
-  $('#hm-hitbar').style.transform = `scaleX(${hitRate != null ? hitRate / 100 : 0})`;
-  $('#hm-avgfacts').textContent = avgFacts != null ? avgFacts.toFixed(1) : '—';
-  $('#hm-latency').textContent = med != null ? `${med}ms` : '—';
-
   const feed = $('#hm-feed');
   feed.innerHTML = traces.length
     ? traces.slice(0, 6).map(homeFeedRow).join('')
-    : '<li class="muted text-sm">no activity yet — run a search or remember a fact</li>';
+    : '<li class="muted text-sm">no saved-memory activity yet — remember a fact or ingest a source</li>';
 }
 
 function homeFeedRow(t) {
@@ -187,8 +143,103 @@ function homeFeedRow(t) {
   </li>`;
 }
 
+// ── Home: real memory search ───────────────────────────────────────
+// This is deliberately submit-only: each query performs an embedding request
+// and deterministic hybrid search, so typeahead would spend provider work on
+// half-written questions. The request id prevents a slower earlier result from
+// replacing a newer search.
+const homeSearch = { requestId: 0, busy: false };
+
+function homeSearchSetResults(html = '', state = '') {
+  const node = $('#home-search-results');
+  const clear = $('#home-search-clear');
+  if (!node || !clear) return;
+  node.hidden = !html;
+  node.className = `home-search-results${state ? ` ${state}` : ''}`;
+  node.innerHTML = html;
+  clear.hidden = !html || homeSearch.busy;
+}
+
+function homeSearchResultRow(item, kind) {
+  const isFact = kind === 'fact';
+  const tags = isFact
+    ? [item.category, item.confidence].filter(Boolean)
+    : [item.sectionHeading].filter(Boolean);
+  const label = isFact ? 'Memory' : 'Source';
+  const rawContent = String(item.content || '').trim();
+  const content = rawContent.length > 520 ? `${rawContent.slice(0, 517).trimEnd()}…` : rawContent;
+  return `<article class="home-search-match">
+    <div class="home-search-match-meta">
+      <span class="badge ${isFact ? 'ok' : 'info'}">${label}</span>
+      ${tags.map((tag) => `<span>${escape(tag)}</span>`).join('')}
+    </div>
+    <p>${escape(content)}</p>
+  </article>`;
+}
+
+function renderHomeSearchResults(query, { facts = [], chunks = [] } = {}) {
+  const total = facts.length + chunks.length;
+  if (!total) {
+    homeSearchSetResults(`<div class="home-search-empty"><strong>No matching memory yet</strong><span>Try a more specific question, or save the decision with <code>sigil remember "…"</code>.</span></div>`, 'empty');
+    return;
+  }
+
+  const factRows = facts.length
+    ? `<section class="home-search-group"><h4>Saved memories <span>${facts.length}</span></h4>${facts.map((fact) => homeSearchResultRow(fact, 'fact')).join('')}</section>`
+    : '';
+  const sourceRows = chunks.length
+    ? `<section class="home-search-group"><h4>Notes and files <span>${chunks.length}</span></h4>${chunks.map((chunk) => homeSearchResultRow(chunk, 'source')).join('')}</section>`
+    : '';
+  homeSearchSetResults(`<div class="home-search-result-head"><span>Best matches for <strong>“${escape(query)}”</strong></span><span>${total} result${total === 1 ? '' : 's'}</span></div><div class="home-search-groups">${factRows}${sourceRows}</div>`);
+}
+
+async function runHomeSearch(query) {
+  const submit = $('#home-search-submit');
+  const clear = $('#home-search-clear');
+  const requestId = ++homeSearch.requestId;
+  homeSearch.busy = true;
+  if (submit) { submit.disabled = true; submit.textContent = 'Searching…'; }
+  if (clear) clear.hidden = true;
+  homeSearchSetResults('<div class="home-search-loading"><span class="loading-dot" aria-hidden="true"></span>Searching local memory…</div>', 'loading');
+
+  try {
+    const result = await rpc('search', {
+      query,
+      limit: 8,
+      includeChunks: true,
+      applyFloor: false,
+    });
+    if (requestId !== homeSearch.requestId) return;
+    renderHomeSearchResults(query, result);
+  } catch (err) {
+    if (requestId !== homeSearch.requestId) return;
+    const message = escape(err.message || 'Search failed.');
+    homeSearchSetResults(`<div class="home-search-empty error"><strong>Memory search could not run</strong><span>${message} Check that Memory search is ready in <a href="#settings" data-route="settings">Settings</a>, then try again.</span></div>`, 'error');
+  } finally {
+    if (requestId === homeSearch.requestId) {
+      homeSearch.busy = false;
+      if (submit) { submit.disabled = false; submit.textContent = 'Search'; }
+      if (clear) clear.hidden = $('#home-search-results')?.hidden || false;
+    }
+  }
+}
+
+$('#home-search-form')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (homeSearch.busy) return;
+  const query = $('#home-search-query')?.value.trim();
+  if (query) runHomeSearch(query);
+});
+$('#home-search-clear')?.addEventListener('click', () => {
+  homeSearch.requestId++;
+  homeSearch.busy = false;
+  const query = $('#home-search-query');
+  if (query) { query.value = ''; query.focus(); }
+  homeSearchSetResults();
+});
+
 // ════════════════════════════════════════════════════════════════════
-// KNOWLEDGE BASE — master-detail browser (facts · entities · pods + graph)
+// KNOWLEDGE BASE — facts and source provenance
 // ════════════════════════════════════════════════════════════════════
 const kb = {
   tab: 'facts',
@@ -198,14 +249,7 @@ const kb = {
   factCat: null,      // active category filter (null = all)
   factSearch: '',
   selectedFactUid: null,
-  entityType: null,   // active entity-type filter
-  entitySearch: '',
-  entities: [],
-  selectedEntityId: null,
-  pods: null,
 };
-
-const ENTITY_TYPES = ['person', 'topic', 'document'];
 
 // Confidence carries the only semantic color; importance/category stay neutral
 // to keep the surface restrained (brand rule: accent for state, not decoration).
@@ -220,42 +264,27 @@ function titleCase(s) {
 
 async function refreshKb() {
   kbLoadStats();
-  if (!kb.loaded || kb.tab === 'facts') await kbLoadFacts();
+  if (!kb.loaded) await kbLoadFacts();
   kb.loaded = true;
-  kbSetTab(kb.tab, { force: true });
+  kbRenderFacts();
 }
 
 async function kbLoadStats() {
   const strip = $('#kb-stats');
   try {
     const d = await rpc('status', {});
-    const ents = (d.entities?.documents || 0) + (d.entities?.people || 0) + (d.entities?.topics || 0);
     const stats = [
-      ['Facts', d.facts], ['Entities', ents], ['Relations', d.relations],
-      ['Documents', d.documents], ['Chunks', d.chunks],
-      ['Hebbian edges', d.hebbian?.edgeCount ?? 0],
+      ['Facts', d.facts], ['Source documents', d.documents],
     ];
+    // Passages only exist after a document is ingested. Showing a persistent
+    // zero to someone using ordinary memory writes creates a false expectation
+    // that every fact should have a document chunk behind it.
+    if (d.documents > 0) stats.push(['Source passages', d.chunks]);
     strip.innerHTML = stats.map(([k, v]) =>
       `<div class="kb-stat"><span class="kb-stat-v">${escape(v)}</span><span class="kb-stat-k">${escape(k)}</span></div>`).join('');
   } catch (err) {
     strip.innerHTML = `<div class="kb-stat-err">Couldn’t load totals: ${escape(err.message)}</div>`;
   }
-}
-
-function kbSetTab(name, { force = false } = {}) {
-  if (!force && kb.tab === name) return;
-  kb.tab = name;
-  $$('.kb-tab').forEach((t) => {
-    const on = t.dataset.kbtab === name;
-    t.classList.toggle('active', on);
-    t.setAttribute('aria-selected', on ? 'true' : 'false');
-  });
-  $('#kb-tab-facts').hidden = name !== 'facts';
-  $('#kb-tab-entities').hidden = name !== 'entities';
-  $('#kb-tab-pods').hidden = name !== 'pods';
-  if (name === 'facts') kbRenderFacts();
-  if (name === 'entities' && !kb.entities.length && !kb.entitySearch) kbSearchEntities();
-  if (name === 'pods' && !kb.pods) kbLoadPods();
 }
 
 // ── Facts ────────────────────────────────────────────────────────────
@@ -345,6 +374,8 @@ function kbRenderFactDetail(ctx) {
   if (f.status) badges.push(`<span class="badge ${f.status === 'active' ? 'ok' : 'warn'}">${escape(f.status)}</span>`);
 
   const meta = [];
+  if (f.agent) meta.push(['written by', f.agent]);
+  if (f.namespace) meta.push(['memory scope', f.namespace]);
   if (f.sourceSection) meta.push(['source section', f.sourceSection]);
   if (f.uid) meta.push(['uid', f.uid]);
   const metaBlock = meta.length
@@ -357,23 +388,13 @@ function kbRenderFactDetail(ctx) {
         `<div class="kb-link-row"><span class="kb-link-name">${escape(d.title || `document #${d.id}`)}</span><span class="kb-tag">${escape(d.sourceType || 'doc')}</span></div>`).join('')}</div>`
     : '';
 
-  const ents = (ctx.entities || []).length
-    ? `<div class="kb-block"><div class="trace-block-h">Linked entities</div><div class="kb-chip-wrap">${ctx.entities.map((e) =>
-        `<button class="kb-entity-chip" data-entity-id="${e.id}" type="button"><span class="kb-etype ${escape(e.entityType)}"></span>${escape(e.name)}</button>`).join('')}</div></div>`
-    : '';
-
-  const rels = (ctx.relations || []).length
-    ? `<div class="kb-block"><div class="trace-block-h">Relations</div>${ctx.relations.map((r) =>
-        `<div class="kb-rel"><span class="kb-rel-node">${escape(r.sourceName)}</span><span class="kb-rel-type">${escape(titleCase(r.relationType))}</span><span class="kb-rel-node">${escape(r.targetName)}</span></div>`).join('')}</div>`
-    : '';
-
   return `<div class="kb-detail-pad">
     <div class="kb-detail-head">
       <div class="kb-badges">${badges.join('')}</div>
       <button class="btn ghost small kb-forget" data-uid="${escape(f.uid)}" type="button" title="Forget this fact">Forget</button>
     </div>
     <p class="kb-fact-body">${escape(f.content)}</p>
-    ${metaBlock}${docs}${ents}${rels}
+    ${metaBlock}${docs}
   </div>`;
 }
 
@@ -394,250 +415,12 @@ async function kbForgetFact(uid) {
   }
 }
 
-// ── Entities ─────────────────────────────────────────────────────────
-function kbRenderEntityTypeChips() {
-  const chip = (label, active, val) =>
-    `<button class="chip${active ? ' active' : ''}" data-kbetype="${val === null ? '' : val}" type="button">${escape(label)}</button>`;
-  $('#kb-entity-type').innerHTML = [
-    chip('All', kb.entityType === null, null),
-    ...ENTITY_TYPES.map((t) => chip(titleCase(t), kb.entityType === t, t)),
-  ].join('');
-}
-
-async function kbSearchEntities() {
-  kbRenderEntityTypeChips();
-  const list = $('#kb-entity-list');
-  list.innerHTML = kbSkeleton(6);
-  const params = {};
-  if (kb.entitySearch.trim()) params.query = kb.entitySearch.trim();
-  if (kb.entityType) params.entityType = kb.entityType;
-  if (!params.query && !params.entityType) params.entityType = 'topic'; // a sensible default browse
-  try {
-    const { entities } = await rpc('searchEntity', { ...params, limit: 50 });
-    kb.entities = entities || [];
-    kbRenderEntityList();
-  } catch (err) {
-    list.innerHTML = `<div class="empty">Couldn’t load entities: ${escape(err.message)}</div>`;
-  }
-}
-
-function kbRenderEntityList() {
-  const list = $('#kb-entity-list');
-  if (!kb.entities.length) {
-    list.innerHTML = `<div class="empty">No entities found${kb.entitySearch ? ` for “${escape(kb.entitySearch)}”` : ''}. Try another name or type.</div>`;
-    return;
-  }
-  list.innerHTML = kb.entities.map((e) => {
-    const sel = e.id === kb.selectedEntityId ? ' selected' : '';
-    return `<button class="kb-row${sel}" role="option" aria-selected="${sel ? 'true' : 'false'}" data-entity-id="${e.id}" type="button">
-      <span class="kb-row-main"><span class="kb-etype ${escape(e.entityType)}"></span><span class="kb-row-text">${escape(e.name)}</span></span>
-      <span class="kb-row-meta"><span class="kb-mentions">${escape(e.mentionCount || 0)}×</span></span>
-    </button>`;
-  }).join('');
-}
-
-async function kbSelectEntity(id) {
-  kb.selectedEntityId = Number(id);
-  // If entity isn't on the entities tab list, still highlight when present.
-  $$('#kb-entity-list .kb-row').forEach((r) => r.classList.toggle('selected', Number(r.dataset.entityId) === kb.selectedEntityId));
-  const pane = $('#kb-entity-detail');
-  pane.classList.add('open');
-  pane.innerHTML = `<div class="kb-detail-pad">${kbSkeleton(4)}</div>`;
-  try {
-    const ctx = await rpc('getEntityContext', { entityId: Number(id) });
-    if (ctx.notFound) { pane.innerHTML = `<div class="kb-detail-pad"><div class="empty">Entity not found.</div></div>`; return; }
-    pane.innerHTML = kbRenderEntityDetail(ctx);
-  } catch (err) {
-    pane.innerHTML = `<div class="kb-detail-pad"><div class="empty">Couldn’t load detail: ${escape(err.message)}</div></div>`;
-  }
-}
-
-function kbRenderEntityDetail(ctx) {
-  const e = ctx.entity;
-  const facts = (ctx.facts || []).length
-    ? `<div class="kb-block"><div class="trace-block-h">Facts (${ctx.facts.length})</div>${ctx.facts.map((f) =>
-        `<div class="kb-mini-fact">${escape(f.content)}</div>`).join('')}</div>`
-    : '';
-  const rels = (ctx.relations || []).length
-    ? `<div class="kb-block"><div class="trace-block-h">Relations (${ctx.relations.length})</div>${ctx.relations.map((r) =>
-        `<button class="kb-rel kb-rel-btn" data-entity-id="${r.entityId}" type="button"><span class="kb-rel-type">${escape(titleCase(r.relationType))}</span><span class="kb-rel-node"><span class="kb-etype ${escape(r.entityType)}"></span>${escape(r.name)}</span></button>`).join('')}</div>`
-    : '';
-  return `<div class="kb-detail-pad">
-    <div class="kb-detail-head">
-      <div>
-        <div class="kb-entity-title"><span class="kb-etype ${escape(e.entityType)}"></span>${escape(e.name)}</div>
-        <div class="kb-entity-sub">${escape(titleCase(e.entityType))} · ${escape(e.mentionCount || 0)} mention${e.mentionCount === 1 ? '' : 's'}</div>
-      </div>
-      <button class="btn small kb-graph-open" data-entity-id="${e.id}" data-name="${escape(e.name)}" type="button">View graph</button>
-    </div>
-    ${e.description ? `<p class="kb-fact-body">${escape(e.description)}</p>` : ''}
-    <div class="kb-graph-mount" id="kb-graph-mount" hidden></div>
-    ${rels}${facts}
-  </div>`;
-}
-
-// ── Pods ─────────────────────────────────────────────────────────────
-async function kbLoadPods() {
-  const list = $('#kb-pod-list');
-  list.innerHTML = kbSkeleton(5);
-  try {
-    const { pods } = await rpc('listPods', { limit: 50 });
-    kb.pods = pods || [];
-    if (!kb.pods.length) {
-      list.innerHTML = `<div class="empty">No pods yet. Pods group facts by session and project as your agents work.</div>`;
-      return;
-    }
-    list.innerHTML = `<div class="kb-pod-head"><span>Pod</span><span>Type</span><span>Facts</span><span>Docs</span><span>Updated</span></div>` +
-      kb.pods.map((p) =>
-        `<div class="kb-pod-row">
-          <span class="kb-pod-name">${escape(p.name || p.uid)}</span>
-          <span class="kb-tag">${escape(p.podType || '—')}</span>
-          <span class="kb-pod-num">${escape(p.memberFactCount)}</span>
-          <span class="kb-pod-num">${escape(p.memberDocCount)}</span>
-          <span class="kb-pod-when">${escape(p.updatedAt ? formatTime(p.updatedAt) : '—')}</span>
-        </div>`).join('');
-  } catch (err) {
-    list.innerHTML = `<div class="empty">Couldn’t load pods: ${escape(err.message)}</div>`;
-  }
-}
-
-// ── Interactive relationship graph (hand-rolled SVG) ─────────────────
-async function kbOpenGraph(entityId, name) {
-  const mount = $('#kb-graph-mount');
-  if (!mount) return;
-  mount.hidden = false;
-  mount.innerHTML = `<div class="kb-graph-loading">${kbSkeleton(2)}</div>`;
-  try {
-    const res = await rpc('traverseGraph', { startEntityId: Number(entityId), action: 'neighbors', maxDepth: 1, limit: 14 });
-    if (res.notFound) { mount.innerHTML = `<div class="empty">No graph for this entity.</div>`; return; }
-    kbRenderGraph(mount, res.start || { id: Number(entityId), name }, res.relations || []);
-  } catch (err) {
-    mount.innerHTML = `<div class="empty">Couldn’t build graph: ${escape(err.message)}</div>`;
-  }
-}
-
-function kbRenderGraph(mount, center, relations) {
-  const W = mount.clientWidth || 520;
-  const H = 320;
-  const cx = W / 2, cy = H / 2;
-  const R = Math.min(W, H) / 2 - 56;
-  const neighbors = relations.slice(0, 12);
-
-  if (!neighbors.length) {
-    mount.innerHTML = `<div class="kb-graph-empty"><div class="kb-node focal"><span>${escape(center.name)}</span></div><p class="muted">No relations recorded for this entity yet.</p></div>`;
-    return;
-  }
-
-  const nodes = [{ id: center.id, name: center.name, type: center.entityType, x: cx, y: cy, focal: true }];
-  const edges = [];
-  neighbors.forEach((r, i) => {
-    const ang = (i / neighbors.length) * Math.PI * 2 - Math.PI / 2;
-    const x = cx + Math.cos(ang) * R;
-    const y = cy + Math.sin(ang) * R;
-    nodes.push({ id: r.entityId, name: r.name, type: r.entityType, x, y, focal: false });
-    edges.push({ from: 0, to: nodes.length - 1, label: titleCase(r.relationType) });
-  });
-
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('class', 'kb-graph-svg');
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  svg.setAttribute('width', '100%');
-  svg.setAttribute('height', String(H));
-  svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', `Relationship graph for ${center.name}`);
-
-  const edgeLayer = document.createElementNS(ns, 'g');
-  const labelLayer = document.createElementNS(ns, 'g');
-  const nodeLayer = document.createElementNS(ns, 'g');
-  svg.append(edgeLayer, labelLayer, nodeLayer);
-
-  function draw() {
-    edgeLayer.replaceChildren();
-    labelLayer.replaceChildren();
-    for (const e of edges) {
-      const a = nodes[e.from], b = nodes[e.to];
-      const line = document.createElementNS(ns, 'line');
-      line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
-      line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
-      line.setAttribute('class', 'kb-edge');
-      edgeLayer.appendChild(line);
-      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
-      const t = document.createElementNS(ns, 'text');
-      t.setAttribute('x', mx); t.setAttribute('y', my - 3);
-      t.setAttribute('class', 'kb-edge-label');
-      t.setAttribute('text-anchor', 'middle');
-      t.textContent = e.label;
-      labelLayer.appendChild(t);
-    }
-  }
-
-  function nodeEl(n, _idx) {
-    const g = document.createElementNS(ns, 'g');
-    g.setAttribute('class', `kb-node-g${n.focal ? ' focal' : ''}`);
-    g.setAttribute('tabindex', '0');
-    g.setAttribute('role', 'button');
-    g.setAttribute('aria-label', n.focal ? `${n.name} (focus)` : `${n.name}, expand`);
-    const label = (n.name || '').length > 16 ? n.name.slice(0, 15) + '…' : n.name;
-    const w = Math.max(54, label.length * 7.4 + 20);
-    const rect = document.createElementNS(ns, 'rect');
-    rect.setAttribute('x', -w / 2); rect.setAttribute('y', -13);
-    rect.setAttribute('width', w); rect.setAttribute('height', 26);
-    rect.setAttribute('rx', '2');
-    rect.setAttribute('class', `kb-node-box type-${n.type || 'topic'}`);
-    const text = document.createElementNS(ns, 'text');
-    text.setAttribute('class', 'kb-node-label');
-    text.setAttribute('text-anchor', 'middle');
-    text.setAttribute('dy', '4');
-    text.textContent = label;
-    g.append(rect, text);
-    positionNode(g, n);
-
-    // drag
-    let dragging = false, moved = false, ox = 0, oy = 0;
-    g.addEventListener('pointerdown', (ev) => {
-      dragging = true; moved = false;
-      ox = ev.clientX; oy = ev.clientY;
-      g.setPointerCapture(ev.pointerId);
-      g.classList.add('dragging');
-    });
-    g.addEventListener('pointermove', (ev) => {
-      if (!dragging) return;
-      const scale = W / svg.getBoundingClientRect().width;
-      const dx = (ev.clientX - ox) * scale, dy = (ev.clientY - oy) * scale;
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
-      n.x += dx; n.y += dy; ox = ev.clientX; oy = ev.clientY;
-      positionNode(g, n); draw();
-    });
-    g.addEventListener('pointerup', (ev) => {
-      dragging = false; g.classList.remove('dragging');
-      g.releasePointerCapture(ev.pointerId);
-      if (!moved && !n.focal) kbOpenGraph(n.id, n.name); // click neighbor → re-center
-    });
-    g.addEventListener('keydown', (ev) => {
-      if ((ev.key === 'Enter' || ev.key === ' ') && !n.focal) { ev.preventDefault(); kbOpenGraph(n.id, n.name); }
-    });
-    return g;
-  }
-  function positionNode(g, n) { g.setAttribute('transform', `translate(${n.x},${n.y})`); }
-
-  draw();
-  nodes.forEach((n, i) => nodeLayer.appendChild(nodeEl(n, i)));
-  mount.replaceChildren(svg);
-  const hint = document.createElement('p');
-  hint.className = 'kb-graph-hint muted';
-  hint.textContent = 'Drag to rearrange · click a neighbor to expand it';
-  mount.appendChild(hint);
-}
-
 // ── KB event wiring (delegated) ──────────────────────────────────────
 function kbSkeleton(n) {
   return `<div class="kb-skel-wrap">${Array.from({ length: n }, () => '<div class="kb-skel"></div>').join('')}</div>`;
 }
 
 $('#kb-refresh')?.addEventListener('click', refreshKb);
-$$('.kb-tab').forEach((t) => t.addEventListener('click', () => kbSetTab(t.dataset.kbtab)));
-
 $('#kb-fact-search')?.addEventListener('input', (e) => { kb.factSearch = e.target.value; kbRenderFacts(); });
 $('#kb-fact-ns')?.addEventListener('click', (e) => {
   const b = e.target.closest('[data-kbfilter="ns"]'); if (!b) return;
@@ -651,413 +434,163 @@ $('#kb-fact-list')?.addEventListener('click', (e) => {
   const row = e.target.closest('.kb-row'); if (row) kbSelectFact(row.dataset.uid);
 });
 $('#kb-fact-detail')?.addEventListener('click', (e) => {
-  const forget = e.target.closest('.kb-forget'); if (forget) { kbForgetFact(forget.dataset.uid); return; }
-  const ent = e.target.closest('[data-entity-id]');
-  if (ent) { kbSetTab('entities'); kbSelectEntity(ent.dataset.entityId); }
+  const forget = e.target.closest('.kb-forget'); if (forget) kbForgetFact(forget.dataset.uid);
 });
 
-let entitySearchTimer = null;
-$('#kb-entity-search')?.addEventListener('input', (e) => {
-  kb.entitySearch = e.target.value;
-  clearTimeout(entitySearchTimer);
-  entitySearchTimer = setTimeout(kbSearchEntities, 220);
-});
-$('#kb-entity-type')?.addEventListener('click', (e) => {
-  const b = e.target.closest('[data-kbetype]'); if (!b) return;
-  kb.entityType = b.dataset.kbetype || null; kbSearchEntities();
-});
-$('#kb-entity-list')?.addEventListener('click', (e) => {
-  const row = e.target.closest('.kb-row'); if (row) kbSelectEntity(row.dataset.entityId);
-});
-$('#kb-entity-detail')?.addEventListener('click', (e) => {
-  const g = e.target.closest('.kb-graph-open');
-  if (g) { kbOpenGraph(g.dataset.entityId, g.dataset.name); return; }
-  const rel = e.target.closest('.kb-rel-btn');
-  if (rel) kbSelectEntity(rel.dataset.entityId);
-});
 
-// ════════════════════════════════════════════════════════════════════
-// GRAPH VIEW — whole-KB force-directed graph (Obsidian-style)
-// Rendered with vasturiano/force-graph (vendored UMD): d3-force physics +
-// HTML5 canvas, with drag / pan / zoom / hover / auto-resize handled by the
-// library. We keep custom canvas drawing so nodes, links and labels match the
-// Sigil design tokens. Facts + entities are nodes; fact→entity mentions and
-// entity→entity relations are edges.
-// ════════════════════════════════════════════════════════════════════
-const graph = {
-  loaded: false,
-  raw: null,            // { nodes, edges, counts, truncated }
-  fg: null,             // ForceGraph instance
-  adj: new Map(),       // id → Set(neighbour ids), for hover-highlight
-  hover: null,
-  _fitted: false,
-};
+const runtime = { busy: false, status: null };
 
-// Entity-type palette — brand-forward: topics (the most common entity) take the
-// brand blue so the graph reads mostly-blue and on-brand, with person/document
-// as light-blue / teal accents. Mirrors the --etype-* design tokens (one source
-// of truth). Used by the graph nodes and the KB browser's type dots/legend.
-const ENTITY_COLORS = { person: '#9bd6ff', topic: '#2f81f7', document: '#36cfa6' };
-const FACT_COLOR = '#565a63';   // --etype-fact: visible-but-secondary on canvas
-const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-let _graphPointer = { x: 0, y: 0 };
-
-async function initGraphView() {
-  if (graph.loaded) { graph.hover = null; hideTooltip(); sizeGraph(); graph.fg?.zoomToFit(400, 64); return; }
-  await loadGraph();
+function setRuntimeResult(message = '', variant = '') {
+  const node = $('#runtime-result');
+  if (!node) return;
+  node.hidden = !message;
+  node.className = `result${variant ? ` ${variant}` : ''}`;
+  node.textContent = message;
 }
 
-async function loadGraph() {
-  const overlay = $('#graph-overlay');
-  overlay.innerHTML = `<div class="graph-status">Building graph…</div>`;
-  overlay.style.display = 'flex';
-  try {
-    const data = await fetchGraphData();
-    graph.raw = data;
-    $('#graph-meta').textContent =
-      `${data.counts.facts} facts · ${data.counts.entities} entities · ${data.counts.edges} links${data.truncated ? ' (capped)' : ''}`;
-    if (!data.nodes.length) {
-      overlay.innerHTML = `<div class="graph-status">No memory to graph yet. As your agents store facts, the map fills in.</div>`;
-      return;
-    }
-    overlay.style.display = 'none';
-    buildGraph(data);
-    graph.loaded = true;
-  } catch (err) {
-    overlay.innerHTML = `<div class="graph-status err">Couldn’t build the graph: ${escape(err.message)}</div>`;
-  }
+function runtimeBadge(kind, label) {
+  const node = $('#runtime-state');
+  if (!node) return;
+  node.className = `badge ${kind}`;
+  node.textContent = label;
 }
 
-// Primary: single graphSnapshot RPC. Fallback (older daemons without it):
-// compose from listFacts + per-fact getFactContext + searchEntity.
-async function fetchGraphData() {
-  try {
-    return await rpc('graphSnapshot', { limit: 600 });
-  } catch (err) {
-    // Older daemons don't have graphSnapshot — compose from existing RPCs.
-    // Any other error (DB down, etc.) should surface, not silently degrade.
-    if (err.code === 'unknown_method') return composeGraphData();
-    throw err;
-  }
-}
+function renderRuntime(status) {
+  runtime.status = status;
+  const card = $('#runtime-card');
+  const summary = $('#runtime-summary');
+  const detail = $('#runtime-detail');
+  const actions = $('#runtime-actions');
+  if (!card || !summary || !detail || !actions) return;
+  card.setAttribute('aria-busy', 'false');
 
-async function composeGraphData() {
-  const FACT_CAP = 150;
-  const [{ facts }, ...entityGroups] = await Promise.all([
-    rpc('listFacts', { limit: FACT_CAP }),
-    rpc('searchEntity', { entityType: 'person', limit: 200 }).catch(() => ({ entities: [] })),
-    rpc('searchEntity', { entityType: 'topic', limit: 200 }).catch(() => ({ entities: [] })),
-    rpc('searchEntity', { entityType: 'document', limit: 200 }).catch(() => ({ entities: [] })),
-  ]);
-  const entityMap = new Map();
-  for (const g of entityGroups) for (const e of g.entities) entityMap.set(e.id, e);
-
-  const edges = [];
-  const relSeen = new Set();
-  const degree = new Map();
-  const bump = (k) => degree.set(k, (degree.get(k) || 0) + 1);
-
-  // Fetch each fact's context with bounded concurrency.
-  const contexts = await mapLimit(facts, 8, (f) => rpc('getFactContext', { uid: f.uid }).catch(() => null));
-  facts.forEach((f, i) => {
-    const ctx = contexts[i];
-    if (!ctx || ctx.notFound) return;
-    for (const e of ctx.entities || []) {
-      if (!entityMap.has(e.id)) entityMap.set(e.id, { id: e.id, name: e.name, entityType: e.entityType, mentionCount: 0 });
-      const s = `f${f.id}`, t = `e${e.id}`;
-      edges.push({ source: s, target: t, kind: 'mentions' }); bump(s); bump(t);
-    }
-    for (const r of ctx.relations || []) {
-      // relations come keyed by names here; skip if we can't resolve to ids cheaply
-      const key = `${r.relationType}:${r.sourceName}->${r.targetName}`;
-      if (relSeen.has(key)) continue;
-      relSeen.add(key);
-    }
-  });
-
-  const nodes = [
-    ...[...entityMap.values()].map((e) => ({
-      id: `e${e.id}`, refId: e.id, kind: 'entity', label: e.name,
-      entityType: e.entityType || 'topic', mentions: e.mentionCount || 0, degree: degree.get(`e${e.id}`) || 0,
-    })),
-    ...facts.map((f) => ({
-      id: `f${f.id}`, refId: f.id, kind: 'fact', label: (f.content || '').slice(0, 160),
-      category: f.category || null, degree: degree.get(`f${f.id}`) || 0,
-    })),
-  ];
-  return { nodes, edges, truncated: facts.length >= FACT_CAP, counts: { facts: facts.length, entities: entityMap.size, edges: edges.length, relations: 0 } };
-}
-
-async function mapLimit(items, limit, fn) {
-  const out = new Array(items.length);
-  let i = 0;
-  async function worker() { while (i < items.length) { const idx = i++; out[idx] = await fn(items[idx], idx); } }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return out;
-}
-
-function buildGraph(data) {
-  const mount = $('#graph-canvas');
-  if (typeof ForceGraph === 'undefined') throw new Error('graph engine failed to load');
-
-  // node radius: entities scale gently with degree+mentions (tight range so
-  // hubs don't dwarf everything); facts are small dots. Spread each node so
-  // force-graph mutates a fresh copy, leaving graph.raw intact.
-  const nodes = data.nodes.map((n) => {
-    const deg = n.degree || 0;
-    const r = n.kind === 'entity'
-      ? Math.max(3.5, Math.min(3 + Math.sqrt(deg + (n.mentions || 0)) * 1.5, 11))
-      : 2.4;
-    return { ...n, r };
-  });
-  const links = data.edges.map((e) => ({ ...e }));
-
-  // adjacency (by id) for hover-highlight — built now, before force-graph swaps
-  // each link's source/target from an id string to a node reference.
-  const adj = new Map();
-  for (const n of nodes) adj.set(n.id, new Set());
-  for (const e of data.edges) {
-    if (adj.has(e.source) && adj.has(e.target)) {
-      adj.get(e.source).add(e.target);
-      adj.get(e.target).add(e.source);
-    }
-  }
-  graph.adj = adj;
-  graph.hover = null;
-  graph._fitted = false;
-  // On dense graphs, only label the biggest hubs at the default zoom (zooming
-  // past 1.45 still reveals every entity label, hover always labels).
-  graph._hubMin = nodes.length > 150 ? 10 : 2;
-
-  // Reuse the instance across refreshes so we don't leak canvases/listeners.
-  if (graph.fg) {
-    graph.fg.graphData({ nodes, links });
-    graph.fg.d3ReheatSimulation();
-    sizeGraph();
+  const supervisor = status?.supervisor || {};
+  if (supervisor.unsupported) {
+    runtimeBadge('info', 'on demand');
+    summary.textContent = 'This platform starts Sigil when a local tool needs memory.';
+    detail.textContent = 'An always-on background service is not available here. Storage and retrieval still stay local.';
+    actions.innerHTML = '<button type="button" class="btn" data-runtime-action="refresh">Check again</button>';
     return;
   }
 
-  const fg = new ForceGraph(mount)
-    .backgroundColor('rgba(0,0,0,0)')          // let the CSS dotted grid show through
-    .nodeId('id')
-    .nodeCanvasObject(drawNode)                 // custom draw → matches design tokens
-    .nodePointerAreaPaint((n, color, ctx) => { // generous, radius-aware hit target
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, Math.max(n.r, 6), 0, 2 * Math.PI);
-      ctx.fill();
-    })
-    .linkColor(graphLinkColor)
-    .linkWidth((l) => (l.kind === 'relation' ? 1.3 : 1))
-    .onNodeHover(onGraphHover)
-    .onNodeClick((n) => openGraphNode(n))
-    .onNodeDragEnd((n) => { n.fx = n.x; n.fy = n.y; })  // pin a deliberately-placed node
-    .onBackgroundClick(() => { graph.hover = null; hideTooltip(); })
-    .warmupTicks(reducedMotion ? 200 : 0)      // pre-settle invisibly if motion is reduced
-    .cooldownTicks(reducedMotion ? 0 : 200);   // …then stop quickly (bounded animation)
-
-  // Tune the d3 forces for an Obsidian-style constellation. A collision force
-  // (below) does the spacing, so charge/links can stay gentle — that's what
-  // keeps the graph compact instead of scattering: short links pull connected
-  // nodes into tight rosettes, light repulsion just separates clusters, and
-  // collision guarantees no overlap. The default forceCenter re-centres the
-  // centroid each tick, so orphans can't drift off-canvas. Forces ease off as
-  // the KB grows so a big graph doesn't blow up.
-  const n = nodes.length;
-  const charge = n > 400 ? -22 : n > 150 ? -45 : -90;
-  fg.d3Force('charge').strength(charge).distanceMax(170);
-  fg.d3Force('link').distance(24).strength(0.28);
-  fg.d3Force('collide', collideForce((nd) => nd.r + 2, 0.9));
-
-  // Auto-fit once the layout settles: fit instantly, then clamp zoom to 1.5×
-  // so the graph fills the frame on a small KB without ballooning the nodes.
-  fg.onEngineStop(() => {
-    if (graph._fitted) return;
-    graph._fitted = true;
-    fg.zoomToFit(0, 55);
-    if (fg.zoom() > 1.5) fg.zoom(1.5, 0);
-  });
-
-  graph.fg = fg;
-  fg.graphData({ nodes, links });
-  sizeGraph();
-}
-
-// Minimal collision force (d3-force compatible: a function called each tick
-// plus an .initialize hook that receives the node array). force-graph bundles
-// d3-force privately and doesn't expose forceCollide, so we register our own.
-// O(n²) per tick — fine for a few hundred nodes (the old engine did the same).
-// `radius(node)` → the keep-out radius; `strength` 0..1 damps the push.
-function collideForce(radius, strength = 0.85) {
-  let nodes = [];
-  function force() {
-    for (let i = 0; i < nodes.length; i++) {
-      const a = nodes[i];
-      const ra = radius(a);
-      for (let j = i + 1; j < nodes.length; j++) {
-        const b = nodes[j];
-        // resolve against the post-velocity position, like d3.forceCollide
-        let dx = (b.x + b.vx) - (a.x + a.vx);
-        let dy = (b.y + b.vy) - (a.y + a.vy);
-        let d2 = dx * dx + dy * dy;
-        const rmin = ra + radius(b);
-        if (d2 < rmin * rmin) {
-          if (d2 === 0) { dx = (i - j) * 0.5; dy = (j - i) * 0.5; d2 = dx * dx + dy * dy; }
-          const d = Math.sqrt(d2);
-          const push = ((rmin - d) / d) * strength * 0.5;
-          const ox = dx * push, oy = dy * push;
-          a.vx -= ox; a.vy -= oy;
-          b.vx += ox; b.vy += oy;
-        }
-      }
-    }
+  if (supervisor.installed && supervisor.running) {
+    runtimeBadge('ok', 'automatic start on');
+    summary.textContent = `Sigil starts at login and restarts if it stops (${supervisor.manager}).`;
+    detail.textContent = 'The memory engine is managed locally. Restart it only if diagnostics say it is unresponsive.';
+    actions.innerHTML = `
+      <button type="button" class="btn" data-runtime-action="refresh">Check now</button>
+      <button type="button" class="btn" data-runtime-action="restart">Restart memory engine</button>
+      <button type="button" class="btn danger" data-runtime-action="confirm-uninstall">Disable automatic start</button>`;
+    return;
   }
-  force.initialize = (_nodes) => { nodes = _nodes; };
-  return force;
-}
 
-// Custom node renderer — colours by entity type, sizes by degree, and shows
-// labels for hubs (always), leaf entities (zoomed in / hovered) and facts (only
-// on hover). `scale` is the current zoom (k), so dividing by it keeps strokes
-// and label text screen-constant while node radii scale with zoom.
-function drawNode(n, ctx, scale) {
-  const hoverId = graph.hover?.id;
-  const lit = hoverId ? graph.adj.get(hoverId) : null;
-  const on = !hoverId || n.id === hoverId || lit?.has(n.id);
-  ctx.globalAlpha = on ? 1 : 0.18;
-  ctx.beginPath();
-  ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-  if (n.kind === 'entity') {
-    ctx.fillStyle = ENTITY_COLORS[n.entityType] || ENTITY_COLORS.topic;
-    ctx.fill();
-    if (n.id === hoverId) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = '#f4f5f6'; ctx.stroke(); }
-  } else {
-    ctx.fillStyle = FACT_COLOR;
-    ctx.fill();
-    if (n.id === hoverId) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = '#0084ff'; ctx.stroke(); }
+  if (supervisor.installed) {
+    runtimeBadge('warn', 'needs attention');
+    summary.textContent = `Automatic start is installed, but ${supervisor.manager} is not running Sigil.`;
+    detail.textContent = 'Restart the managed service. Your stored memories are not changed.';
+    actions.innerHTML = `
+      <button type="button" class="btn" data-runtime-action="refresh">Check now</button>
+      <button type="button" class="btn primary" data-runtime-action="restart">Restart memory engine</button>
+      <button type="button" class="btn danger" data-runtime-action="confirm-uninstall">Disable automatic start</button>`;
+    return;
   }
-  ctx.globalAlpha = 1;
-  const isHub = n.kind === 'entity' && (n.degree || 0) >= (graph._hubMin || 2);
-  const showLabel = n.id === hoverId || (n.kind === 'entity' && on && (isHub || scale > 1.45));
-  if (showLabel) {
-    const label = n.label.length > 26 ? n.label.slice(0, 25) + '…' : n.label;
-    ctx.font = `${n.kind === 'entity' ? 600 : 400} ${11 / scale}px 'Geist', ui-sans-serif, system-ui, sans-serif`;
-    ctx.fillStyle = on ? '#f4f5f6' : '#74777d';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    ctx.fillText(label, n.x, n.y + n.r + 2 / scale);
-  }
+
+  runtimeBadge('warn', 'manual start');
+  summary.textContent = 'Sigil runs when a local tool calls it, but it is not set to start automatically.';
+  detail.textContent = 'Enable automatic start to keep memory available after login, sleep, or a crash.';
+  actions.innerHTML = `
+    <button type="button" class="btn" data-runtime-action="refresh">Check now</button>
+    <button type="button" class="btn primary" data-runtime-action="install">Enable automatic start</button>`;
 }
 
-// Edge colour — three tiers: incident-to-hover (bright), idle (legible at
-// rest), non-incident-while-hovering (faded so the focused subgraph reads
-// clearly). Works whether source/target are id strings or node refs.
-function graphLinkColor(l) {
-  const hoverId = graph.hover?.id;
-  const sid = (l.source && l.source.id) ?? l.source;
-  const tid = (l.target && l.target.id) ?? l.target;
-  const incident = sid === hoverId || tid === hoverId;
-  const faded = hoverId && !incident;
-  if (l.kind === 'relation') {
-    return incident ? 'rgba(0,132,255,0.7)' : faded ? 'rgba(0,132,255,0.06)' : 'rgba(0,132,255,0.3)';
-  }
-  return incident ? 'rgba(164,167,179,0.6)' : faded ? 'rgba(140,142,150,0.05)' : 'rgba(146,149,171,0.22)';
-}
-
-// Hover → drive the existing tooltip + cursor. force-graph repaints every
-// frame, so updating graph.hover here is enough for drawNode / graphLinkColor
-// to reflect the highlight.
-function onGraphHover(n) {
-  graph.hover = n || null;
-  const mount = $('#graph-canvas');
-  if (mount) mount.style.cursor = n ? 'pointer' : 'grab';
-  if (n) showTooltip(n, _graphPointer.x, _graphPointer.y);
-  else hideTooltip();
-}
-
-// Keep the force-graph canvas matched to its container (fixes the old 0×0 /
-// stale-size races: we re-assert size on enter and on every container resize).
-function sizeGraph() {
-  if (!graph.fg) return;
-  const stage = $('#graph-stage');
-  const w = stage.clientWidth, h = stage.clientHeight;
-  if (w > 0 && h > 0) graph.fg.width(w).height(h);
-}
-
-// ── graph interactions (toolbar, tooltip placement, resize) ──────────
-// Drag / pan / zoom / hover hit-testing are all handled by force-graph; here
-// we only wire the toolbar buttons, keep the tooltip glued to the pointer
-// (onNodeHover gives us the node but no coords), and keep the canvas sized to
-// its container — which kills the old 0×0 / stale-size races.
-(function wireGraph() {
-  const stage = $('#graph-stage');
-
-  stage?.addEventListener('pointermove', (e) => {
-    const rect = stage.getBoundingClientRect();
-    _graphPointer.x = e.clientX - rect.left;
-    _graphPointer.y = e.clientY - rect.top;
-    if (graph.hover) showTooltip(graph.hover, _graphPointer.x, _graphPointer.y);
-  });
-  stage?.addEventListener('pointerleave', () => { graph.hover = null; hideTooltip(); });
-
-  const zoomBy = (f) => { if (graph.fg) graph.fg.zoom(graph.fg.zoom() * f, 200); };
-  $('#graph-zoom-in')?.addEventListener('click', () => zoomBy(1.25));
-  $('#graph-zoom-out')?.addEventListener('click', () => zoomBy(1 / 1.25));
-  $('#graph-zoom-fit')?.addEventListener('click', () => graph.fg?.zoomToFit(400, 64));
-  $('#graph-refresh')?.addEventListener('click', () => { graph.loaded = false; loadGraph(); });
-  $('#graph-relayout')?.addEventListener('click', () => {
-    if (!graph.fg) return;
-    // unpin every node, then re-run the layout from the current positions
-    for (const n of graph.fg.graphData().nodes) { n.fx = undefined; n.fy = undefined; }
-    graph._fitted = false;
-    graph.fg.d3ReheatSimulation();
-  });
-
-  if (stage && 'ResizeObserver' in window) {
-    new ResizeObserver(() => sizeGraph()).observe(stage);
-  }
-})();
-
-function showTooltip(n, sx, sy) {
-  const tip = $('#graph-tooltip');
-  if (!n) { hideTooltip(); return; }
-  tip.hidden = false;
-  tip.innerHTML = n.kind === 'entity'
-    ? `<span class="gt-kind">${escape(titleCase(n.entityType))}</span>${escape(n.label)}<span class="gt-meta">${n.mentions} mentions · ${n.degree} links</span>`
-    : `<span class="gt-kind">Fact</span>${escape(n.label)}`;
-  const stage = $('#graph-stage');
-  const tw = tip.offsetWidth || 220, th = tip.offsetHeight || 64;
-  tip.style.left = Math.max(4, Math.min(sx + 14, stage.clientWidth - tw - 4)) + 'px';
-  tip.style.top = Math.max(4, Math.min(sy + 14, stage.clientHeight - th - 4)) + 'px';
-}
-function hideTooltip() { const t = $('#graph-tooltip'); if (t) t.hidden = true; }
-
-function openGraphNode(n) {
-  setRoute('kb');
-  if (n.kind === 'entity') { kbSetTab('entities'); kbSelectEntity(n.refId); }
-  else {
-    kbSetTab('facts');
-    // ensure facts are loaded, then select the row
-    if (kb.facts.length) kbSelectFactById(n.refId);
-    else kbLoadFacts().then(() => kbSelectFactById(n.refId));
-  }
-}
-function kbSelectFactById(factId) {
-  const f = kb.facts.find((x) => x.refId === factId || x.id === factId);
-  if (f) kbSelectFact(f.uid);
-  else rpc('getFactContext', { factId }).then((ctx) => {
-    if (ctx?.fact?.uid) kbSelectFact(ctx.fact.uid);
-  }).catch(() => {});
-}
-
-async function refreshMethods() {
+async function refreshRuntime({ quiet = false } = {}) {
+  const card = $('#runtime-card');
+  if (!card || runtime.busy) return;
+  if (!quiet) card.setAttribute('aria-busy', 'true');
   try {
-    const res = await fetch('/api/v1/methods', { credentials: 'same-origin' });
-    const body = await res.json();
-    $('#methods-list').innerHTML = body.data.methods.map((m) => `<li><span class="badge info">RPC</span>${escape(m)}</li>`).join('');
+    renderRuntime(await rpc('serviceStatus'));
   } catch (err) {
-    $('#methods-list').innerHTML = `<li class="muted">${escape(err.message)}</li>`;
+    card.setAttribute('aria-busy', 'false');
+    runtimeBadge('danger', 'unavailable');
+    $('#runtime-summary').textContent = 'Sigil could not check the local runtime.';
+    $('#runtime-detail').textContent = 'Check that the daemon is running, then try again.';
+    $('#runtime-actions').innerHTML = '<button type="button" class="btn primary" data-runtime-action="refresh">Try again</button>';
+    setRuntimeResult(err.message, 'err');
   }
 }
+
+function confirmRuntimeUninstall() {
+  const host = $('#runtime-confirm');
+  if (!host) return;
+  host.innerHTML = `
+    <div class="result warn">
+      <strong>Disable automatic start?</strong>
+      <span>Sigil will still start when a local tool requests memory.</span>
+      <div class="settings-actions">
+        <button type="button" class="btn danger" data-runtime-confirm="uninstall">Disable automatic start</button>
+        <button type="button" class="btn" data-runtime-cancel>Cancel</button>
+      </div>
+    </div>`;
+  host.querySelector('[data-runtime-cancel]').addEventListener('click', () => { host.innerHTML = ''; });
+  host.querySelector('[data-runtime-confirm]').addEventListener('click', () => runRuntimeAction('uninstall'));
+}
+
+async function runRuntimeAction(action) {
+  if (runtime.busy) return;
+  if (action === 'confirm-uninstall') return confirmRuntimeUninstall();
+  if (action === 'refresh') return refreshRuntime();
+
+  runtime.busy = true;
+  const card = $('#runtime-card');
+  card?.setAttribute('aria-busy', 'true');
+  $$('#runtime-actions button, #runtime-confirm button').forEach((button) => { button.disabled = true; });
+  const words = { install: 'Enabling automatic start…', restart: 'Restarting memory engine…', uninstall: 'Disabling automatic start…' };
+  setRuntimeResult(words[action] || 'Working…');
+  try {
+    if (action === 'install') {
+      await rpc('serviceInstall');
+      setRuntimeResult('Automatic start enabled. Waiting for the local GUI to come back…', 'ok');
+      waitForGuiRecovery();
+      return;
+    }
+    if (action === 'restart') {
+      await rpc('serviceRestart');
+      setRuntimeResult('Restart requested. Checking the local service again…', 'ok');
+      setTimeout(() => refreshRuntime(), 900);
+      return;
+    }
+    if (action === 'uninstall') {
+      await rpc('serviceUninstall');
+      $('#runtime-confirm').innerHTML = '';
+      setRuntimeResult('Automatic start disabled. Sigil will still start when a local tool needs it.', 'ok');
+    }
+  } catch (err) {
+    setRuntimeResult(err.message, 'err');
+  } finally {
+    runtime.busy = false;
+    card?.setAttribute('aria-busy', 'false');
+    if (action !== 'install' && action !== 'restart') refreshRuntime({ quiet: true });
+  }
+}
+
+async function waitForGuiRecovery({ attempts = 60, delayMs = 500 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    try {
+      const response = await fetch('/healthz', { cache: 'no-store', credentials: 'same-origin' });
+      if (response.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch { /* the old daemon is still handing off the loopback port */ }
+  }
+  setRuntimeResult('Automatic start is enabled, but the GUI did not return in 30 seconds. Run `sigil daemon open` to reopen it.', 'warn');
+}
+
+$('#runtime-actions')?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-runtime-action]');
+  if (button) runRuntimeAction(button.dataset.runtimeAction);
+});
 
 async function refreshEnv() {
   // Config summary from the config store (config.json), secrets masked.
@@ -1070,10 +603,19 @@ async function refreshEnv() {
       : db.mode === 'embedded' ? 'built-in (embedded)'
       : 'not configured';
     $('#cfg-db').textContent = `${dbDesc}${c.setup?.steps?.database === 'done' ? ' · ready' : ''}`;
+    const dbReady = c.setup?.steps?.database === 'done';
+    $('#cfg-db-state').className = `badge ${dbReady ? 'ok' : 'warn'}`;
+    $('#cfg-db-state').textContent = dbReady ? 'ready' : 'needs setup';
     $('#cfg-llm').textContent = c.llm?.provider ? `${c.llm.provider}${c.llm.model ? ` · ${c.llm.model}` : ''}` : 'not configured';
+    $('#cfg-disable-llm').hidden = !c.llm?.provider;
+    $('#cfg-llm-state').className = `badge ${c.llm?.provider ? 'info' : ''}`;
+    $('#cfg-llm-state').textContent = c.llm?.provider ? 'enabled' : 'off';
     $('#cfg-emb').textContent = c.embedding?.provider
       ? `${c.embedding.provider} · ${c.embedding.model} · ${c.embedding.dim}d`
       : 'not configured';
+    const embReady = Boolean(c.embedding?.provider);
+    $('#cfg-emb-state').className = `badge ${embReady ? 'ok' : 'warn'}`;
+    $('#cfg-emb-state').textContent = embReady ? 'ready' : 'needs setup';
     const tbody = $('#env-table tbody');
     if (tbody) {
       const rows = [
@@ -1085,7 +627,6 @@ async function refreshEnv() {
         ['Embedding model', c.embedding?.model || '—'],
         ['Embedding dim', String(c.embedding?.dim || '—')],
         ['Embedding key', c.embedding?.hasKey ? 'configured' : '—'],
-        ['Name', c.identity?.name || '—'],
       ];
       tbody.innerHTML = rows.map(([k, v]) => `<tr><td class="mono">${escape(k)}</td><td>${escape(v)}</td></tr>`).join('');
     }
@@ -1104,9 +645,10 @@ async function refreshEnv() {
 // ════════════════════════════════════════════════════════════════════
 async function refreshAgents() {
   const host = $('#agents-connectors');
+  let connectors = [];
   if (host) {
     try {
-      const { connectors } = await rpc('listConnectors');
+      ({ connectors } = await rpc('listConnectors'));
       host.innerHTML = '';
       if (!connectors.length) host.innerHTML = '<div class="muted">no coding tools detected on this machine</div>';
       else connectors.forEach((c) => host.appendChild(connectorCard(c, onAgentAction)));
@@ -1115,6 +657,7 @@ async function refreshAgents() {
     }
   }
   loadAgentActivity();
+  loadRecallActivity(connectors);
 }
 
 async function onAgentAction(id, action) {
@@ -1137,32 +680,88 @@ async function onAgentAction(id, action) {
   return refreshAgents();
 }
 
-// Per-agent reads/writes from recent traces (newest-first), attributed by the
-// trace's `agent` field — no backend metric needed. Same approach as Home.
+// Per-agent successful saved-memory operations from the bounded durable trace.
 async function loadAgentActivity() {
   const tbody = $('#agents-activity tbody');
   if (!tbody) return;
   let traces;
   try { ({ traces } = await rpc('trace.list', { limit: 200 })); }
-  catch (err) { tbody.innerHTML = `<tr><td colspan="4" class="empty">could not load activity: ${escape(err.message)}</td></tr>`; return; }
+  catch (err) { tbody.innerHTML = `<tr><td colspan="3" class="empty">could not load activity: ${escape(err.message)}</td></tr>`; return; }
 
   const byAgent = new Map();
   for (const t of traces) {
     if (!t.agent) continue;
-    if (!byAgent.has(t.agent)) byAgent.set(t.agent, { searches: 0, writes: 0, last: t.ts }); // first seen = latest
+    if (!isSuccessfulSave(t)) continue;
+    if (!byAgent.has(t.agent)) byAgent.set(t.agent, { saves: 0, last: t.ts }); // first seen = latest
     const rec = byAgent.get(t.agent);
-    if (t.kind === 'search') rec.searches++;
-    else if (t.kind === 'ingest') rec.writes++;
+    rec.saves++;
   }
-  const rows = [...byAgent.entries()].sort((a, b) => (b[1].searches + b[1].writes) - (a[1].searches + a[1].writes));
+  const rows = [...byAgent.entries()].sort((a, b) => b[1].saves - a[1].saves);
   tbody.innerHTML = rows.length
     ? rows.map(([agent, r]) => `<tr>
         <td><span class="badge ${agentBadge(agent)}">${escape(agent)}</span></td>
-        <td class="num">${r.searches}</td>
-        <td class="num">${r.writes}</td>
+        <td class="num">${r.saves}</td>
         <td class="num">${escape(clock(r.last))}</td>
       </tr>`).join('')
-    : '<tr><td colspan="4" class="empty">no agent activity yet</td></tr>';
+    : '<tr><td colspan="3" class="empty">no successful saved-memory operations yet</td></tr>';
+}
+
+function isSuccessfulSave(t) {
+  const detail = t.detail || {};
+  if (t.kind === 'remember') return Number(detail.totals?.added || 0) > 0;
+  // Older Sigil builds called direct remembers `ingest`; preserve their
+  // semantics when displaying the bounded historic log.
+  if (t.kind === 'ingest' && detail.op === 'remember') return Number(detail.totals?.added || 0) > 0;
+  if (t.kind === 'ingest') return detail.skipped !== true;
+  return t.kind === 'correct' && detail.op === 'correctFact';
+}
+
+function agentForConnector(connector) {
+  return connector.id === 'codex-cli' ? 'codex' : connector.id;
+}
+
+// Automatic recall observations live only in the daemon. That gives users
+// evidence that the hot path ran without turning every prompt into a PGlite
+// write. A daemon restart intentionally starts a fresh observation window.
+async function loadRecallActivity(connectors = []) {
+  const tbody = $('#agents-recall tbody');
+  if (!tbody) return;
+  const automatic = connectors.filter((c) => c.installed && c.automaticRecall);
+  if (!automatic.length) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">no connected agent supports automatic recall</td></tr>';
+    return;
+  }
+
+  let status;
+  try { status = await rpc('recall.status', { limit: 100 }); }
+  catch (err) { tbody.innerHTML = `<tr><td colspan="4" class="empty">could not load recall status: ${escape(err.message)}</td></tr>`; return; }
+
+  const byAgent = new Map((status.agents || []).map((entry) => [entry.agent, entry]));
+  tbody.innerHTML = automatic.map((connector) => {
+    const agent = agentForConnector(connector);
+    const entry = byAgent.get(agent);
+    const attentionLabel = connector.attentionKind === 'approval'
+      ? 'approval required'
+      : connector.attentionKind === 'outdated'
+        ? 'refresh needed'
+        : 'needs attention';
+    const readiness = connector.attention
+      ? `<span class="badge warn" title="${escape(connector.attention)}">${attentionLabel}</span>`
+      : '<span class="badge ok">ready</span>';
+    const last = entry?.last
+      ? escape(clock(entry.last.ts))
+      : '<span class="muted">no prompt since daemon start</span>';
+    let result = '<span class="muted">waiting for a prompt</span>';
+    if (entry?.last) {
+      result = entry.last.outcome === 'matched'
+        ? `<span class="badge ok">${entry.last.resultCount} matched</span> <span class="muted">${entry.last.durationMs}ms</span>`
+        : `<span class="muted">no relevant memories · ${entry.last.durationMs}ms</span>`;
+    }
+    return `<tr>
+      <td><span class="badge ${agentBadge(agent)}">${escape(connector.label)}</span></td>
+      <td>${readiness}</td><td class="num">${last}</td><td>${result}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ── Settings: live provider switcher (LLM + embedding) ───────────────
@@ -1243,13 +842,45 @@ $('#cfg-switch-apply')?.addEventListener('click', async () => {
     out.textContent = cfgSwitch.step === 'llm'
       ? `✓ LLM responded: "${res.result?.response || 'ok'}"`
       : `✓ embedder healthy — ${res.result?.dim}-dim`;
-    restartAndClose(out);
+    refreshEnv();
+    refreshHealth();
   } catch (err) {
     out.classList.add('err'); out.textContent = `✗ ${err.message}`;
   }
 });
 
+$('#cfg-disable-llm')?.addEventListener('click', () => {
+  const host = $('#cfg-llm-confirm');
+  if (!host) return;
+  host.innerHTML = `
+    <div class="result warn">
+      <strong>Turn off the optional LLM?</strong>
+      <span>Its saved provider details and API key will be removed. Memory storage and search keep working.</span>
+      <div class="settings-actions">
+        <button type="button" class="btn danger" data-disable-llm>Turn off LLM</button>
+        <button type="button" class="btn" data-cancel-disable>Cancel</button>
+      </div>
+    </div>`;
+  host.querySelector('[data-cancel-disable]').addEventListener('click', () => { host.innerHTML = ''; });
+  host.querySelector('[data-disable-llm]').addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    event.currentTarget.textContent = 'Turning off…';
+    try {
+      await rpc('setup.disableLlm', { confirm: true });
+      host.innerHTML = '';
+      toast({ variant: 'success', message: 'Optional LLM turned off. Storage and search are unchanged.' });
+      refreshEnv();
+    } catch (err) {
+      host.innerHTML = `<div class="result err">✗ ${escape(err.message)}</div>`;
+    }
+  });
+});
+
 // ── Settings: danger zone — factory reset ────────────────────────────
+$('#reset-understand')?.addEventListener('change', (event) => {
+  $('#cfg-reset').disabled = !event.target.checked;
+});
+
 $('#cfg-reset')?.addEventListener('click', () => {
   const host = $('#reset-confirm');
   if (!host) return;
@@ -1267,7 +898,7 @@ $('#cfg-reset')?.addEventListener('click', () => {
   host.querySelector('[data-reset-go]').addEventListener('click', async (e) => {
     e.target.disabled = true; e.target.textContent = 'Resetting…';
     try {
-      const r = await rpc('setup.factoryReset', { wipeMemory });
+      const r = await rpc('setup.factoryReset', { wipeMemory, confirm: true });
       toast({ variant: 'success', message: `Reset complete — disconnected ${r.disconnected?.length || 0} agent(s)${wipeMemory ? `, wiped ${r.tablesWiped || 0} tables` : ''}.` });
       setTimeout(() => window.location.reload(), 800);
     } catch (err) {
@@ -1275,12 +906,6 @@ $('#cfg-reset')?.addEventListener('click', () => {
     }
   });
 });
-
-async function restartAndClose(out) {
-  out.textContent += '\nApplying — restarting daemon…';
-  try { await rpc('restartDaemon', {}); } catch { /* expected: connection drops on exit */ }
-  setTimeout(() => { $('#cfg-switch').style.display = 'none'; refreshEnv(); refreshHealth(); }, 1500);
-}
 
 // ── Activity / causal trace log ──────────────────────────────────────
 let ws = null;
@@ -1308,7 +933,7 @@ function onLiveEvent(evt) {
     if (traceAgentFilter && evt.agent !== traceAgentFilter) return;
     prependTrace(evt, true);
   } else if (!traceFilter && !traceAgentFilter) {
-    // operational events (rpc/pair/device) only shown in the unfiltered view
+    // Operational daemon events are shown only in the unfiltered view.
     prependOpEvent(evt);
   }
 }
@@ -1356,12 +981,7 @@ function traceCard(t) {
   li.className = 'trace-card';
   const dur = t.durationMs != null ? `${t.durationMs}ms` : '';
   const ns = t.namespace ? `<span class="trace-ns">${escape(t.namespace)}</span>` : '';
-  // Attribution: who made this call. agent answers "which agent", sessionId
-  // "which session" — the pair that was previously unrecorded.
   const agent = t.agent ? `<span class="badge ${agentBadge(t.agent)}" title="originating agent">${escape(t.agent)}</span>` : '';
-  const sess = t.sessionId
-    ? `<span class="trace-sess" title="session ${escape(t.sessionId)}">${escape(shortId(t.sessionId))}</span>`
-    : '';
   li.innerHTML = `
     <button class="trace-head" type="button" aria-expanded="false">
       <span class="trace-caret">▸</span>
@@ -1369,7 +989,6 @@ function traceCard(t) {
       <span class="badge ${traceBadge(t.kind)}">${escape(t.kind)}</span>
       ${agent}
       <span class="trace-summary">${escape(t.summary)}</span>
-      ${sess}
       ${ns}
       <span class="trace-dur">${escape(dur)}</span>
     </button>
@@ -1389,151 +1008,57 @@ function traceCard(t) {
 function renderTraceDetail(t) {
   const d = t.detail || {};
   const source = renderSourceBlock(t, d);
-  if (t.kind === 'search') return source + renderSearchTrace(d);
-  if (t.kind === 'ingest') return source + renderIngestTrace(d);
-  if (t.kind === 'engine') return source + renderEngineTrace(d);
+  if (t.kind === 'ingest' || t.kind === 'remember') return source + renderIngestTrace(d);
   return source + `<pre class="trace-json">${escape(JSON.stringify(d, null, 2))}</pre>`;
 }
 
-// Who made this call — the attribution block. Surfaced on every trace so an
-// unexplained search/expansion can be traced to a specific agent + session.
+// Who made this write.
 function renderSourceBlock(t, d) {
   const rows = [
     ['agent', t.agent],
-    ['session', t.sessionId],
     ['transport', t.transport],
-    ['device', t.deviceId],
     ['cwd', d.cwd],
   ].filter(([, v]) => v != null && v !== '');
   if (!rows.length) return '';
   return traceBlock('Source', rows.map(([k, v]) => kvline(k, v)).join(' '));
 }
 
-// Managed-session engine event (dispatch/result/fallback/recycle/ready).
-function renderEngineTrace(d) {
-  const rows = [
-    ['event', d.type],
-    ['worker', d.workerId],
-    ['tmux session', d.session],
-    ['reqId', d.reqId],
-    ['caller', d.caller],
-    ['reason', d.reason],
-    ['viaFallback', d.type === 'fallback' ? true : undefined],
-    ['durationMs', d.durationMs],
-    ['inputTokens', d.inputTokens],
-    ['outputTokens', d.outputTokens],
-    ['tokensUsed', d.tokensUsed],
-  ].filter(([, v]) => v !== null && v !== undefined && v !== '');
-  return traceBlock('Engine event', rows.map(([k, v]) => kvline(k, v)).join(' '));
-}
-
 const sc = (v) => (v === null || v === undefined ? '—' : String(v));
-
-function renderSearchTrace(d) {
-  const parts = [];
-
-  if (d.routing) {
-    const r = d.routing;
-    parts.push(traceBlock('Routing', `
-      ${kvline('intent', r.intent)}
-      ${kvline('reasoning', r.reasoning)}
-      ${kvline('useGraph', r.useGraph)} ${kvline('expand', r.expand)} ${kvline('limit', r.limit)}
-      ${r.categories && r.categories.length ? kvline('categories', r.categories.join(', ')) : ''}
-      ${r.pointInTime ? kvline('pointInTime', r.pointInTime) : ''}`));
-  } else {
-    parts.push(traceBlock('Routing', `<span class="muted">cognitive routing disabled for this query</span>`));
-  }
-
-  parts.push(traceBlock('Strategy', `${kvline('mode', d.strategy)} ${d.matchedEntity
-    ? `· matched entity <strong>${escape(d.matchedEntity.name)}</strong> <span class="muted">(${escape(d.matchedEntity.type)}${d.matchedEntity.aliases?.length ? ', aliases: ' + escape(d.matchedEntity.aliases.join(', ')) : ''})</span>`
-    : ''}`));
-
-  const facts = (d.ranking && d.ranking.facts) || [];
-  if (facts.length) {
-    const rows = facts.map((f) => `<tr>
-        <td class="num">${f.rank}</td>
-        <td class="fact-cell">${escape(f.content)}${f.source ? ` <span class="tag">${escape(f.source)}</span>` : ''}${f.importance === 'vital' ? ' <span class="tag vital">vital</span>' : ''}</td>
-        <td class="num" title="cosine similarity">${sc(f.similarity)}</td>
-        <td class="num" title="RRF fusion (vector+keyword)">${sc(f.rrfRaw)}</td>
-        <td class="num" title="ACT-R activation = ln(uses+1) − 0.5·ln(age_days); recency + frequency decay">${sc(f.activation)}</td>
-        <td class="num" title="access count (reinforcement)">${sc(f.accessCount)}</td>
-        <td class="num" title="rrf × activation × importance × confidence">${sc(f.finalScore)}</td>
-        <td class="num strong" title="normalized score the ranker sorted on">${sc(f.rrfScore)}</td>
-      </tr>`).join('');
-    parts.push(`<div class="trace-block"><div class="trace-block-h">Ranking <span class="muted">— ${escape(d.ranking.model)}</span></div>
-      <div class="trace-table-wrap"><table class="trace-table">
-        <thead><tr><th>#</th><th>fact</th><th>sim</th><th>rrf</th><th>act↓</th><th>uses</th><th>final</th><th>score</th></tr></thead>
-        <tbody>${rows}</tbody></table></div></div>`);
-  } else {
-    parts.push(traceBlock('Ranking', `<span class="muted">no facts matched</span>`));
-  }
-
-  const chunks = (d.ranking && d.ranking.chunks) || [];
-  if (chunks.length) {
-    const rows = chunks.map((c) => `<tr>
-        <td class="num">${c.rank}</td>
-        <td class="fact-cell">${c.sectionHeading ? `<span class="muted">${escape(c.sectionHeading)} · </span>` : ''}${escape(c.content)}</td>
-        <td class="num">${sc(c.similarity)}</td>
-        <td class="num strong">${sc(c.rrfScore)}</td>
-      </tr>`).join('');
-    parts.push(`<div class="trace-block"><div class="trace-block-h">Chunks</div>
-      <div class="trace-table-wrap"><table class="trace-table">
-        <thead><tr><th>#</th><th>chunk</th><th>sim</th><th>score</th></tr></thead>
-        <tbody>${rows}</tbody></table></div></div>`);
-  }
-
-  if (d.synthesized) parts.push(traceBlock('Synthesized answer', `<div class="synth">${escape(d.synthesized)}</div>`));
-
-  if (d.reinforced && d.reinforced.factIds && d.reinforced.factIds.length) {
-    parts.push(traceBlock('Reinforcement (decay update)', `<span class="muted">${escape(d.reinforced.note)}</span><br>fact ids: <code class="mono">${escape(d.reinforced.factIds.join(', '))}</code>`));
-  }
-
-  return parts.join('');
-}
 
 function renderIngestTrace(d) {
   const parts = [];
-  const inputs = d.inputs || (d.verdicts ? [{ input: d.title, route: d.route, counts: d.counts, verdicts: d.verdicts, entities: d.entities }] : []);
+  const inputs = d.inputs || (d.verdicts ? [{ input: d.title, route: d.route, counts: d.counts, verdicts: d.verdicts }] : []);
 
-  if (d.totals) parts.push(traceBlock('Totals', `${kvline('added', d.totals.added)} ${kvline('updated', d.totals.updated)} ${kvline('alreadyKnown', d.totals.alreadyKnown)} ${kvline('inputs', d.totals.inputCount)}`));
+  if (d.totals) parts.push(traceBlock('Totals', `${kvline('added', d.totals.added)} ${kvline('alreadyKnown', d.totals.alreadyKnown)} ${kvline('inputs', d.totals.inputCount)}`));
 
   inputs.forEach((inp, i) => {
     const verdictRows = (inp.verdicts || []).map((v) => {
-      const a = v.audm || {};
+      const a = v.dedup || {};
       const simTxt = a.topSimilarity != null
-        ? `sim <strong>${a.topSimilarity.toFixed(3)}</strong> ${audmExplain(a)}`
+        ? `sim <strong>${a.topSimilarity.toFixed(3)}</strong> ${dedupExplain(a)}`
         : `<span class="muted">${escape(a.decision || 'no match — new fact')}</span>`;
-      const link = v.supersededId ? ` → superseded #${v.supersededId}` : v.contradictedId ? ` → contradicted #${v.contradictedId}` : '';
       return `<tr>
-        <td><span class="badge ${audmBadge(v.action)}">${escape(v.action)}</span></td>
-        <td class="fact-cell">${escape(v.content)}${link ? `<span class="muted">${escape(link)}</span>` : ''}</td>
-        <td class="audm-cell">${simTxt}</td>
+        <td><span class="badge ${dedupBadge(v.action)}">${escape(v.action)}</span></td>
+        <td class="fact-cell">${escape(v.content)}</td>
+        <td>${simTxt}</td>
       </tr>`;
     }).join('');
 
     const head = `${inp.route ? `<span class="badge info">route: ${escape(inp.route)}</span> ` : ''}${inp.skipped ? '<span class="badge warn">skipped</span> ' : ''}<span class="muted">${escape(String(inp.input || '').slice(0, 160))}</span>`;
-    const counts = inp.counts ? `<div class="muted text-xs" style="margin:6px 0">+${inp.counts.added} added · ~${inp.counts.updated} updated · ${inp.counts.skipped} skipped · ${inp.counts.contradicted} contradicted</div>` : '';
-    const ents = inp.entities ? `<div class="text-xs muted" style="margin-top:6px">entities: ${inp.entities.entityCount}, relations: ${inp.entities.relationCount}${inp.entities.topics?.length ? ' · topics: ' + escape(inp.entities.topics.join(', ')) : ''}</div>` : '';
+    const counts = inp.counts ? `<div class="muted text-xs" style="margin:6px 0">+${inp.counts.added} added · ${inp.counts.skipped} already known</div>` : '';
 
     parts.push(`<div class="trace-block">
       <div class="trace-block-h">Input ${inputs.length > 1 ? i + 1 : ''}</div>
       <div style="margin-bottom:6px">${head}</div>
       ${counts}
-      ${verdictRows ? `<div class="trace-table-wrap"><table class="trace-table"><thead><tr><th>AUDM</th><th>fact</th><th>decision</th></tr></thead><tbody>${verdictRows}</tbody></table></div>` : '<span class="muted text-xs">no facts extracted</span>'}
-      ${ents}
+      ${verdictRows ? `<div class="trace-table-wrap"><table class="trace-table"><thead><tr><th>write</th><th>fact</th><th>dedup</th></tr></thead><tbody>${verdictRows}</tbody></table></div>` : '<span class="muted text-xs">no facts extracted</span>'}
     </div>`);
   });
 
   return parts.join('') || `<pre class="trace-json">${escape(JSON.stringify(d, null, 2))}</pre>`;
 }
 
-function audmExplain(a) {
-  const th = a.thresholds || {};
-  if (a.decision === 'skip-duplicate') return `≥ skip ${th.skip} → near-duplicate, deduped`;
-  if (a.decision === 'llm:UPDATE') return `in [${th.ambiguous}, ${th.skip}) → LLM judged UPDATE`;
-  if (a.decision === 'llm:CONTRADICT') return `in [${th.ambiguous}, ${th.skip}) → LLM judged CONTRADICT`;
-  if (a.decision === 'llm:ADD') return `in [${th.ambiguous}, ${th.skip}) → LLM judged distinct`;
-  if (a.decision === 'below-ambiguous') return `< ambiguous ${th.ambiguous} → distinct, added`;
+function dedupExplain(a) {
   return escape(a.decision || '');
 }
 
@@ -1542,10 +1067,7 @@ function kvline(k, v) { return `<span class="kvline"><span class="muted">${escap
 function clock(iso) { return (iso || '').slice(11, 19) || (iso || '').slice(0, 10); }
 
 function traceBadge(kind) {
-  if (kind === 'search') return 'info';
-  if (kind === 'ingest') return 'ok';
-  if (kind === 'engine') return 'accent';
-  if (kind === 'lifecycle') return 'warn';
+  if (kind === 'ingest' || kind === 'remember' || kind === 'correct') return 'ok';
   return 'info';
 }
 function agentBadge(agent) {
@@ -1555,11 +1077,7 @@ function agentBadge(agent) {
   if (agent === 'cursor') return 'accent';
   return ''; // cli + unknown → neutral
 }
-function shortId(id) {
-  const s = String(id);
-  return s.length > 10 ? s.slice(0, 8) + '…' : s;
-}
-function audmBadge(action) {
+function dedupBadge(action) {
   const a = String(action || '').toUpperCase();
   if (a === 'ADD') return 'ok';
   if (a === 'SKIP') return '';
@@ -1569,17 +1087,14 @@ function audmBadge(action) {
 }
 function opBadge(type) {
   if (type.startsWith('write.')) return 'ok';
-  if (type.startsWith('error') || type.startsWith('pair.rej')) return 'err';
-  if (type.startsWith('device.rev') || type === 'meta.dropped') return 'warn';
+  if (type.startsWith('error')) return 'err';
+  if (type === 'meta.dropped') return 'warn';
   return 'info';
 }
 function opSummary(evt) {
-  if (evt.type === 'rpc.connected')    return `device ${escape(evt.name || evt.deviceId)} connected`;
-  if (evt.type === 'rpc.disconnected') return `device ${escape(evt.deviceId)} disconnected`;
+  if (evt.type === 'rpc.connected')    return `client ${escape(evt.name || evt.agent || 'local')} connected`;
+  if (evt.type === 'rpc.disconnected') return `client ${escape(evt.agent || 'local')} disconnected`;
   if (evt.type === 'rpc.denied')       return `denied ${escape(evt.method)} (${escape(evt.code)})`;
-  if (evt.type === 'pair.consumed')    return `paired ${escape(evt.deviceName)}`;
-  if (evt.type === 'pair.rejected')    return `pairing rejected (${escape(evt.code)})`;
-  if (evt.type === 'device.revoked')   return `device ${escape(evt.deviceId)} revoked (${escape(evt.reason)})`;
   if (evt.type === 'meta.dropped')     return `${evt.count} live events dropped (backpressure)`;
   return `<code class="mono">${escape(JSON.stringify(evt))}</code>`;
 }
@@ -1602,121 +1117,12 @@ $('#trace-agent-filters')?.addEventListener('click', (e) => {
 $('#trace-refresh')?.addEventListener('click', loadTraces);
 $('#trace-clear')?.addEventListener('click', async () => {
   if (!confirm('Clear the entire trace log? This deletes persisted history.')) return;
-  try { await rpc('trace.clear'); } catch {}
+  try { await rpc('trace.clear', { confirm: true }); } catch {}
   loadTraces();
-});
-
-// ── Engine (managed-session warm tmux workers) ──────────────────────
-let engineTimer = null;
-function startEnginePolling() {
-  loadEngine();
-  if (engineTimer) return;
-  engineTimer = setInterval(() => { if (location.hash === '#engine') loadEngine(); }, 5000);
-}
-function stopEnginePolling() { if (engineTimer) { clearInterval(engineTimer); engineTimer = null; } }
-
-const STATE_PILL = { ready: 'ok', busy: 'info', booting: 'warn', unhealthy: 'err' };
-
-async function loadEngine() {
-  const setStatus = (state, label) => { const el = $('#engine-status'); if (el) { el.className = `conn-status ${state}`; el.textContent = label; } };
-  let s;
-  try { s = await rpc('engine.status'); }
-  catch (err) { setStatus('err', 'error'); $('#engine-workers').innerHTML = `<div class="empty">could not load engine status: ${escape(err.message)}</div>`; return; }
-
-  const running = !!s.running;
-  setStatus(running ? 'ok' : '', running ? 'managed' : 'one-shot');
-
-  $('#eng-mode').textContent = running ? 'Managed' : 'One-shot';
-  $('#eng-mode-sub').textContent = running ? 'warm tmux workers' : 'claude -p per call';
-  $('#eng-pool').textContent = sc(s.poolSize);
-  $('#eng-budget').textContent = s.tokenBudget != null ? `${s.tokenBudget.toLocaleString()} tok budget` : '—';
-  const queued = Object.values(s.queued || {}).reduce((a, b) => a + b, 0);
-  $('#eng-queued').textContent = sc(queued);
-  $('#eng-pending').textContent = sc(s.pending);
-
-  const host = $('#engine-workers');
-  if (!running) {
-    // Explain WHY the engine isn't warm so the empty state is actionable.
-    let why;
-    if (!s.enabled) why = 'Managed-session engine is off. Every LLM call uses the proven one-shot <code>claude -p</code> path.';
-    else if (!s.tmuxAvailable) why = '<code>SIGIL_MANAGED_SESSION=true</code> is set, but <code>tmux</code> was not found on PATH — staying on one-shot.';
-    else if (s.provider && s.provider !== 'claude-cli') why = `LLM provider is <code>${escape(s.provider)}</code> (not <code>claude-cli</code>) — API providers don't need warm sessions.`;
-    else why = 'Engine enabled but no workers are running yet.';
-    host.innerHTML = `<div class="empty">${why}<br><span class="muted">Enable with <code>SIGIL_MANAGED_SESSION=true</code> on a host with <code>tmux</code> + the <code>claude</code> CLI, then restart the daemon.</span></div>`;
-  } else if (!s.workers || !s.workers.length) {
-    host.innerHTML = `<div class="empty">No live workers — the pool is spinning up or has yielded to one-shot after repeated boot failures. Check <code>~/.sigil/sigild.log</code>.</div>`;
-  } else {
-    const rows = s.workers.map((w) => {
-      const session = `${escape(s.sessionPrefix || 'sigil-')}${escape(w.id)}`;
-      const pct = s.tokenBudget ? Math.min(100, Math.round((w.tokensUsed / s.tokenBudget) * 100)) : null;
-      return `<tr>
-        <td class="mono">${escape(w.id)}</td>
-        <td class="mono">${session}</td>
-        <td><span class="pill ${STATE_PILL[w.state] || ''}">${escape(w.state)}</span></td>
-        <td class="num">${w.tokensUsed.toLocaleString()}${pct != null ? ` <span class="muted">(${pct}%)</span>` : ''}</td>
-      </tr>`;
-    }).join('');
-    host.innerHTML = `<div class="trace-table-wrap"><table class="trace-table">
-      <thead><tr><th>worker</th><th>tmux session</th><th>state</th><th>tokens used</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>`;
-  }
-
-  $('#engine-hint').innerHTML = running
-    ? 'Inspect a worker pane directly: <code>tmux attach -t sigil-&lt;worker&gt;</code> (detach with <code>Ctrl-b d</code>) or <code>tmux capture-pane -t sigil-&lt;worker&gt; -p</code>. Per-task events stream into <a href="#activity" data-route="activity">Activity → Engine</a>.'
-    : '';
-}
-$('#engine-refresh')?.addEventListener('click', loadEngine);
-
-// ── Setup tab (legacy DB form) ──────────────────────────────────────
-$('#db-mode')?.addEventListener('change', (e) => {
-  $('#db-url-pane').style.display    = e.target.value === 'url'    ? '' : 'none';
-  $('#db-fields-pane').style.display = e.target.value === 'fields' ? '' : 'none';
-});
-$('#db-test')?.addEventListener('click', async () => {
-  const out = $('#db-result');
-  out.style.display = 'block'; out.className = 'result'; out.textContent = 'testing…';
-  try {
-    const params = $('#db-mode').value === 'url' ? { url: $('#db-url').value.trim() }
-      : { host: $('#db-host').value.trim(), port: Number($('#db-port').value),
-          database: $('#db-database').value.trim(), user: $('#db-user').value.trim(), password: $('#db-password').value };
-    const data = await rpc('testDbConnection', params);
-    out.textContent = JSON.stringify(data, null, 2);
-    out.classList.add(data.ok ? 'ok' : 'err');
-    $('#db-migrate').disabled = !data.ok || !data.pgvector;
-    if (data.ok && !data.pgvector) {
-      $('#db-pgvector').hidden = false; $('#db-pgvector').disabled = false;
-      out.textContent += '\n\n⚠ pgvector not installed.';
-    } else { $('#db-pgvector').hidden = true; }
-  } catch (err) { out.textContent = `ERROR: ${err.message}`; out.classList.add('err'); $('#db-migrate').disabled = true; }
-});
-$('#db-pgvector')?.addEventListener('click', async () => {
-  const out = $('#db-result');
-  const params = $('#db-mode').value === 'url' ? { url: $('#db-url').value.trim() }
-    : { host: $('#db-host').value.trim(), port: Number($('#db-port').value),
-        database: $('#db-database').value.trim(), user: $('#db-user').value.trim(), password: $('#db-password').value };
-  out.textContent += '\n\nInstalling pgvector…';
-  try {
-    const data = await rpc('ensurePgvector', params);
-    if (data.ok && data.installed) { out.textContent += `\n✓ pgvector ${data.version} installed`; $('#db-pgvector').hidden = true; $('#db-migrate').disabled = false; }
-    else { out.textContent += `\n✗ ${data.error || 'unknown'} (${data.stage})`; }
-  } catch (err) { out.textContent += `\nERROR: ${err.message}`; }
-});
-$('#db-migrate')?.addEventListener('click', async () => {
-  const out = $('#db-result');
-  out.textContent += '\n\nRunning migrations…';
-  try {
-    const data = await rpc('runMigrations', {});
-    out.textContent += `\nbatch ${data.batchNo}: ${data.ran.length} migrations applied`;
-  } catch (err) { out.textContent += `\nERROR: ${err.message}`; }
 });
 
 // ── Modal infrastructure ────────────────────────────────────────────
 function closeModal(id) { const m = document.getElementById(id); if (m) m.hidden = true; }
-function openModal(id) {
-  const m = document.getElementById(id); if (!m) return;
-  m.hidden = false;
-  setTimeout(() => { const f = m.querySelector('input, select, textarea, button'); if (f) f.focus(); }, 30);
-}
 document.addEventListener('click', (e) => {
   const closer = e.target.closest('[data-close-modal]');
   if (closer) { e.preventDefault(); closeModal(closer.dataset.closeModal); return; }
@@ -1738,128 +1144,7 @@ document.addEventListener('click', async (e) => {
   setTimeout(() => { t.textContent = orig; }, 1200);
 });
 
-// ── Devices ─────────────────────────────────────────────────────────
-let revokeTargetId = null;
-async function refreshDevices() {
-  try {
-    const { devices } = await rpc('device.list', {});
-    const tbody = $('#dev-table tbody');
-    $('#dev-count').textContent = `${devices.length} device${devices.length === 1 ? '' : 's'}`;
-    if (!devices.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="empty">no devices paired yet — click <strong>+ Add device</strong></td></tr>';
-    } else {
-      tbody.innerHTML = devices.map((d) => {
-        const statusLabel = d.active ? 'connected' : d.revokedReason === 'compromised' ? 'compromised' : 'paused';
-        const statusClass = d.active ? 'ok' : d.revokedReason === 'compromised' ? 'err' : 'warn';
-        const actions = d.active
-          ? `<button class="btn small danger" data-revoke="${d.id}" data-name="${escape(d.name)}">Revoke</button>`
-          : d.reactivatable
-            ? `<button class="btn small" data-activate="${d.id}">Re-activate</button>`
-            : `<span class="muted text-xs" title="revoked as compromised">re-pair only</span>`;
-        return `<tr>
-          <td><div class="device-name">${escape(d.name)}</div><div class="device-sub">device #${d.id}${d.meta?.hostname ? ' · ' + escape(d.meta.hostname) : ''}</div></td>
-          <td class="mono" title="${escape(d.nodeId)}">${escape(d.nodeId.slice(0, 16))}…</td>
-          <td><span class="badge ${d.role === 'admin' ? 'err' : d.role === 'writer' ? 'info' : ''}">${escape(d.role)}</span></td>
-          <td>${escape((d.namespaces && d.namespaces.length) ? d.namespaces.join(', ') : '(all)')}</td>
-          <td class="muted">${escape(formatTime(d.lastSeenAt))}</td>
-          <td><span class="pill ${statusClass}">${statusLabel}</span></td>
-          <td class="actions-cell">${actions}</td>
-        </tr>`;
-      }).join('');
-    }
-  } catch (err) { $('#dev-table tbody').innerHTML = `<tr><td colspan="7" class="empty">${escape(err.message)}</td></tr>`; }
-
-  try {
-    const { codes } = await rpc('pair.list', {});
-    const tbody = $('#dev-codes tbody');
-    if (!codes.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty">no codes outstanding</td></tr>';
-    } else {
-      tbody.innerHTML = codes.map((c) => {
-        let status, badgeCls = '';
-        if (c.consumedBy) { status = `consumed by ${escape(c.consumedBy.name)}`; badgeCls = 'ok'; }
-        else if (c.expired) { status = 'expired'; badgeCls = 'err'; }
-        else { status = 'pending'; badgeCls = 'warn'; }
-        return `<tr>
-          <td class="mono">#${c.id}</td><td>${escape(c.name)}</td>
-          <td><span class="badge">${escape(c.role)}</span></td>
-          <td class="muted">${escape(formatTime(c.expiresAt))}</td>
-          <td><span class="badge ${badgeCls}">${status}</span></td>
-          <td class="actions-cell">${!c.consumedBy ? `<button class="btn small danger" data-revoke-code="${c.id}">Revoke</button>` : ''}</td>
-        </tr>`;
-      }).join('');
-    }
-  } catch (err) { $('#dev-codes tbody').innerHTML = `<tr><td colspan="6" class="empty">${escape(err.message)}</td></tr>`; }
-}
-$('#dev-refresh')?.addEventListener('click', refreshDevices);
-
-document.addEventListener('click', (e) => {
-  const r = e.target.closest('[data-revoke]');
-  if (r) {
-    revokeTargetId = Number(r.dataset.revoke);
-    $('#revoke-target-name').textContent = r.dataset.name || `device #${revokeTargetId}`;
-    const def = $('input[name="revoke-reason"][value="paused"]'); if (def) def.checked = true;
-    openModal('revoke-modal');
-    return;
-  }
-  const a = e.target.closest('[data-activate]');
-  if (a) rpc('device.activate', { id: Number(a.dataset.activate) }).then(refreshDevices).catch((err) => toast({ variant: 'error', message: err.message }));
-  const cb = e.target.closest('[data-revoke-code]');
-  if (cb) rpc('pair.revoke', { id: Number(cb.dataset.revokeCode) }).then(refreshDevices).catch((err) => toast({ variant: 'error', message: err.message }));
-});
-
-$('#revoke-confirm')?.addEventListener('click', async () => {
-  if (revokeTargetId == null) return;
-  const reason = $('input[name="revoke-reason"]:checked').value;
-  try { await rpc('device.revoke', { id: revokeTargetId, reason }); closeModal('revoke-modal'); refreshDevices(); }
-  catch (err) { toast({ variant: 'error', message: err.message }); }
-});
-
-// Highlight selected radio card in revoke modal
-$$('.radio-card').forEach((card) => {
-  card.addEventListener('click', () => {
-    const group = card.closest('.radio-card-group') || document;
-    group.querySelectorAll('.radio-card').forEach((c) => c.classList.remove('selected'));
-    card.classList.add('selected');
-  });
-});
-
-// Add-device modal
-function resetDevModal() {
-  $('#dev-form').style.display = '';
-  $('#dev-result-view').hidden = true;
-  $('#dev-create').hidden = false;
-  $('#dev-done').hidden = true;
-  $('#dev-cancel').hidden = false;
-  $('#dev-name').value = ''; $('#dev-ns').value = '';
-  $('#dev-ttl').value = '600'; $('#dev-role').value = 'writer';
-}
-$('#dev-new')?.addEventListener('click', () => { resetDevModal(); openModal('dev-modal'); });
-new MutationObserver(() => { if ($('#dev-modal').hidden) { setTimeout(resetDevModal, 200); refreshDevices(); } })
-  .observe($('#dev-modal'), { attributes: true, attributeFilter: ['hidden'] });
-
-$('#dev-create')?.addEventListener('click', async () => {
-  const name = $('#dev-name').value.trim(); if (!name) { toast({ variant: 'error', message: 'Device name is required.' }); return; }
-  const role = $('#dev-role').value;
-  const ttl = Number($('#dev-ttl').value) || 600;
-  const ns = $('#dev-ns').value.trim();
-  try {
-    const data = await rpc('pair.create', {
-      name, role, ttlSeconds: ttl,
-      namespaces: ns ? ns.split(',').map((s) => s.trim()).filter(Boolean) : [],
-    });
-    const cmd = `sigil join ${data.masterNodeId || '<master-node-id>'} ${data.code} --name ${data.name}`;
-    $('#dev-form').style.display = 'none';
-    $('#dev-result-view').hidden = false;
-    $('#dev-create').hidden = true; $('#dev-cancel').hidden = true; $('#dev-done').hidden = false;
-    $('#dev-result-code').firstChild.textContent = data.code + ' ';
-    $('#dev-result-master').firstChild.textContent = (data.masterNodeId || '(iroh not running)') + ' ';
-    $('#dev-result-cmd').textContent = cmd;
-    $('#dev-result-expiry').textContent = data.expiresAt;
-  } catch (err) { toast({ variant: 'error', message: err.message || 'Create pairing code failed.' }); }
-});
-
-// ════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════
 // BOOT
 // ════════════════════════════════════════════════════════════════════
 // Branded landing splash: stays up while we check ~/.sigil (via setup.state)
@@ -1880,6 +1165,11 @@ async function runLanding() {
 
 const initial = (window.location.hash || '#health').slice(1);
 setRoute(validRoutes.includes(initial) ? initial : 'health');
+// A deep link such as `#agents` used to render its view immediately but leave
+// the shared connection indicator at “connecting…” until the five-second
+// background refresh. Prime the lightweight health state once for every
+// non-home route so the first visible status is truthful.
+if (initial !== 'health') refreshHealth();
 runLanding();
 setInterval(() => { if (!document.hidden) refreshHealth(); }, 5000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshHealth(); });

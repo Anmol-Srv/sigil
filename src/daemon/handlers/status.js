@@ -1,14 +1,10 @@
 export function registerStatus(registry) {
   registry.register('status', async (params) => {
     const { getStats } = await import('../../memory/documents/store.js');
-    const { getEntityCount } = await import('../../memory/entities/store.js');
-    const { getRelationCount } = await import('../../memory/entities/relations.js');
-    const { getFactCount, getHotFacts } = await import('../../memory/facts/store.js');
-    const { getEntityHebbianStats } = await import('../../memory/lifecycle/entity-hebbian.js');
+    const { getFactCount } = await import('../../memory/facts/store.js');
     const { default: cortexDb } = await import('../../db/cortex.js');
 
     const namespace = params.namespace || null;
-    const hotFactsLimit = Number.isFinite(params.hotFactsLimit) ? params.hotFactsLimit : 5;
 
     // Live DB reachability check first. If Postgres is down, return a clean
     // degraded payload (zeros + db.healthy=false) instead of letting the
@@ -41,30 +37,21 @@ export function registerStatus(registry) {
       setDbHealth({ healthy: dbHealthy, error: dbError, schema: dbSchema, checkedAt: Date.now() });
     } catch { /* holder unavailable outside daemon */ }
 
-    // Provider health from the boot probe (cached — no live provider call per
-    // status poll). null until the daemon's boot probe completes.
+    // Cached provider health from explicit diagnostics/setup. null until probed;
+    // status itself stays read-only and never launches a provider.
     let providers = null;
     try {
       const { getProviderHealth } = await import('../registry-holder.js');
       providers = getProviderHealth();
     } catch { /* holder unavailable outside daemon */ }
 
-    // Live agent-process gauges — independent of DB health. `claudeProcs` is the
-    // global concurrency gate that caps live `claude` spawns (the hard fix for
-    // the 1600-session blowup): active/waiting/limit makes saturation visible
-    // instead of silent. `managedSession` is the warm-worker engine snapshot,
-    // present only when it is running in this daemon.
+    // Live coding-agent process gauges make an explicitly configured
+    // claude-cli provider's bounded one-shot activity visible.
     let claudeProcs = null;
-    let managedSession = null;
     try {
       const { claudeProcStats } = await import('../../lib/llm/providers/claude-cli.js');
       claudeProcs = claudeProcStats();
     } catch { /* provider unavailable */ }
-    try {
-      const { getSessionManager } = await import('../../lib/llm/session/index.js');
-      const mgr = getSessionManager();
-      managedSession = mgr ? { enabled: true, ...mgr.stats() } : { enabled: false };
-    } catch { /* holder unavailable outside daemon */ }
 
     if (!dbHealthy) {
       return {
@@ -72,64 +59,25 @@ export function registerStatus(registry) {
         db: { healthy: false, error: dbError, schema: dbSchema },
         providers,
         claudeProcs,
-        managedSession,
         documents: 0,
         chunks: 0,
         facts: 0,
-        entities: { documents: 0, people: 0, topics: 0 },
-        relations: 0,
-        podsByType: {},
-        hotFacts: [],
-        hebbian: null,
       };
     }
 
-    const [docStats, factCount, documents, people, topics, relations, podRows, hebbian, hotFacts] = await Promise.all([
+    const [docStats, factCount] = await Promise.all([
       getStats(namespace),
       getFactCount(namespace),
-      getEntityCount('document'),
-      getEntityCount('person'),
-      getEntityCount('topic'),
-      getRelationCount(),
-      cortexDb('pod').where({ status: 'active' }).select('podType'),
-      getEntityHebbianStats({ topN: 3 }).catch(() => null),
-      getHotFacts(namespace, { limit: hotFactsLimit }).catch(() => []),
     ]);
-
-    const podsByType = podRows.reduce((acc, r) => {
-      acc[r.podType] = (acc[r.podType] || 0) + 1;
-      return acc;
-    }, {});
 
     return {
       namespace,
       db: { healthy: true, error: null, schema: 'ready' },
       providers,
       claudeProcs,
-      managedSession,
       documents: docStats.documentCount,
       chunks: docStats.totalChunks,
       facts: factCount,
-      entities: { documents, people, topics },
-      relations,
-      podsByType,
-      hotFacts: (hotFacts || []).map((f) => ({
-        id: f.id ?? null,
-        content: f.content,
-        accessCount: f.accessCount ?? 0,
-      })),
-      hebbian: hebbian
-        ? {
-            edgeCount: hebbian.edgeCount,
-            avgStrength: hebbian.avgStrength ?? 0,
-            maxStrength: hebbian.maxStrength ?? 0,
-            topPairs: (hebbian.topPairs || []).map((p) => ({
-              a: p.aName,
-              b: p.bName,
-              decayed: Number(p.decayed) || 0,
-            })),
-          }
-        : null,
     };
   });
 }

@@ -32,7 +32,7 @@ export function renderPreamble(r, { format = 'md', transport = 'cli' } = {}) {
     out.push('- (unavailable — see the health warnings below)');
   } else {
     out.push('## Sigil memory');
-    out.push('- (nothing stored yet — facts accrue as you and the user work)');
+    out.push('- No generic snapshot was loaded. Use targeted search when the task depends on stored context.');
   }
 
   out.push('', usageFooter(transport));
@@ -62,7 +62,7 @@ export function statusLines(r) {
   if (r.checks.db) lines.push(`DB: ${r.checks.db.ok ? `ok${r.checks.db.detail ? ` (${r.checks.db.detail})` : ''}` : `down (${r.checks.db.detail || 'unreachable'})`}`);
   lines.push(`LLM: ${fmtCheck(r.checks.llm)}`);
   lines.push(`EMBED: ${fmtCheck(r.checks.embedding)}`);
-  lines.push(`FACTS: ${r.facts.length} loaded / ${r.totals?.facts ?? 0} total`);
+  lines.push(`FACTS: ${r.totals?.facts ?? 0} total (targeted recall)`);
   return lines;
 }
 
@@ -70,13 +70,14 @@ function usageFooter(transport) {
   if (transport === 'mcp') {
     return [
       '## Using Sigil (no automatic memory in this client)',
-      '- Nothing is injected or saved automatically here. Call the `search` tool BEFORE answering anything that depends on the user, their preferences, or this project; call `ingest` to save durable facts the user will want next session.',
+      '- Nothing is injected or saved automatically here. Call `search` before answering anything that depends on the user, their preferences, or this project.',
+      '- Call `remember` for a durable fact, `correct` to replace an outdated fact, and `ingest` for a durable document.',
       '- When you use a stored fact, name it in one short clause so the user sees their context being applied.',
     ].join('\n');
   }
   // Claude Code / hooks-capable: the hooks already inject + save.
   return [
     '## Using Sigil',
-    '- Memory is auto-injected per prompt and saved by hooks. Read the injected facts first; use `search` only to drill down when the injection missed something.',
+    '- The prompt hook performs targeted recall. Use `search` to drill down, `remember` for explicit durable facts, and `correct` for outdated facts.',
   ].join('\n');
 }

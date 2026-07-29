@@ -3,7 +3,7 @@
 // When a source document's content changes, facts extracted from the OLD
 // content that the new ingest no longer re-confirms must not linger as
 // `active` forever (the stale-memory trust leak). supersedeStaleDocFacts()
-// reuses the AUDM supersede path:
+// uses the deterministic supersede path:
 //   - sole-provenance fact  → status='superseded' + a SUPERSEDE history row
 //   - shared-provenance fact → stays active, this doc dropped from its sources
 //   - re-confirmed fact (in keptFactIds) → untouched

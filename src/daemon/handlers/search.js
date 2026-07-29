@@ -1,77 +1,54 @@
 export function registerSearch(registry) {
-  registry.register('search', async (params) => {
+  registry.register('search', async (params, ctx = {}) => {
     const query = (params.query ?? '').trim();
-    if (!query) {
-      const err = new Error('search: params.query is required');
+    if (!query || query.length > 8_000) {
+      const err = new Error('search: params.query must contain 1-8000 characters');
       err.code = 'invalid_params';
       throw err;
     }
 
+    const startedAt = Date.now();
     const { search } = await import('../../memory/search/hybrid.js');
-    const { default: config } = await import('../../config.js');
-
-    const namespaces = Array.isArray(params.namespaces) && params.namespaces.length
-      ? params.namespaces
-      : [config.defaults.namespace];
+    const { resolveMemoryScope } = await import('../memory-scope.js');
+    const memoryScope = resolveMemoryScope(params, ctx);
     const limit = Number.isFinite(params.limit) ? params.limit : 10;
-    const useGraph    = Boolean(params.useGraph);
-    const route       = Boolean(params.route);
-    // expand (query-variant expansion) is opt-in and tri-state: undefined lets
-    // search()/the router decide; the read hook passes true explicitly.
-    const expand      = params.expand !== undefined ? Boolean(params.expand) : undefined;
-    const synthesize  = Boolean(params.synthesize);
-    const includeChunks = Boolean(params.includeChunks) || synthesize;
+    const includeChunks = Boolean(params.includeChunks);
     const minConfidence = params.minConfidence;
     const pointInTime = params.pointInTime ? new Date(params.pointInTime) : undefined;
-    // Default to project scope ('auto'), not the whole brain. An explicit
-    // caller can still pass 'global' or a pod list. ctx carries cwd/sessionId
-    // so 'auto' can resolve the active project/session pods.
-    const podScope = params.podScope ?? 'auto';
-    // Explicit search (CLI `sigil search`, MCP) shows everything by default —
-    // the precision floor is for unprompted auto-injection (hooks), not for a
-    // human/agent who deliberately asked. Opt in with applyFloor:true.
     const applyFloor = params.applyFloor ?? false;
-    const ctx = { cwd: params.cwd || null, sessionId: params.sessionId || null };
 
     const result = await search(query, {
-      namespaces,
+      namespaces: memoryScope.namespaces,
+      namespaceTiers: memoryScope.namespaceTiers,
       limit,
-      useGraph,
-      route,
-      expand,
-      synthesize,
       includeChunks,
       minConfidence,
       pointInTime,
-      podScope,
+      categories: params.categories,
       applyFloor,
-      ctx,
     });
 
     const response = {
       query,
-      namespaces,
+      namespaces: memoryScope.namespaces,
+      scope: memoryScope.mode,
       facts: (result.facts || []).map(serializeFact),
       chunks: (result.chunks || []).map(serializeChunk),
-      synthesized: result.synthesized || null,
-      matchedEntity: result.matchedEntity || null,
-      relatedEntities: result.relatedEntities || [],
+      trace: result._trace || null,
     };
 
-    // Persist + broadcast the full causal trace (routing → entity → ranked
-    // scores → decay/activation → synthesis). Best-effort; never blocks search.
-    const trace = result._trace || {};
-    const qShort = query.length > 80 ? query.slice(0, 80) + '…' : query;
-    const strategy = trace.strategy === 'entity-first' ? ' · entity-first' : '';
-    const { recordTrace } = await import('../trace-store.js');
-    recordTrace({
-      kind: 'search',
-      summary: `"${qShort}" → ${response.facts.length} facts, ${response.chunks.length} chunks${strategy}`,
-      namespace: namespaces[0] || null,
-      durationMs: trace.durationMs ?? null,
-      sessionId: ctx.sessionId,
-      detail: { ...trace, cwd: ctx.cwd ?? null },
-    }).catch(() => {});
+    // The one automatic prompt hook is observable without making search write
+    // to PGlite. The bounded runtime ledger carries only client, timestamp,
+    // result count, duration, and namespace — never the prompt or memory text.
+    if (params.observePromptRecall === true) {
+      const { recordPromptRecall } = await import('../recall-observatory.js');
+      recordPromptRecall({
+        agent: ctx.agent,
+        namespace: memoryScope.writeNamespace,
+        resultCount: response.facts.length,
+        durationMs: Date.now() - startedAt,
+      });
+    }
 
     return response;
   });
@@ -93,6 +70,9 @@ function serializeFact(f) {
     device: f.createdByDeviceId ?? null,
     sourceDocumentIds: Array.isArray(f.sourceDocumentIds) ? f.sourceDocumentIds : [],
     sourceSection: f.sourceSection ?? null,
+    // The namespace is the retrieval scope (shared/project/explicit), not the
+    // agent that wrote the fact. Returning it makes ranking evidence honest.
+    namespace: f.namespace ?? null,
   };
 }
 

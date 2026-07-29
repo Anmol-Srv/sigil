@@ -2,7 +2,7 @@
  * Single source of truth for daemon RPC methods.
  *
  * Each handler receives `(params, ctx)` and returns plain data. Transports
- * (unix socket today; HTTP and Iroh later) all share this table — there is
+ * (Unix socket and optional loopback HTTP) share this table — there is
  * exactly one implementation of "remember", "search", etc.
  *
  * Handlers must NOT format output. They return structured data; the caller
@@ -41,7 +41,7 @@ export function createRegistry() {
     const { runWithRequestContext } = await import('./request-context.js');
     try {
       const data = await runWithRequestContext(
-        { device: ctx.device || null, transport: ctx.transport || null, agent: ctx.agent || null },
+        { transport: ctx.transport || null, agent: ctx.agent || null, scope: ctx.scope || null },
         () => fn(params ?? {}, ctx),
       );
       return { ok: true, data };
@@ -65,17 +65,7 @@ export function createRegistry() {
     return [...handlers.keys()].sort();
   }
 
-  /**
-   * Replace an existing handler. Used by the lite-follower path to swap
-   * a data-touching local handler for one that proxies to master.
-   */
-  function replace(method, fn) {
-    if (!handlers.has(method)) return false;
-    handlers.set(method, fn);
-    return true;
-  }
-
-  return { register, replace, dispatch, list };
+  return { register, dispatch, list };
 }
 
 // serializeError moved to src/lib/errors.js (PR review #25).

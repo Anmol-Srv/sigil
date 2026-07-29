@@ -13,7 +13,13 @@ import { StepError } from '../errors.js';
 // id, label, hint, recommended, and the fields to collect. Keys map to the
 // config.json `llm` section ({ provider, model, apiKey, host }).
 const PROVIDERS = [
-  { id: 'claude-cli', label: 'Claude Code', hint: 'Uses your existing Claude Code subscription — no API key', recommended: true, fields: [] },
+  {
+    id: 'ollama', label: 'Ollama', hint: 'Local and private; requires a running Ollama server', recommended: true,
+    fields: [
+      { name: 'host', label: 'Ollama host', type: 'text', placeholder: 'http://localhost:11434', optional: true },
+      { name: 'model', label: 'Model', type: 'text', placeholder: 'qwen2.5:7b' },
+    ],
+  },
   {
     id: 'openrouter', label: 'OpenRouter', hint: 'One key, many models (cheapest default)',
     fields: [
@@ -32,13 +38,7 @@ const PROVIDERS = [
     id: 'anthropic', label: 'Anthropic', hint: 'Direct Anthropic API access',
     fields: [{ name: 'apiKey', label: 'Anthropic API key', type: 'password', placeholder: 'sk-ant-…' }],
   },
-  {
-    id: 'ollama', label: 'Ollama', hint: 'Local + private; slower on small machines',
-    fields: [
-      { name: 'host', label: 'Ollama host', type: 'text', placeholder: 'http://localhost:11434', optional: true },
-      { name: 'model', label: 'Model', type: 'text', placeholder: 'qwen2.5:7b' },
-    ],
-  },
+  { id: 'claude-cli', label: 'Claude Code', hint: 'Manual generation only; automatic hooks will not spawn coding-agent sessions by default', fields: [] },
 ];
 
 const KEYED = new Set(['openrouter', 'openai', 'anthropic']);

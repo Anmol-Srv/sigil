@@ -32,6 +32,7 @@ const meta = {
   id: 'kiro',
   label: 'Kiro',
   hint: 'MCP + steering file (steering auto-applies)',
+  automaticRecall: false,
 };
 
 async function detect() {
@@ -96,6 +97,13 @@ async function install({ dryRun = false } = {}) {
   if (steering) actions.push(steering);
 
   return { actions };
+}
+
+// The steering file is wholly Sigil-owned. Refresh it after a Sigil update
+// without touching the user's MCP settings file.
+async function refresh({ dryRun = false } = {}) {
+  const steering = await writeSteeringFile({ dryRun });
+  return { actions: steering ? [steering] : [] };
 }
 
 async function verify({ deep = false } = {}) {
@@ -167,6 +175,7 @@ export {
   meta,
   detect,
   install,
+  refresh,
   uninstall,
   verify,
   writeMcpEntry,

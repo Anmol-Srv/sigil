@@ -109,9 +109,7 @@ export function registerRepair(registry) {
     const chunkTotal = Number((await chunkFilter(cortexDb('chunk')).count({ c: '*' }))[0]?.c || 0);
 
     if (dryRun) {
-      let spoolPending = 0;
-      try { spoolPending = (await import('../../hooks/stop-spool.js')).spoolCount(); } catch { /* */ }
-      return { dryRun: true, namespace, model, facts: { scanned: factTotal, repaired: 0 }, chunks: { scanned: chunkTotal, repaired: 0 }, spool: { pending: spoolPending } };
+      return { dryRun: true, namespace, model, facts: { scanned: factTotal, repaired: 0 }, chunks: { scanned: chunkTotal, repaired: 0 } };
     }
 
     let factsRepaired = 0;
@@ -150,20 +148,12 @@ export function registerRepair(registry) {
       }
     }
 
-    // Also replay any Stop-hook saves that failed during an outage.
-    let spool = { drained: 0, remaining: 0, replayed: 0 };
-    try {
-      const { drainStopSpool } = await import('../../hooks/stop-spool.js');
-      spool = await drainStopSpool();
-    } catch { /* best effort */ }
-
     return {
       dryRun: false,
       namespace,
       model,
       facts: { scanned: factTotal, repaired: factsRepaired },
       chunks: { scanned: chunkTotal, repaired: chunksRepaired },
-      spool,
     };
   });
 }

@@ -2,6 +2,7 @@ import { connect } from 'node:net';
 import { randomUUID } from 'node:crypto';
 
 import { SIGIL_DAEMON_SOCK } from '../lib/paths.js';
+import { resolveProjectScope } from '../lib/project-scope.js';
 
 /**
  * Tiny JSON-RPC-over-NDJSON client for the local daemon.
@@ -23,7 +24,11 @@ export class SigilRpcError extends Error {
   }
 }
 
-export function openSocketClient({ path = SIGIL_DAEMON_SOCK, timeoutMs = 30_000 } = {}) {
+export function openSocketClient({
+  path = SIGIL_DAEMON_SOCK,
+  timeoutMs = 30_000,
+  projectScope = resolveProjectScope(),
+} = {}) {
   return new Promise((resolve, reject) => {
     const sock = connect(path);
     const pending = new Map();
@@ -90,7 +95,13 @@ export function openSocketClient({ path = SIGIL_DAEMON_SOCK, timeoutMs = 30_000 
           // / 'cli') so the daemon can stamp created_by_agent. Set per entry
           // point via SIGIL_AGENT; null when unknown (back-compat).
           const agent = process.env.SIGIL_AGENT || null;
-          const frame = JSON.stringify({ id, method, params, agent }) + '\n';
+          // Project identity comes from the caller's working directory, never
+          // from the daemon. It contains a one-way namespace key only; no
+          // absolute path or repository URL crosses the local socket.
+          const scope = projectScope?.kind === 'project'
+            ? { projectNamespace: projectScope.projectNamespace }
+            : null;
+          const frame = JSON.stringify({ id, method, params, agent, scope }) + '\n';
           return new Promise((res, rej) => {
             const timer = setTimeout(() => {
               if (pending.delete(id)) {

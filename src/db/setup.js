@@ -7,14 +7,14 @@
  * a hint from `sigil migrate` when the target DB doesn't exist yet.
  *
  * Admin credentials are used once for CREATE DATABASE / CREATE USER /
- * CREATE EXTENSION and immediately dropped — the .env only stores the
+ * CREATE EXTENSION and immediately dropped — config.json only stores the
  * least-privilege sigil_app creds.
  */
 
 import pg from 'pg';
 
 import { buildUrlConnection, classifyProvider } from './drivers/url.js';
-import { ensureDeviceId } from '../setup/config-store.js';
+import { ensureInstallId } from '../setup/config-store.js';
 
 /**
  * Signature Sigil stamps onto the database it provisions, as a COMMENT ON
@@ -27,8 +27,8 @@ import { ensureDeviceId } from '../setup/config-store.js';
  * the stable prefix and is forward-compatible with later format bumps.
  */
 export const SIGIL_SIGNATURE_PREFIX = 'sigil-instance:v1';
-export function buildSigilSignature(deviceId) {
-  return deviceId ? `${SIGIL_SIGNATURE_PREFIX}:${deviceId}` : SIGIL_SIGNATURE_PREFIX;
+export function buildSigilSignature(installId) {
+  return installId ? `${SIGIL_SIGNATURE_PREFIX}:${installId}` : SIGIL_SIGNATURE_PREFIX;
 }
 export function isSigilSignature(s) {
   return typeof s === 'string' && s.startsWith('sigil-instance:');
@@ -67,8 +67,8 @@ export async function probeSigilConnection({ host, port, database, user, passwor
  *   { ok: true,  provider, connectMs, database, serverVersion, pgvector }
  *   { ok: false, stage: 'parse'|'connect'|'query', error, code? }
  *
- * Shared by `sigil init` and the GUI's testDbConnection RPC so both
- * paths apply the same SSL heuristics and the same pgvector check.
+ * Used by `sigil init` so URL setup applies the same SSL heuristics and
+ * pgvector check before persisting the connection.
  */
 export async function probeUrlConnection(url) {
   let connection;
@@ -145,7 +145,7 @@ export async function ensurePostgresDatabase({
       await adminClient.query(
         `ALTER USER ${quoteIdent(sigilUser)} WITH PASSWORD ${quoteLiteral(sigilPassword)}`,
       );
-      actions.push(`user "${sigilUser}" exists — password reset to match .env`);
+      actions.push(`user "${sigilUser}" exists — password reset to match config.json`);
     }
 
     await adminClient.query(
@@ -158,7 +158,7 @@ export async function ensurePostgresDatabase({
     // heuristic stand. Runs for both the freshly-created and pre-existing paths.
     try {
       await adminClient.query(
-        `COMMENT ON DATABASE ${quoteIdent(sigilDb)} IS ${quoteLiteral(buildSigilSignature(ensureDeviceId()))}`,
+        `COMMENT ON DATABASE ${quoteIdent(sigilDb)} IS ${quoteLiteral(buildSigilSignature(ensureInstallId()))}`,
       );
       actions.push('stamped Sigil signature');
     } catch { /* not owner — signature is best-effort */ }

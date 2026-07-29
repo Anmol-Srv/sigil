@@ -1,7 +1,7 @@
 // End-to-end tests for `sigil connect` — the re-runnable client (re)registration
 // command. Spawns the BUILT CLI (dist/cli.js) with a sandboxed $HOME and stdin
 // detached (non-TTY), exercising the agent/CI code path. Offline: connect
-// touches no DB (the hot-context refresh it attempts is best-effort/swallowed).
+// touches no DB.
 
 import { describe, it, expect, beforeAll } from 'vitest';
 import { mkdtempSync, mkdirSync, existsSync, readFileSync, rmSync } from 'node:fs';
@@ -69,7 +69,8 @@ describe('sigil connect', () => {
     const settings = JSON.parse(readFileSync(join(home, '.claude', 'settings.json'), 'utf8'));
     const commands = Object.values(settings.hooks)
       .flatMap((arr) => arr).flatMap((e) => e.hooks).map((h) => h.command);
-    expect(commands.length).toBe(4);
+    expect(Object.keys(settings.hooks)).toEqual(['UserPromptSubmit']);
+    expect(commands.length).toBe(1);
     for (const cmd of commands) {
       expect(cmd).toContain('sigil-hook');
       expect(cmd).not.toMatch(/node\s+\/.*\.js/);

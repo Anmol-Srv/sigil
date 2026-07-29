@@ -5,8 +5,10 @@
 import { writeFileSync, existsSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { SIGIL_DAEMON_LOG } from '../lib/paths.js';
+import { isPidAlive, readPidFile } from '../daemon/lifecycle.js';
 import { resolveDaemonScript, nodeExecPath } from './entry-path.js';
 import { sh } from './sh.js';
 
@@ -101,9 +103,53 @@ export function status() {
   return { installed, loaded, running: loaded, manager: MANAGER, unitPath: path };
 }
 
-export function restart() {
-  const r = sh('launchctl', ['kickstart', '-k', serviceTarget()]);
-  return { ok: r.code === 0, manager: MANAGER };
+/**
+ * A bootout removes launchd's ownership of the job but does not guarantee an
+ * already-running child is terminated. Release that exact daemon PID before
+ * loading the replacement, otherwise PGlite's single-writer lock causes a
+ * false-success restart where the new process exits as "already running".
+ */
+export async function releaseDaemonForServiceReload({
+  readPid = readPidFile,
+  alive = isPidAlive,
+  signal = (pid, value) => process.kill(pid, value),
+  sleep = delay,
+  now = () => Date.now(),
+} = {}) {
+  const pid = await readPid();
+  if (!pid || !alive(pid)) return true;
+
+  try { signal(pid, 'SIGTERM'); } catch { return !alive(pid); }
+  const deadline = now() + 10_000;
+  while (now() < deadline && alive(pid)) await sleep(50);
+  if (!alive(pid)) return true;
+
+  // This is the same last-resort behavior as `sigil daemon stop`: the
+  // graceful period protects the PGlite checkpoint; SIGKILL only prevents an
+  // unrecoverable stale owner from blocking a user-requested service restart.
+  try { signal(pid, 'SIGKILL'); } catch { return !alive(pid); }
+  await sleep(50);
+  return !alive(pid);
+}
+
+export async function restart({ release = releaseDaemonForServiceReload } = {}) {
+  // First remove the job so KeepAlive cannot respawn the old process while we
+  // wait for the daemon to flush its embedded store and release the socket.
+  sh('launchctl', ['bootout', serviceTarget()]);
+  const released = await release();
+  if (!released) return { ok: false, manager: MANAGER };
+
+  const loaded = sh('launchctl', ['bootstrap', domainTarget(), plistPath()]);
+  if (loaded.code === 0) {
+    const started = sh('launchctl', ['kickstart', serviceTarget()]);
+    return { ok: started.code === 0, manager: MANAGER };
+  }
+
+  // If the service was already reloaded by launchd between the two commands,
+  // retain the old kickstart path as a narrow recovery attempt. Storage has
+  // already been released above, so this cannot create a competing daemon.
+  const fallback = sh('launchctl', ['kickstart', '-k', serviceTarget()]);
+  return { ok: fallback.code === 0, manager: MANAGER };
 }
 
 export function start() {

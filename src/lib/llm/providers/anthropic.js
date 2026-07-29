@@ -34,26 +34,4 @@ async function chat(input, { model, jsonMode = false, temperature } = {}) {
   };
 }
 
-// ─── Init metadata + setup ──────────────────────────────────────────────────
-const meta = {
-  id: 'anthropic',
-  label: 'Anthropic',
-  hint: 'Claude Haiku — requires API key',
-};
-
-async function setup({ existing, clack }) {
-  const current = existing.ANTHROPIC_API_KEY || '';
-  const key = await clack.text({
-    message: 'Anthropic API key (paste, then Enter)',
-    placeholder: current ? '(keep existing — press Enter)' : 'sk-ant-...',
-    validate: (v) => {
-      if (!v && !current) return 'API key is required';
-      if (v && !v.startsWith('sk-ant-')) return 'Anthropic keys start with "sk-ant-" — check paste';
-    },
-  });
-  if (clack.isCancel(key)) return null;
-
-  return { env: { ANTHROPIC_API_KEY: key || current } };
-}
-
-export { chat, meta, setup };
+export { chat };

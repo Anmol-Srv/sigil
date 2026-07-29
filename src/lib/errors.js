@@ -11,7 +11,7 @@
  *   - `AppError`      — the single throw type. Carries errorCode + hint + data.
  *   - `fromDiagnosis` — wrap a diagnoseError() result into an AppError.
  *   - `serializeError`— the wire-shape serializer used by the RPC registry
- *                       (socket + HTTP + Iroh). Emits {code, message, hint}.
+ *                       (socket + optional local HTTP). Emits {code, message, hint}.
  *                       Unwraps AggregateError (pg/undici multi-address) and
  *                       runs raw DB/embedding errors through diagnoseError so
  *                       even un-wrapped failures surface a clean code + hint.

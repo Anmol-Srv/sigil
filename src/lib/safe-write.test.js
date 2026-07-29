@@ -54,6 +54,19 @@ describe('safeWrite', () => {
     expect(existsSync(p)).toBe(false);
   });
 
+  it('skips an identical existing file without creating a backup or rewriting it', async () => {
+    const p = join(DIR, 'same.json');
+    writeFileSync(p, 'unchanged');
+    const before = statSync(p).mtimeMs;
+
+    const r = await safeWrite(p, 'unchanged');
+
+    expect(r).toMatchObject({ action: 'skip', wrote: false, backedUp: false });
+    expect(readFileSync(p, 'utf8')).toBe('unchanged');
+    expect(existsSync(`${p}.sigil.bak`)).toBe(false);
+    expect(statSync(p).mtimeMs).toBe(before);
+  });
+
   it('preserves the existing file mode (does not relax 0600 → 0644)', async () => {
     const p = join(DIR, 'secret.json');
     writeFileSync(p, 'before');

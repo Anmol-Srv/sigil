@@ -44,13 +44,9 @@ vi.mock('./embedder.js', () => {
   };
 });
 
-vi.mock('./contextualizer.js', () => ({
-  contextualizeChunks: vi.fn((chunks) => Promise.resolve(chunks)),
-}));
-
-// Fact writes run inside cortexDb.transaction(cb). saveFact/supersedeStaleDocFacts
-// are mocked and these tests attach no pods, so the trx object is never used —
-// a stub that just invokes the callback is enough to avoid a real DB connection.
+// Fact writes run inside cortexDb.transaction(cb). Deterministic save/supersede
+// are mocked, so the trx object is never used — a stub that just invokes the
+// callback is enough to avoid a real DB connection.
 vi.mock('../db/cortex.js', () => ({
   default: Object.assign(vi.fn(), { transaction: vi.fn(async (cb) => cb({})) }),
 }));
@@ -76,106 +72,35 @@ vi.mock('../memory/facts/extractor.js', () => ({
 }));
 
 vi.mock('../memory/facts/store.js', () => ({
-  saveFact: vi.fn().mockResolvedValue({ action: 'ADD', fact: { id: 1, uid: 'fact-new' } }),
+  saveFactDeterministic: vi.fn().mockResolvedValue({ action: 'ADD', fact: { id: 1, uid: 'fact-new' } }),
   supersedeStaleDocFacts: vi.fn().mockResolvedValue({ superseded: 0, dissociated: 0 }),
 }));
 
-vi.mock('../memory/entities/linker.js', () => ({
-  linkDocumentEntities: vi.fn().mockResolvedValue({
-    entityCount: 2,
-    relationCount: 1,
-    factEntityLinks: 2,
-    topics: ['test topic'],
-  }),
-}));
-
-vi.mock('../memory/cognitive/input-classifier.js', () => ({
-  classifyInput: vi.fn().mockResolvedValue({
-    route: 'knowledge',
-    facts: [],
-    entities: [],
-    reasoning: 'default mock',
-  }),
-}));
-
-import { classifyInput } from '../memory/cognitive/input-classifier.js';
-import { saveFact } from '../memory/facts/store.js';
+import { extractFactsFromChunks } from '../memory/facts/extractor.js';
+import { saveFactDeterministic, supersedeStaleDocFacts } from '../memory/facts/store.js';
 import * as documentStore from '../memory/documents/store.js';
+import { getConfig } from '../setup/config-store.js';
 import { ingestDocument } from './pipeline.js';
+
+const defaultTestConfig = getConfig();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getConfig.mockReturnValue(defaultTestConfig);
   // Restore defaults
-  classifyInput.mockResolvedValue({ route: 'knowledge', facts: [], entities: [], reasoning: '' });
   documentStore.upsert.mockResolvedValue({ doc: { id: 1, uid: 'doc-test', title: 'Test' }, changed: true });
   documentStore.updateCounts.mockResolvedValue(undefined);
-  saveFact.mockResolvedValue({ action: 'ADD', fact: { id: 1, uid: 'fact-new' } });
+  saveFactDeterministic.mockResolvedValue({ action: 'ADD', fact: { id: 1, uid: 'fact-new' } });
 });
 
-describe('ingestDocument — noise route', () => {
-  it('returns skipped=true and no documentId when classified as noise', async () => {
-    classifyInput.mockResolvedValue({ route: 'noise', facts: [], entities: [], reasoning: 'too short' });
-
-    const result = await ingestDocument({
-      content: 'hi',
-      title: 'test',
-      namespace: 'default',
-    });
-
-    expect(result.skipped).toBe(true);
-    expect(result.documentId).toBeNull();
-    expect(result.route).toBe('noise');
-  });
-});
-
-describe('ingestDocument — thought route', () => {
-  it('stores facts directly and skips chunking', async () => {
-    classifyInput.mockResolvedValue({
-      route: 'thought',
-      facts: [
-        { content: 'I prefer mango over apple', category: 'preference', confidence: 'high', importance: 'vital' },
-        { content: 'I dislike durian', category: 'preference', confidence: 'high', importance: 'vital' },
-      ],
-      entities: ['mango', 'apple', 'durian'],
-      reasoning: 'personal preference',
-    });
-
-    const result = await ingestDocument({
-      content: 'I prefer mango over apple. I dislike durian.',
-      namespace: 'default',
-    });
-
-    expect(result.skipped).toBe(false);
-    expect(result.route).toBe('thought');
-    expect(result.chunkCount).toBe(0);
-    expect(saveFact).toHaveBeenCalledTimes(2);
-  });
-
-  it('thought route counts added facts correctly', async () => {
-    saveFact
-      .mockResolvedValueOnce({ action: 'ADD', fact: { id: 1 } })
-      .mockResolvedValueOnce({ action: 'SKIP', existing: { id: 2 } });
-
-    classifyInput.mockResolvedValue({
-      route: 'thought',
-      facts: [
-        { content: 'fact one', category: 'preference', confidence: 'high', importance: 'vital' },
-        { content: 'fact two', category: 'preference', confidence: 'high', importance: 'vital' },
-      ],
-      entities: [],
-      reasoning: '',
-    });
-
-    const result = await ingestDocument({ content: 'two facts', namespace: 'default' });
-    expect(result.facts.added).toBe(1);
-    expect(result.facts.skipped).toBe(1);
-  });
-});
-
-describe('ingestDocument — document/knowledge route', () => {
+describe('ingestDocument — deterministic document route', () => {
   it('runs full pipeline and returns chunk + fact counts', async () => {
-    classifyInput.mockResolvedValue({ route: 'knowledge', facts: [], entities: [], reasoning: '' });
-
+    // Full fact extraction remains supported, but is intentionally opt-in for
+    // local-first installs because it invokes the configured LLM.
+    getConfig.mockReturnValue({
+      ...defaultTestConfig,
+      ingest: { ...defaultTestConfig.ingest, eagerExtract: true },
+    });
     const result = await ingestDocument({
       content: 'A longer piece of content about something important.',
       title: 'Test Document',
@@ -183,8 +108,10 @@ describe('ingestDocument — document/knowledge route', () => {
     });
 
     expect(result.skipped).toBe(false);
+    expect(result.route).toBe('document');
     expect(result.chunkCount).toBeGreaterThan(0);
     expect(result.facts.total).toBeGreaterThan(0);
+    expect(saveFactDeterministic).toHaveBeenCalledTimes(2);
   });
 
   it('skips processing when content hash is unchanged', async () => {
@@ -199,17 +126,15 @@ describe('ingestDocument — document/knowledge route', () => {
     });
 
     expect(result.skipped).toBe(true);
-    expect(saveFact).not.toHaveBeenCalled();
+    expect(saveFactDeterministic).not.toHaveBeenCalled();
   });
 
-  it('classify=false skips the classifier entirely', async () => {
-    const result = await ingestDocument({
-      content: 'content without classification',
-      namespace: 'default',
-      classify: false,
-    });
+  it('defaults to chunks-only and preserves previously extracted facts', async () => {
+    await ingestDocument({ content: 'searchable document content', namespace: 'default' });
 
-    expect(classifyInput).not.toHaveBeenCalled();
-    expect(result.skipped).toBe(false);
+    expect(extractFactsFromChunks).not.toHaveBeenCalled();
+    expect(saveFactDeterministic).not.toHaveBeenCalled();
+    expect(supersedeStaleDocFacts).not.toHaveBeenCalled();
+    expect(documentStore.updateCounts).toHaveBeenCalledWith(1, { chunkCount: 2 });
   });
 });

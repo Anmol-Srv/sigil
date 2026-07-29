@@ -6,12 +6,12 @@
  * `.env` path anymore: every choice is persisted through patchConfig() by the
  * step modules, so the terminal wizard and the browser wizard can never diverge.
  *
- * The five steps mirror the dashboard one-for-one:
+ * The required core mirrors the dashboard one-for-one:
  *   1. Database     — Built-in (PGlite) · local Postgres · Docker · external URL
- *   2. LLM provider — Claude Code · OpenRouter · OpenAI · Anthropic · Ollama
- *   3. Embeddings   — OpenAI · Voyage · OpenRouter · Ollama (pinned to 1024-dim)
- *   4. Coding agents— connect Claude Code / Cursor / Codex / Kiro / Hermes
- *   5. Your name    — stored + written as the first memory (full-stack smoke test)
+ *   2. Embeddings   — OpenAI · Voyage · OpenRouter · Ollama (pinned to 1024-dim)
+ * Optional: connect Claude Code / Cursor / Codex / Kiro / Hermes.
+ * An LLM is offered as a default-off opt-in (or forced with `--with-llm`) and
+ * only powers explicit document fact extraction.
  *
  * Each step runs in-process and streams the service's live progress events
  * (bus 'setup' → clack spinner), exactly mirroring the GUI's progress bar.
@@ -100,7 +100,7 @@ async function stepDatabase(ctx, { urlFlag }) {
     }
     options.push({ value: 'url', label: 'External database', hint: 'Managed (Neon / Supabase / RDS) or a connection string' });
 
-    const choice = guard(await clack.select({ message: 'Where should memory live?', options, initialValue: options[0].value }));
+    const choice = guard(await clack.select({ message: 'Where should Sigil keep memory?', options, initialValue: options[0].value }));
 
     let input;
     if (choice === 'embedded') {
@@ -161,8 +161,8 @@ async function stepDatabase(ctx, { urlFlag }) {
 
 // ── 2 & 3. Provider steps (LLM + Embeddings) ──────────────────────────────────
 const PROVIDER_COPY = {
-  llm: { select: 'LLM provider (classifies input, extracts facts, answers searches)', start: 'Saving + testing a live LLM call…', ok: 'LLM provider ready.' },
-  embedding: { select: 'Embedding provider (powers semantic search — pinned to 1024-dim)', start: 'Saving + testing an embed call…', ok: 'Embedder ready.' },
+  llm: { select: 'Optional LLM provider (for explicit document fact extraction)', start: 'Saving + testing a live LLM call…', ok: 'Optional LLM provider ready.' },
+  embedding: { select: 'Choose how Sigil searches your memory', start: 'Saving + testing memory search…', ok: 'Memory search ready.' },
 };
 
 /** Synthesize the input fields for a provider, mirroring the GUI's providerFields. */
@@ -183,7 +183,7 @@ async function runProviderStep(ctx, stepId) {
 
   while (true) {
     const det = await detectStep(stepId).catch(() => ({ providers: [] }));
-    const providers = det.providers || [];
+    const providers = (det.providers || []).filter((p) => p.available !== false);
     const rec = providers.find((p) => p.recommended) || providers[0];
 
     const choice = guard(await clack.select({
@@ -197,15 +197,15 @@ async function runProviderStep(ctx, stepId) {
     if (note) clack.log.info(note);
     const input = { provider: choice, ...(await collectFields(clack, guard, fields)) };
 
-    // Ollama embeddings: pick a compatible (1024-dim) model from the live list;
-    // apply() pulls it if it isn't installed yet.
+    // Ollama embeddings: select an already-installed compatible model. Setup
+    // never downloads a model or starts a service without the user's consent.
     if (stepId === 'embedding' && choice === 'ollama') {
-      const models = det.ollama?.models || [];
+      const models = (det.ollama?.models || []).filter((m) => m.installed);
       if (models.length) {
         input.model = guard(await clack.select({
           message: 'Ollama embedding model',
-          options: models.map((m) => ({ value: m.name, label: m.name + (m.recommended ? ' (recommended)' : ''), hint: m.installed ? 'installed' : `pull ${m.size || ''}`.trim() })),
-          initialValue: models.find((m) => m.installed)?.name || models.find((m) => m.recommended)?.name || det.ollama.recommended,
+          options: models.map((m) => ({ value: m.name, label: m.name + (m.recommended ? ' (recommended)' : ''), hint: 'installed' })),
+          initialValue: models.find((m) => m.recommended)?.name || models[0].name,
         }));
       }
     }
@@ -230,9 +230,9 @@ async function stepConnectors(ctx) {
   const detectedIds = clients.filter((_, i) => detected[i]).map((c) => c.id);
 
   const picked = guard(await clack.multiselect({
-    message: 'Connect your coding agents (space to toggle, Enter to confirm)',
+    message: 'Connect coding agents now? (optional — space to toggle, Enter to continue)',
     options: clients.map((c, i) => ({ value: c.id, label: c.label, hint: detected[i] ? `${c.hint} — detected` : c.hint })),
-    initialValues: detectedIds.length ? detectedIds : ['claude-code'],
+    initialValues: detectedIds,
     required: false,
   }));
 
@@ -250,36 +250,35 @@ async function stepConnectors(ctx) {
     }
   }
 
-  // Refresh the hot-context snapshot so a new session sees memory immediately.
-  const { updateContextSnapshot } = await import('../memory/facts/hot-context.js');
-  await updateContextSnapshot().catch(() => {});
-
   // Mark the step done in config.json (connecting any number — including zero — is fine).
   await runStep('connectors', {});
 }
 
-// ── 5. Your name (identity) ───────────────────────────────────────────────────
-async function stepIdentity(ctx) {
-  const { clack, guard, runStep } = ctx;
-  while (true) {
-    const name = guard(await clack.text({
-      message: 'What should we call you? (saved as your first memory — a live full-stack test)',
-      placeholder: 'e.g. Anmol',
-      validate: (v) => {
-        const t = String(v || '').trim();
-        if (!t) return 'Tell us what to call you';
-        if (t.length > 80) return 'That name is too long';
-      },
-    }));
-    const res = await execStep(clack, runStep, 'identity', { name: name.trim() }, {
-      start: 'Saving + writing your first memory (testing the whole stack)…',
-      ok: (r) => `First memory written as “${r.name}”.`,
-    });
-    if (res.ok) return;
-    clack.note(stepErrorText(res), 'Could not write the first memory');
-    const again = guard(await clack.confirm({ message: 'Try again?', initialValue: true }));
-    if (!again) { clack.cancel('Setup cancelled.'); process.exit(1); }
+/** Decide whether the optional LLM question is interactive, forced, or skipped. */
+export function resolveLlmOnboardingMode(args = []) {
+  const withLlm = args.includes('--with-llm');
+  const withoutLlm = args.includes('--no-llm');
+  if (withLlm && withoutLlm) {
+    throw new Error('Use either --with-llm or --no-llm, not both.');
   }
+  if (withLlm) return 'configure';
+  if (withoutLlm) return 'skip';
+  return 'ask';
+}
+
+async function maybeConfigureLlm(ctx, mode) {
+  if (mode === 'skip') return;
+  if (mode === 'configure') {
+    ctx.clack.log.info('Configuring the optional LLM provider.');
+    await runProviderStep(ctx, 'llm');
+    return;
+  }
+
+  const wantsLlm = ctx.guard(await ctx.clack.confirm({
+    message: 'Optional: add an LLM for explicit document fact extraction? Storage and search already work without it.',
+    initialValue: false,
+  }));
+  if (wantsLlm) await runProviderStep(ctx, 'llm');
 }
 
 // ── entrypoint ────────────────────────────────────────────────────────────────
@@ -287,6 +286,13 @@ export async function runInit(args = []) {
   if (args.includes('--help') || args.includes('-h')) return printHelp();
 
   const urlFlagIdx = args.findIndex((a) => a === '--url' || a.startsWith('--url='));
+  let llmMode;
+  try {
+    llmMode = resolveLlmOnboardingMode(args);
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
   let urlFlag = null;
   if (urlFlagIdx !== -1) {
     const tok = args[urlFlagIdx];
@@ -297,7 +303,7 @@ export async function runInit(args = []) {
   const clack = await import('@clack/prompts');
   const guard = (v) => { if (clack.isCancel(v)) { clack.cancel('Setup cancelled.'); process.exit(0); } return v; };
 
-  clack.intro('Sigil — persistent memory for your AI agents');
+  clack.intro('Sigil — local memory for your AI tools');
 
   // Refuse to set up from an ephemeral `pnpm dlx` / `npx` cache before touching
   // anything — baking that path into hooks would silently break later and cold-
@@ -315,10 +321,9 @@ export async function runInit(args = []) {
   const ctx = { clack, guard, runStep, detectStep };
 
   await stepDatabase(ctx, { urlFlag });
-  await runProviderStep(ctx, 'llm');
   await runProviderStep(ctx, 'embedding');
   await stepConnectors(ctx);
-  await stepIdentity(ctx);
+  await maybeConfigureLlm(ctx, llmMode);
 
   const state = getSetupState();
   const cfg = getSetupConfig();
@@ -331,13 +336,12 @@ export async function runInit(args = []) {
   clack.note(
     [
       dbLine,
-      `LLM           ${cfg.llm.provider}${cfg.llm.model ? ` (${cfg.llm.model})` : ''}`,
+      `LLM           ${cfg.llm.provider ? `${cfg.llm.provider}${cfg.llm.model ? ` (${cfg.llm.model})` : ''}` : 'not configured (optional)'}`,
       `Embeddings    ${cfg.embedding.provider}/${cfg.embedding.model} · ${cfg.embedding.dim}d`,
-      `You           ${cfg.identity.name}`,
       `Config        ~/.sigil/config.json`,
       '',
-      'Your AI agents will search Sigil before answering and save important',
-      'facts automatically. Open a new session to begin.',
+      'Connected agents can recall memory before answering. Save facts explicitly',
+      'with the CLI or MCP; Sigil never captures conversations automatically.',
       '',
       'Quick start:',
       '  sigil remember "your first fact"',
@@ -349,31 +353,37 @@ export async function runInit(args = []) {
 
   clack.outro(state.complete ? 'Sigil is ready.' : 'Finish the remaining steps with `sigil` (dashboard) or re-run `sigil init`.');
 
-  // The shared cortexDb pool (opened by the DB/embedder/identity steps) keeps
+  // The shared cortexDb pool (opened by the database/embedder steps) keeps
   // connections alive and would hang the event loop. All DB work is done — exit
   // explicitly, matching the pattern across the CLI.
   process.exit(state.complete ? 0 : 1);
 }
 
 function printHelp() {
-  console.log(`sigil init — Interactive first-run setup (Database, LLM, Embeddings, agents, name)
+  console.log(`sigil init — Interactive local-memory setup (Database and memory search)
 
 Usage:
-  sigil init [--url <postgres-url>]
+  sigil init [--url <postgres-url>] [--with-llm|--no-llm]
 
 Drives the same setup engine as the web dashboard and writes everything to
-~/.sigil/config.json (no .env). Walks you through five steps:
+~/.sigil/config.json (no .env). Walks you through two required steps:
 
   1. Database     Built-in (PGlite, zero install) · local Postgres · Docker · external URL
-  2. LLM provider Claude Code · OpenRouter · OpenAI · Anthropic · Ollama
-  3. Embeddings   OpenAI · Voyage · OpenRouter · Ollama  (all pinned to 1024-dim)
-  4. Coding agents Connect Claude Code / Cursor / Codex / Kiro / Hermes (memory hooks)
-  5. Your name    Stored + written as your first memory (verifies the whole stack)
+  2. Memory search OpenAI · Voyage · OpenRouter · existing Ollama (all pinned to 1024-dim)
+
+You can optionally connect Claude Code / Cursor / Codex / Kiro / Hermes. Sigil
+never writes a synthetic memory or captures conversations automatically.
 
 Options:
   --url <url>   Skip the database picker and use this Postgres connection string
                 (Neon, Supabase, RDS, self-hosted). The database is created if
                 missing, pgvector enabled, and migrations applied.
+  --with-llm    Configure an optional generation provider for explicit document
+                fact extraction without asking the opt-in question.
+  --no-llm      Skip the optional LLM question (useful for scripted installs).
+
+Without either flag, Sigil asks once at the end of setup. The default is No;
+the local memory core does not require an LLM.
 
 Prefer a GUI? Run \`sigil\` to open the same wizard in your browser.`);
   process.exit(0);

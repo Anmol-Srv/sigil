@@ -3,7 +3,7 @@
   "version": "0.20.0",
   "private": true,
   "type": "module",
-  "description": "Local-first memory infrastructure for AI coding agents. One brain shared across Claude Code, Codex CLI, Cursor, Kiro, Continue, Cline, Windsurf, or any MCP client. Organized in pluggable pods, stored in your own Postgres. No cloud, no telemetry. Auto-captured from Claude Code via hooks; surfaced everywhere else as a 9-tool MCP server.",
+  "description": "Local-first memory for AI coding agents. PGlite by default, explicit atomic saves, deterministic hybrid recall, and no telemetry.",
   "bin": {
     "sigil": "dist/cli.js"
   },
@@ -61,7 +61,6 @@
     "chatgpt",
     "ollama",
     "rag",
-    "knowledge-graph",
     "knowledge-base",
     "vector-search",
     "hybrid-search",
@@ -84,20 +83,17 @@
   "dependencies": {
     "@iarna/toml": "^2.2.5",
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "dotenv": "^17.3.1",
     "knex": "^3.1.0",
     "pg": "^8.20.0",
     "ws": "^8.21.0"
   },
   "optionalDependencies": {
     "@anthropic-ai/sdk": "^0.30.0",
-    "@electric-sql/pglite": "^0.4.4",
-    "@number0/iroh": "^0.35.0"
+    "@electric-sql/pglite": "^0.4.4"
   },
   "devDependencies": {
     "@clack/prompts": "^1.2.0",
     "@eslint/js": "^10.0.1",
-    "dayjs": "^1.11.19",
     "esbuild": "^0.28.0",
     "eslint": "^10.0.3",
     "globals": "^17.7.0",

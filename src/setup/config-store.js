@@ -1,5 +1,5 @@
 /**
- * Config store — the device-local source of truth that replaces ~/.sigil/.env.
+ * Config store — the machine-local source of truth that replaces ~/.sigil/.env.
  *
  * Design (decisions from the onboarding redesign):
  *   - ONE versioned JSON file at ~/.sigil/config.json, chmod 600.
@@ -11,7 +11,7 @@
  *   - Single writer with atomic write (tmp + rename). The in-memory cache is
  *     updated on every patch so the daemon sees fresh values without a restart.
  *
- * This is device-local only. Shared memory data lives in Postgres; the DB
+ * This is machine-local only. Memory data lives in the configured database; the DB
  * connection itself can't live in the DB (chicken-and-egg), so it lives here.
  */
 
@@ -35,7 +35,7 @@ const STEP_STATUSES = ['pending', 'active', 'done', 'error'];
 function defaults() {
   return {
     schemaVersion: CONFIG_SCHEMA_VERSION,
-    device: { id: null },
+    installation: { id: null },
     database: {
       mode: null,            // 'embedded' | 'local' | 'docker' | 'url'
       url: null,
@@ -45,48 +45,30 @@ function defaults() {
       user: 'sigil_app',
       password: null,
     },
-    // llm: provider identity (set by onboarding) + tuning knobs and the
-    // managed-session engine. config.json is the sole source of truth — these
-    // were env-only before (LLM_*, SIGIL_MANAGED_*, SIGIL_MAX_CLAUDE_PROCS).
+    // llm: provider identity (set by optional configuration) + tuning knobs.
+    // config.json is the sole source of truth.
     llm: {
       provider: null, model: null, apiKey: null, host: null,
       cliPath: '',
-      extractionModel: '', decisionModel: '', entityModel: '',
-      maxRetries: 3, cliTimeout: 120000, requestTimeout: 60000, maxClaudeProcs: 4,
+      extractionModel: '',
+      maxRetries: 1, cliTimeout: 120000, requestTimeout: 60000, maxClaudeProcs: 1,
       openrouterBaseUrl: '', openrouterReferer: 'https://github.com/Anmol-Srv/sigil', openrouterTitle: 'Sigil',
-      managedSession: {
-        enabled: false, poolSize: 1, tokenBudget: 60000,
-        taskTimeoutMs: 120000, firstTaskTimeoutMs: 10000, healthProbeMs: 15000,
-        clearBetweenTasks: true,
-      },
     },
     embedding: {
       provider: null, model: null, apiKey: null, host: null,
       openrouterBaseUrl: '', openrouterReferer: 'https://github.com/Anmol-Srv/sigil', openrouterTitle: 'Sigil',
     },
-    identity: { name: null },
     // Infra/tuning — prepopulated here (defaults track the code, merged on read)
     // so config.json is self-sufficient and no env file is consulted.
-    http: { enabled: true, host: '127.0.0.1', port: 7777 },
-    network: { mode: 'solo', enabled: false, masterNodeId: null },
+    // The browser adapter starts on explicit `sigil` / `sigil daemon open`.
+    // Memory-only CLI, MCP, and hook usage should not bind a TCP port or load ws.
+    http: { enabled: false, host: '127.0.0.1', port: 7777 },
     defaults: { namespace: 'default' },
-    memory: {
-      skipThreshold: 0.88, ambiguousThreshold: 0.78, supersedeThreshold: 0.72,
-      supersedeScanLimit: 8, minFactSimilarity: 0.45, injectionFloor: 0.6,
-    },
-    search: { synthesize: true, synthesizeModel: '' },
-    ingest: { eagerExtract: true, extractRelations: true, graphGleanRounds: 0 },
-    output: {
-      storage: 'local', dir: './output',
-      s3: { endpoint: '', bucket: '', region: 'us-east-1', accessKey: '', secretKey: '', publicUrl: '' },
-    },
-    hebbian: {
-      entity: {
-        enabled: true, eta: 1, cap: 50, halfLifeDays: 30, minEffective: 0.5,
-        rrfWeight: 0.3, maxWriteEntities: 12, expandPerSeed: 3,
-      },
-    },
-    preferences: { noUpdateCheck: false },
+    memory: { minFactSimilarity: 0.45, injectionFloor: 0.6 },
+    // Generation is optional enrichment, not a prerequisite for storage or
+    // retrieval. Keep every expensive/cognitive layer off until the user opts
+    // in and an eval demonstrates that it improves their workload.
+    ingest: { eagerExtract: false },
     setup: { complete: false, steps: {} },
   };
 }
@@ -196,7 +178,7 @@ function validateSection(section, values) {
 // break, import that file into config.json ONCE, then rename it so it's skipped
 // thereafter. A power user can later drop a fresh .env to update settings; it's
 // re-imported on the next boot. We map the settings whose silent loss would
-// actually break a daemon (db, llm, embedding, network, http, managed-session) so
+// actually break a daemon (db, llm, embedding, http) so
 // an existing .env-configured install upgrades losslessly. Pure tuning knobs
 // (MEMORY_* thresholds, per-task model overrides) are NOT carried — they fall
 // back to the (identical) code defaults; re-set them in the GUI/config if needed.
@@ -253,22 +235,6 @@ function envToPatches(e) {
     if (e.EMBEDDING_PROVIDER === 'ollama' && e.OLLAMA_HOST) emb.host = e.OLLAMA_HOST;
     patches.embedding = emb;
   }
-
-  // Managed-session engine (opt-in power feature). Carry the toggle so an
-  // .env-enabled warm pool doesn't silently fall back to one-shot on upgrade.
-  if (e.SIGIL_MANAGED_SESSION !== undefined) {
-    patches.llm = patches.llm || {};
-    patches.llm.managedSession = { enabled: e.SIGIL_MANAGED_SESSION === 'true' };
-  }
-
-  // Network (multi-device). Without this a .env-configured follower/master
-  // silently reverts to solo — Iroh never starts and sync stops dead.
-  const net = {};
-  if (e.SIGIL_MODE) net.mode = e.SIGIL_MODE;
-  if (e.SIGIL_NETWORK_ENABLED !== undefined) net.enabled = e.SIGIL_NETWORK_ENABLED !== 'false';
-  else if (e.SIGIL_MODE && e.SIGIL_MODE !== 'solo') net.enabled = true; // legacy derive-from-mode
-  if (e.SIGIL_MASTER_NODE_ID) net.masterNodeId = e.SIGIL_MASTER_NODE_ID;
-  if (Object.keys(net).length) patches.network = net;
 
   // HTTP server (custom port/host/disabled) — a bookmarked GUI URL / reverse
   // proxy on a non-default port would otherwise break after upgrade.
@@ -389,12 +355,12 @@ export function patchConfig(section, values) {
   return cache;
 }
 
-/** Return the device id, generating + persisting one on first call. */
-export function ensureDeviceId() {
+/** Stable local install id used only to prove ownership of provisioned DBs. */
+export function ensureInstallId() {
   const cur = getConfig();
-  if (cur.device?.id) return cur.device.id;
+  if (cur.installation?.id) return cur.installation.id;
   const id = randomUUID();
-  patchConfig('device', { id });
+  patchConfig('installation', { id });
   return id;
 }
 

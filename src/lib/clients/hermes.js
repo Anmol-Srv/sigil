@@ -42,6 +42,7 @@ const meta = {
   id: 'hermes',
   label: 'Hermes',
   hint: 'Python memory-provider plugin + config.yaml flip',
+  automaticRecall: false,
 };
 
 async function detect() {
@@ -145,6 +146,12 @@ async function install({ dryRun = false } = {}) {
   return { actions };
 }
 
+// Hermes has no generated instruction/skill surface. Keep the same adapter
+// shape as the MCP clients, while making an update a no-op for user config.
+async function refresh() {
+  return { actions: [] };
+}
+
 async function uninstall({ dryRun = false } = {}) {
   const fs = await import('node:fs/promises');
   const actions = [];
@@ -211,6 +218,7 @@ export {
   meta,
   detect,
   install,
+  refresh,
   uninstall,
   verify,
   // Exposed for tests / advanced callers.

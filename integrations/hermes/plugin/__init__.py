@@ -1,15 +1,13 @@
 """Sigil memory provider for Hermes Agent.
 
 Bridges Hermes' memory system to a local Sigil install via the `sigil` CLI.
-No new network surface — the plugin shells out to the same subprocess
-commands Claude Code uses through its hooks. This means Hermes inherits
-all of Sigil's behavior for free: AUDM dedup, Hebbian retrieval, hot-context
-budgets, pod-aware blending, the lot.
+No new network surface is added: the plugin talks to Sigil's single local
+daemon through ordinary CLI commands.
 
 Architecture
 ------------
     prefetch(query)     → `sigil search <q> --namespace=<ns>,default`
-    sync_turn(u, a)     → `sigil remember --bg "<user_content>"` (daemon thread)
+    sync_turn(u, a)     → no-op (durable writes require explicit intent)
     is_available()      → shell test: `sigil --help` returns 0
     handle_tool_call()  → explicit search / remember invocations from the model
 
@@ -23,39 +21,34 @@ Each Hermes platform writes to its own Sigil namespace:
     discord   → hermes-discord
     cron      → hermes-cron
 
-Search reads across the platform's own namespace AND `default` — the
-namespace Claude Code's hooks write to from the user's laptop. Result:
-facts captured anywhere are reachable from anywhere, with natural source
-classification (a Hermes-iMessage fact lives in `hermes-imessage`, a
-laptop-Claude-Code fact lives in `default`, but both surface in any
-search).
+Search reads across the platform's own namespace AND `default`. This keeps
+Hermes-specific memories easy to inspect while still making ordinary Sigil
+memory available to Hermes on the same installation.
 
 Requires
 --------
-    sigil  CLI on PATH (the local install — `npm install -g @anmolsrv/sigil`
+    sigil  CLI on PATH (the local install — `npm install -g @anmol-srv/sigil`
            or wherever the binary is installed)
-    ~/.sigil/.env  configured (run `sigil init` once before activating
-                   this plugin)
+    ~/.sigil/config.json configured (run `sigil init` once before activating
+                         this plugin)
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
 import subprocess
-import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from agent.memory_provider import MemoryProvider
 
 logger = logging.getLogger(__name__)
 
 # Subprocess timeouts. Search is on the prompt-critical path → tight budget.
-# Remember is fire-and-forget via --bg, but we still cap the spawn-and-detach.
+# Explicit saves report their real outcome, so allow daemon cold-start headroom.
 _SEARCH_TIMEOUT_S = 5
-_REMEMBER_TIMEOUT_S = 10
+_REMEMBER_TIMEOUT_S = 120
 _PREFETCH_LIMIT = 5
 
 # Cap the prefetched context block — Hermes already has a memory_char_limit
@@ -84,9 +77,6 @@ def _sigil_search_args(query: str, namespaces: str, limit: int) -> List[str]:
         "sigil", "search", query,
         f"--namespace={namespaces}",
         f"--limit={limit}",
-        "--no-graph",
-        "--no-route",
-        "--no-synthesize",
     ]
 
 
@@ -103,7 +93,6 @@ class SigilProvider(MemoryProvider):
         self._namespace: str = "hermes-cli"
         self._search_namespaces: str = "hermes-cli,default"
         self._hermes_home: str = ""
-        self._sync_thread: Optional[threading.Thread] = None
 
     @property
     def name(self) -> str:
@@ -119,8 +108,7 @@ class SigilProvider(MemoryProvider):
         self._session_id = session_id
         self._platform = kwargs.get("platform", "cli")
         self._namespace = f"hermes-{self._platform}"
-        # Cross-namespace search: this platform's facts PLUS the default
-        # namespace where Claude Code writes from the user's other machines.
+        # Search this platform's explicit saves plus the local default namespace.
         self._search_namespaces = f"{self._namespace},default"
         self._hermes_home = kwargs.get("hermes_home", "")
         logger.info(
@@ -129,30 +117,28 @@ class SigilProvider(MemoryProvider):
         )
 
     def shutdown(self) -> None:
-        if self._sync_thread and self._sync_thread.is_alive():
-            self._sync_thread.join(timeout=5.0)
+        return None
 
     # -- Recall (per-turn) ---------------------------------------------------
 
     def system_prompt_block(self) -> str:
         return (
             "## Memory (Sigil)\n"
-            "Persistent memory across all your sessions and the user's other AI tools "
+            "Persistent local memory shared with the user's other AI tools "
             "(Claude Code, Cursor, Codex CLI, Kiro). Recent relevant facts are "
             f"auto-injected at the top of each turn from namespaces `{self._search_namespaces}`. "
             "Trust the injection — answer from it first.\n\n"
             "Call `sigil_search` ONLY for drill-down questions when the injection "
             "clearly missed something specific. Call `sigil_remember` ONLY when the "
-            "user explicitly asks (\"remember that...\", \"save this...\") or when "
-            "they share a critical fact mid-turn that the Stop-equivalent flush will "
-            "miss."
+            "user explicitly asks (\"remember that...\", \"save this...\") or clearly "
+            "states durable intent. Do not save routine conversation automatically."
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Synchronous recall before the next API call.
 
-        Calls `sigil search` against this platform's namespace plus `default`
-        (the cross-machine shared brain). Returns the raw CLI output as
+        Calls `sigil search` against this platform's namespace plus `default`.
+        Returns the raw CLI output as
         context text; Sigil's hybrid search already formats one fact per line
         which is exactly what the system prompt wants.
         """
@@ -190,43 +176,8 @@ class SigilProvider(MemoryProvider):
 
     def sync_turn(self, user_content: str, assistant_content: str, *,
                   session_id: str = "") -> None:
-        """Persist memorable content from the just-completed turn.
-
-        Sigil's `remember` command runs its own classifier + AUDM dedup, so
-        we don't try to be clever about what's "memorable" — just hand
-        the user message over and let Sigil decide.
-
-        Background thread is belt-and-braces: `sigil remember --bg` already
-        spawns a detached subprocess, but wrapping it in a daemon thread
-        means the .run() call itself can't block sync_turn.
-        """
-        text = (user_content or "").strip()
-        if not text:
-            return
-
-        # Sigil's CLI takes facts as positional args. We send the raw user
-        # message — its ingestion pipeline classifies, extracts, dedupes.
-        # Trimming to a sensible upper bound avoids enormous argv on long
-        # pasted content.
-        snippet = text[:4000]
-
-        def _save() -> None:
-            try:
-                subprocess.run(
-                    ["sigil", "remember", "--bg", snippet],
-                    env={**os.environ, "DEFAULT_NAMESPACE": self._namespace},
-                    timeout=_REMEMBER_TIMEOUT_S,
-                    capture_output=True,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("sigil remember failed: %s", exc)
-
-        # If the previous turn's sync is still running, let it finish first
-        # so we don't pile up zombie threads on chatty sessions.
-        if self._sync_thread and self._sync_thread.is_alive():
-            self._sync_thread.join(timeout=5.0)
-        self._sync_thread = threading.Thread(target=_save, daemon=True)
-        self._sync_thread.start()
+        """Compatibility hook; durable writes require explicit user intent."""
+        return None
 
     # -- Tools (explicit invocation by the model) ----------------------------
 
@@ -235,9 +186,8 @@ class SigilProvider(MemoryProvider):
             {
                 "name": "sigil_search",
                 "description": (
-                    "Search persistent memory across all of the user's AI sessions "
-                    "(this Hermes platform + their laptop's Claude Code / Cursor / "
-                    "Codex / Kiro). Use for drill-down questions when the "
+                    "Search persistent memory across this Hermes platform and the "
+                    "installation's default namespace. Use for drill-down when the "
                     "auto-injected context block didn't surface what you need."
                 ),
                 "parameters": {
@@ -260,9 +210,8 @@ class SigilProvider(MemoryProvider):
                 "name": "sigil_remember",
                 "description": (
                     "Save a single self-contained fact to persistent memory. Use "
-                    "ONLY when the user explicitly asks to remember something, or "
-                    "when they share a critical mid-turn fact. Routine facts are "
-                    "captured automatically — don't double-save."
+                    "ONLY when the user explicitly asks to remember something or "
+                    "clearly states durable intent. Do not save routine turns."
                 ),
                 "parameters": {
                     "type": "object",
@@ -315,8 +264,7 @@ class SigilProvider(MemoryProvider):
 
         try:
             result = subprocess.run(
-                ["sigil", "remember", "--bg", fact],
-                env={**os.environ, "DEFAULT_NAMESPACE": self._namespace},
+                ["sigil", "remember", fact, f"--namespace={self._namespace}"],
                 timeout=_REMEMBER_TIMEOUT_S,
                 capture_output=True,
                 text=True,
@@ -331,7 +279,7 @@ class SigilProvider(MemoryProvider):
 
     # -- Config --------------------------------------------------------------
     #
-    # Sigil reads its own ~/.sigil/.env (DB connection, embedder, LLM provider).
+    # Sigil reads its own ~/.sigil/config.json.
     # Hermes doesn't need to know any of that — we return an empty schema so
     # `hermes memory setup` doesn't ask redundant questions.
 
@@ -339,7 +287,7 @@ class SigilProvider(MemoryProvider):
         return []
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
-        # No-op — Sigil owns its own config at ~/.sigil/.env. Run `sigil init`
+        # No-op — Sigil owns its own config at ~/.sigil/config.json. Run `sigil init`
         # to (re)configure it.
         return None
 

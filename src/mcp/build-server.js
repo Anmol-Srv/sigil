@@ -15,15 +15,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { registerSearchTool } from './tools/search.js';
-import { registerSearchEntityTool } from './tools/search-entity.js';
-import { registerTraverseGraphTool } from './tools/traverse-graph.js';
 import { registerGetFactContextTool } from './tools/get-fact-context.js';
-import { registerGetEntityContextTool } from './tools/get-entity-context.js';
 import { registerStatusTool } from './tools/status.js';
 import { registerIngestTool } from './tools/ingest.js';
 import { registerRememberTool } from './tools/remember.js';
-import { registerListPodsTool } from './tools/list-pods.js';
-import { registerGetPodTool } from './tools/get-pod.js';
+import { registerCorrectTool } from './tools/correct.js';
 import { registerPrimeTool } from './tools/prime.js';
 
 export function createMcpServer() {
@@ -37,23 +33,15 @@ export function createMcpServer() {
 
   // Retrieval
   registerSearchTool(server);
-  registerSearchEntityTool(server);
-
-  // Traversal
-  registerTraverseGraphTool(server);
 
   // Detail
   registerGetFactContextTool(server);
-  registerGetEntityContextTool(server);
-  registerGetPodTool(server);
-
-  // Discovery
-  registerListPodsTool(server);
 
   // Operations
   registerStatusTool(server);
   registerIngestTool(server);
   registerRememberTool(server);
+  registerCorrectTool(server);
 
   return server;
 }

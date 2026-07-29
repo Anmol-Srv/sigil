@@ -9,9 +9,9 @@
 import pg from 'pg';
 
 import { probeUrlConnection, buildSigilSignature } from '../../db/setup.js';
+import { ensureInstallId } from '../config-store.js';
 import { buildUrlConnection } from '../../db/drivers/index.js';
 import { runMigrationsOn } from '../../db/migrate.js';
-import { ensureDeviceId } from '../config-store.js';
 import { StepError, fromError, quoteIdent, quoteLiteral, persistDatabase } from './shared.js';
 import { verifyConnection } from './test.js';
 
@@ -76,7 +76,7 @@ export async function provisionExternal(input, emit = () => {}) {
       await sigClient.connect();
       try {
         await sigClient.query(
-          `COMMENT ON DATABASE ${quoteIdent(conn.database)} IS ${quoteLiteral(buildSigilSignature(ensureDeviceId()))}`,
+          `COMMENT ON DATABASE ${quoteIdent(conn.database)} IS ${quoteLiteral(buildSigilSignature(ensureInstallId()))}`,
         );
       } finally { try { await sigClient.end(); } catch { /* */ } }
     } catch { /* signature is best-effort */ }

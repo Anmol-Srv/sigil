@@ -4,12 +4,9 @@
 // after a hard kill or reboot) made the booting daemon declare itself a
 // duplicate and exit without binding its socket — the CLI then timed out.
 //
-// We isolate the PID/heartbeat logic by disabling the HTTP /healthz probe so the
-// test can never accidentally consult a real daemon on 127.0.0.1:7777. config.json
-// is the source of truth now, so we write {http:{enabled:false}} into the sandbox
-// home instead of setting an env var. We sandbox $HOME so SIGIL_HOME points at a
-// throwaway dir; modules are re-imported per case because paths.js caches
-// SIGIL_HOME (and config-store caches the merged config) from $HOME at import time.
+// The GUI is no longer part of liveness detection. We sandbox $HOME so
+// SIGIL_HOME points at a throwaway dir; modules are re-imported per case because
+// paths.js caches SIGIL_HOME from $HOME at import time.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
@@ -37,11 +34,8 @@ async function loadDetect() {
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'sigil-detect-test-'));
   process.env.HOME = home;
-  // Disable the /healthz probe via config (source of truth), not env, so the
-  // test never consults a real daemon on 127.0.0.1:7777.
   const sigilHome = join(home, '.sigil');
   mkdirSync(sigilHome, { recursive: true });
-  writeFileSync(join(sigilHome, 'config.json'), JSON.stringify({ schemaVersion: 2, http: { enabled: false } }), 'utf8');
 });
 
 afterEach(() => {
@@ -99,5 +93,31 @@ describe('detectRunningDaemon', () => {
     const { detectRunningDaemon } = await loadDetect();
 
     expect(await detectRunningDaemon()).toBeNull();
+  });
+});
+
+describe('daemon lifetime lock', () => {
+  it('refuses a lock held by another live process and reclaims a stale owner', async () => {
+    const { daemonLockDecision } = await loadDetect();
+
+    expect(daemonLockDecision(
+      { pid: 200, root: '/old' },
+      { selfPid: 100, isAlive: (pid) => pid === 200 },
+    )).toBe('refuse');
+    expect(daemonLockDecision(
+      { pid: 200, root: '/old' },
+      { selfPid: 100, isAlive: () => false },
+    )).toBe('reclaim');
+  });
+
+  it('atomically acquires and releases an explicit lock path', async () => {
+    const lockPath = join(home, '.sigil', '.test-daemon.lock');
+    const { acquireDaemonLock, releaseDaemonLock } = await loadDetect();
+
+    expect(acquireDaemonLock(lockPath)).toEqual({ acquired: true });
+    expect(existsSync(lockPath)).toBe(true);
+
+    releaseDaemonLock(lockPath);
+    expect(existsSync(lockPath)).toBe(false);
   });
 });

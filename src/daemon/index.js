@@ -6,23 +6,49 @@ import { loadConfig } from '../setup/config-store.js';
 import { createWriteStream, writeFileSync, rmSync } from 'node:fs';
 import { appendFile } from 'node:fs/promises';
 
-import { PKG_ROOT, SIGIL_DAEMON_LOG, SIGIL_HEARTBEAT, SIGIL_UPDATE_FLAG } from '../lib/paths.js';
+import { PKG_ROOT, SIGIL_DAEMON_LOG, SIGIL_HEARTBEAT } from '../lib/paths.js';
 import { getSigilVersion } from '../lib/version.js';
 import {
+  acquireDaemonLock,
   detectRunningDaemon,
   ensureSigilHome,
   installShutdownHooks,
+  releaseDaemonLock,
   removePidFile,
   writePidFile,
 } from './lifecycle.js';
 import { createRegistry } from './rpc-registry.js';
 import { setRegistry, clearRegistry } from './registry-holder.js';
 import { startSocketServer } from './socket-server.js';
-import { startHttpServer } from './http-server.js';
+import { createHttpController } from './http-controller.js';
 
 import { registerAll } from './handlers/index.js';
 
 const STARTED_AT = Date.now();
+
+/**
+ * Start the browser adapter and remember that the user explicitly opened it.
+ * The HTTP server itself stays lazy for memory-only installs, but once a user
+ * uses the GUI it must come back after a supervised daemon restart. Persist
+ * only after the server is successfully listening so a failed bind never turns
+ * into a boot-time retry loop.
+ */
+export function createGuiStartHandler({ http, config, log, persistHttpEnabled }) {
+  return async () => {
+    const result = await http.start();
+    if (!config.http.enabled) {
+      try {
+        await persistHttpEnabled();
+        config.http.enabled = true;
+      } catch (err) {
+        // The current GUI is still usable. Leave the daemon's core lifecycle
+        // untouched and make the failed persistence diagnosable in its log.
+        log(`could not persist GUI preference: ${err.message}`);
+      }
+    }
+    return result;
+  };
+}
 
 export async function startDaemon({ foreground = false } = {}) {
   // The daemon serves every agent; agent provenance must come per-request from
@@ -37,6 +63,20 @@ export async function startDaemon({ foreground = false } = {}) {
   if (existing) {
     process.stderr.write(`[sigild] already running (pid ${existing})\n`);
     process.exit(0);
+  }
+
+  // Atomic lifetime ownership. The old split-brain guard was the always-on GUI
+  // port; that made every memory-only daemon load HTTP + WebSocket code. A
+  // dedicated lock closes the startup race before either contender can unlink
+  // the Unix socket or touch PGlite.
+  try {
+    acquireDaemonLock();
+  } catch (err) {
+    if (err.code === 'daemon_owned') {
+      process.stderr.write(`[sigild] ${err.message}\n`);
+      process.exit(0);
+    }
+    throw err;
   }
 
   // Log: append-only. We don't redirect stdout/stderr globally — handlers
@@ -74,25 +114,24 @@ export async function startDaemon({ foreground = false } = {}) {
 
   const { default: config } = await import('../config.js');
 
-  // Claim the HTTP/GUI port FIRST — before the pidfile or the Unix socket.
-  // The TCP port is the one resource that can't be silently taken over (bind
-  // is exclusive), unlike the socket file which startSocketServer would
-  // force-replace. If another daemon already owns the port we exit here with
-  // ZERO side effects (no clobbered pidfile, no stolen socket), so we can
-  // never produce the split-brain where socket RPC hits us but the GUI hits a
-  // different daemon holding a mismatched auth token. detectRunningDaemon's
-  // /healthz probe normally catches this earlier; this is the race-proof lock.
-  let http = null;
+  // HTTP/WebSocket is a UI adapter, not a storage prerequisite. Keep it unloaded
+  // until the user opens the GUI. Existing installations that explicitly set
+  // http.enabled=true retain the old always-on behavior.
+  const http = createHttpController({ registry, log, config });
+  registry.register('gui.start', createGuiStartHandler({
+    http,
+    config,
+    log,
+    persistHttpEnabled: async () => {
+      const { patchConfig } = await import('../setup/config-store.js');
+      patchConfig('http', { enabled: true });
+    },
+  }));
+  registry.register('gui.status', () => http.status());
   if (config.http.enabled) {
     try {
-      http = await startHttpServer({ registry, log, config });
+      await http.start();
     } catch (err) {
-      if (err.code === 'EADDRINUSE') {
-        log(`http port ${config.http.port} already in use — another daemon is serving; exiting`);
-        process.stderr.write(`[sigild] already running (port ${config.http.port} in use)\n`);
-        clearRegistry();
-        process.exit(0);
-      }
       log(`http server failed to start: ${err.message}`);
     }
   }
@@ -105,103 +144,14 @@ export async function startDaemon({ foreground = false } = {}) {
   // so LOUDLY — the old behaviour let every hook silently return empty memory,
   // so the user kept working for hours thinking they had context. Non-fatal
   // and non-blocking: the daemon stays up (Claude keeps working) and the flag
-  // feeds `status` → GUI banner. Skipped for lite-followers (no local DB).
-  if (config.network.mode !== 'lite-follower') {
-    // If the configured DB is our local Docker Postgres and it's stopped (e.g.
-    // after a reboot), start it before probing. Best-effort, never blocks boot.
-    try {
-      const { ensureLocalPostgresRunning } = await import('../db/provision/docker.js');
-      const started = await ensureLocalPostgresRunning();
-      if (started.started) log('started local sigil-postgres container');
-    } catch { /* docker absent / unrelated DB — ignore */ }
-    probeDbHealth(log);
-
-    // Live provider probe — a valid-looking-but-dead LLM/embedder (revoked key,
-    // unreachable Ollama, wrong model) should be loud at boot, not silent until
-    // the first ingest. Non-blocking; result is cached for `status`.
-    (async () => {
-      try {
-        const { probeProviders } = await import('../lib/provider-probe.js');
-        const { setProviderHealth } = await import('./registry-holder.js');
-        const health = await probeProviders();
-        setProviderHealth(health);
-        if (health.embedding && !health.embedding.ok) log(`embedding provider DOWN: ${health.embedding.error}`);
-        if (health.llm && !health.llm.ok) log(`llm provider DOWN: ${health.llm.error}`);
-        if (health.embedding?.ok && health.llm?.ok) log('providers healthy (llm + embedding probed ok)');
-      } catch (err) {
-        log(`provider probe failed: ${err.message}`);
-      }
-    })();
-
-    // Replay any Stop-hook saves that failed during an outage (provider/DB
-    // down). Best-effort and non-blocking — the daemon stays up regardless.
-    (async () => {
-      try {
-        const { drainStopSpool } = await import('../hooks/stop-spool.js');
-        const r = await drainStopSpool();
-        if (r.drained) log(`stop-spool drained: ${r.drained} turns replayed (${r.replayed} facts, ${r.remaining} remaining)`);
-      } catch (err) {
-        log(`stop-spool drain failed: ${err.message}`);
-      }
-    })();
-  }
-
-  // Managed-session engine (warm tmux workers; opt-in via SIGIL_MANAGED_SESSION).
-  // Best-effort + non-blocking: any failure (no tmux, spawn error) just leaves
-  // LLM calls on the proven one-shot path. Skipped for lite-followers, whose LLM
-  // work runs on master. Started after the socket server is up so workers can
-  // call back over RPC immediately.
-  if (config.network.mode !== 'lite-follower') {
-    (async () => {
-      try {
-        const { initSessionManager } = await import('../lib/llm/session/index.js');
-        await initSessionManager({ config, log });
-      } catch (err) {
-        log(`managed-session init failed: ${err.message}`);
-      }
-    })();
-  }
-
-  // Iroh: warm up the endpoint when network is enabled so the NodeID
-  // is registered with relays + discoverable before the first pair
-  // request arrives. Failure is non-fatal — solo mode keeps working.
-  let netEnabled = false;
-  if (config.network.enabled) {
-    try {
-      // Register accept-side protocol handlers BEFORE constructing the
-      // Iroh runtime. Only master nodes serve sigil/pair/1 + sigil/rpc/1
-      // (followers dial outbound).
-      if (config.network.mode === 'master') {
-        const { registerProtocol } = await import('../net/endpoint.js');
-        const { PAIR_ALPN, createPairAcceptor } = await import('../net/pairing.js');
-        const { RPC_ALPN, createRpcAcceptor } = await import('../net/rpc-server.js');
-        registerProtocol(PAIR_ALPN, createPairAcceptor({ log }));
-        registerProtocol(RPC_ALPN, createRpcAcceptor({ registry, log }));
-        log(`registered accept handlers: ${PAIR_ALPN}, ${RPC_ALPN}`);
-      }
-
-      const { getNodeInfo } = await import('../net/endpoint.js');
-      const info = await getNodeInfo();
-      netEnabled = true;
-      log(`iroh node up: ${info.nodeId}`);
-      if (info.relayUrl) log(`iroh relay: ${info.relayUrl}`);
-    } catch (err) {
-      log(`iroh failed to start: ${err.message}`);
-    }
-  } else {
-    log(`iroh disabled (SIGIL_MODE=${config.network.mode})`);
-  }
-
-  // Lite-follower: swap data-touching handlers for proxies that forward
-  // to master over Iroh. The local DB is never touched on this device.
-  if (config.network.mode === 'lite-follower') {
-    try {
-      const { installLiteProxy } = await import('./lite-proxy.js');
-      await installLiteProxy({ registry, log });
-    } catch (err) {
-      log(`lite-proxy install failed: ${err.message}`);
-    }
-  }
+  // If the configured DB is our local Docker Postgres and it's stopped (e.g.
+  // after a reboot), start it before probing. Best-effort, never blocks boot.
+  try {
+    const { ensureLocalPostgresRunning } = await import('../db/provision/docker.js');
+    const started = await ensureLocalPostgresRunning();
+    if (started.started) log('started local sigil-postgres container');
+  } catch { /* docker absent / unrelated DB — ignore */ }
+  probeDbHealth(log);
 
   // Heartbeat: a small liveness file the supervisor/CLI/GUI read to tell
   // "running" from "stale pidfile". Refreshed every 15s; removed on shutdown.
@@ -238,37 +188,8 @@ export async function startDaemon({ foreground = false } = {}) {
     }
   } catch { /* best-effort — never block boot */ }
 
-  // Background staleness check: tell the user when their git install has fallen
-  // behind the release branch. Writes SIGIL_UPDATE_FLAG (read by the CLI
-  // preamble → "update available") when behind, removes it when in sync. Git
-  // installs only; best-effort; unref'd so it never holds the process open.
-  // First check 30s after boot (let the daemon settle), then every 12h. Opt out
-  // by setting preferences.noUpdateCheck in config.json.
-  if (!config.preferences?.noUpdateCheck) {
-    (async () => {
-      try {
-        const { isGitInstall, checkForUpdate } = await import('../lib/git-update.js');
-        if (!isGitInstall()) return;
-        const runCheck = async () => {
-          try {
-            const s = await checkForUpdate();
-            if (s.behind > 0) {
-              writeFileSync(SIGIL_UPDATE_FLAG, JSON.stringify({ ...s, ts: Date.now() }), 'utf8');
-              log(`update available: ${s.local} → ${s.remote} (${s.behind} behind ${s.branch})`);
-            } else {
-              rmSync(SIGIL_UPDATE_FLAG, { force: true });
-            }
-          } catch (e) {
-            log(`update check failed: ${e.message.split('\n')[0]}`);
-          }
-        };
-        const firstCheck = setTimeout(runCheck, 30_000);
-        firstCheck.unref();
-        const updateCheckTimer = setInterval(runCheck, 12 * 60 * 60 * 1000);
-        updateCheckTimer.unref();
-      } catch { /* git-update unavailable — skip */ }
-    })();
-  }
+  // Update checks are explicit (`sigil update --check`). A storage daemon must
+  // not run background git/network work while the user is coding.
 
   // Periodic CHECKPOINT for the embedded store (field-report Defect 1): bounds how
   // much WAL a hard kill (SIGKILL / crash / power loss) would need to replay,
@@ -299,24 +220,21 @@ export async function startDaemon({ foreground = false } = {}) {
 
   // Proactive DB health monitor (S1): periodically probe the store and, on a
   // poisoned embedded engine, rebuild it (→ snapshot restore if torn). Recovery
-  // is crash-loop guarded. Skipped for lite-followers (no local DB). Unref'd.
+  // is crash-loop guarded. Unref'd.
   let dbMonitorTimer = null;
-  if (config.network.mode !== 'lite-follower') {
-    try {
-      const { startDbHealthMonitor } = await import('./db-monitor.js');
-      dbMonitorTimer = startDbHealthMonitor({ log });
-    } catch (err) {
-      log(`db health monitor failed to start: ${err.message}`);
-    }
+  try {
+    const { startDbHealthMonitor } = await import('./db-monitor.js');
+    dbMonitorTimer = startDbHealthMonitor({ log });
+  } catch (err) {
+    log(`db health monitor failed to start: ${err.message}`);
   }
 
-  // Periodic + post-boot snapshots of the embedded cluster (F2, field-report
-  // Defect 1). A consistent dumpDataDir tarball, rotated, so F3 can restore a
-  // torn cluster with bounded loss instead of wiping it. The shutdown hook takes
-  // the cleanest snapshot; these cover a daemon that's later SIGKILL'd and never
-  // shuts down cleanly. Embedded + healthy only; best-effort; unref'd.
+  // Periodic snapshots of the embedded cluster. A consistent dumpDataDir
+  // tarball, rotated, lets recovery bound data loss instead of wiping a torn
+  // cluster. Clean shutdown also takes one. There is no post-boot full copy:
+  // it duplicated the previous shutdown snapshot and made daemon restarts
+  // unnecessarily expensive.
   let snapshotTimer = null;
-  let bootSnapshotTimer = null;
   (async () => {
     try {
       const { default: cfg } = await import('../config.js');
@@ -328,8 +246,6 @@ export async function startDaemon({ foreground = false } = {}) {
         try { await takeSnapshot({ reason, log }); }
         catch (e) { log(`snapshot (${reason}) failed: ${e.message}`); }
       };
-      bootSnapshotTimer = setTimeout(() => snapshotIfHealthy('post-boot'), 45_000);
-      bootSnapshotTimer.unref();
       snapshotTimer = setInterval(() => snapshotIfHealthy('periodic'), 30 * 60_000);
       snapshotTimer.unref();
     } catch { /* config/db unavailable — skip */ }
@@ -344,26 +260,9 @@ export async function startDaemon({ foreground = false } = {}) {
     if (checkpointTimer) clearInterval(checkpointTimer);
     if (dbMonitorTimer) clearInterval(dbMonitorTimer);
     if (snapshotTimer) clearInterval(snapshotTimer);
-    if (bootSnapshotTimer) clearTimeout(bootSnapshotTimer);
     try { rmSync(SIGIL_HEARTBEAT, { force: true }); } catch { /* ignore */ }
-    // Kill warm tmux workers + stop the health sweep before tearing down the
-    // socket, so no worker is left holding a half-open RPC connection.
-    try {
-      const { shutdownSessionManager } = await import('../lib/llm/session/index.js');
-      await shutdownSessionManager();
-    } catch (err) {
-      log(`managed-session shutdown failed: ${err.message}`);
-    }
     await socket.close();
-    if (http) await http.close();
-    if (netEnabled) {
-      try {
-        const { shutdownEndpoint } = await import('../net/endpoint.js');
-        await shutdownEndpoint();
-      } catch (err) {
-        log(`iroh shutdown failed: ${err.message}`);
-      }
-    }
+    await http.close();
     try {
       const { default: cortexDb } = await import('../db/cortex.js');
       // Embedded (PGlite on NODEFS): force a clean CHECKPOINT before closing so the
@@ -391,6 +290,7 @@ export async function startDaemon({ foreground = false } = {}) {
       log(`pool destroy failed: ${err.message}`);
     }
     await removePidFile();
+    releaseDaemonLock();
     clearRegistry();
     log('stopped');
   });
@@ -417,8 +317,8 @@ async function probeDbHealth(log) {
       // Embedded-only self-heal (finding 6.6): a serial sequence left behind its
       // column's MAX(id) makes the next INSERT collide on the pkey, silently
       // breaking writes. Heal it on every boot. Embedded is single-process, so
-      // there's no concurrency risk; server Postgres doesn't desync and may be
-      // shared across machines, so we skip it there.
+      // there's no concurrency risk; server Postgres owns its own sequences, so
+      // we skip it there.
       try {
         const { default: config } = await import('../config.js');
         if (config.db.mode === 'embedded') {

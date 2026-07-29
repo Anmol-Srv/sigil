@@ -2,8 +2,8 @@ import { getConfig } from './setup/config-store.js';
 import { EMBEDDING_DIM } from './lib/constants.js';
 
 // config.json (the config-store) is the SINGLE SOURCE OF TRUTH for ALL
-// configuration — database, llm, embedding, plus every infra/tuning section
-// (http, network, memory, search, ingest, output, hebbian, managed-session).
+// configuration — database, llm, embedding, plus each active infra/tuning
+// section (http, memory, ingest).
 // Getters read the store ONLY; no env var is ever consulted for config, so a
 // stray global (e.g. LLM_PROVIDER=openai) can never override what onboarding
 // saved. Defaults live in code (config-store defaults()) and merge on read
@@ -31,7 +31,6 @@ const config = {
   // seen without a restart — and the dim-conflict check (inspectEmbeddingCompat →
   // selectDriver(config)) never probes a stale DB. Reads the store at access time.
   db: {
-    type: 'postgres',
     // Persistence mode: 'embedded' (in-process PGlite, zero prerequisites),
     // 'local'/'docker' (discrete host/port fields), or 'url' (connection
     // string). Read live from the store so a mid-session onboarding switch is
@@ -94,62 +93,22 @@ const config = {
     // Anthropic
     get apiKey() { return llmKey('anthropic'); },
 
-    // OpenRouter — OpenAI-compatible gateway; one key, namespaced models
-    // like "anthropic/claude-sonnet-latest", "openai/gpt-mini-latest", etc.
-    // Default is Gemini Flash latest — best singular all-rounder at current
-    // OpenRouter pricing: $0.0005/$0.003 per 1M tokens, 1M context, strong
-    // JSON output, ~500ms typical latency. Beats Claude Haiku 2× on cost
-    // and 5× on context while matching reasoning + JSON reliability for
-    // Sigil's call types (extraction, AUDM, classifier, router, synthesis).
+    // OpenRouter — OpenAI-compatible gateway; one key and namespaced models.
+    // Generation is optional and used only by explicitly requested enrichment.
     get openrouterApiKey() { return llmKey('openrouter'); },
     get openrouterModel() { return llmModel('openrouter') || 'google/gemini-flash-latest'; },
     get openrouterBaseUrl() { return store().llm.openrouterBaseUrl ?? ''; },
     get openrouterReferer() { return store().llm.openrouterReferer ?? 'https://github.com/Anmol-Srv/sigil'; },
     get openrouterTitle() { return store().llm.openrouterTitle ?? 'Sigil'; },
 
-    // Per-task model overrides (use provider-specific model names)
+    // Optional extraction-model override (use a provider-specific model name).
     get extractionModel() { return store().llm.extractionModel ?? ''; },
-    get decisionModel() { return store().llm.decisionModel ?? ''; },
-    get entityModel() { return store().llm.entityModel ?? ''; },
 
-    get maxRetries() { return Number(store().llm.maxRetries ?? 3) || 3; },
+    get maxRetries() { return Math.max(1, Number(store().llm.maxRetries ?? 1) || 1); },
     get cliTimeout() { return Number(store().llm.cliTimeout ?? 120000) || 120000; },
-    // Hard ceiling on CONCURRENT `claude` CLI processes spawned by THIS process.
-    // The blowup this caps: a user once hit 1600+ live `claude` sessions when an
-    // ingest fan-out (and fallback storms) spawned one process per call with no
-    // bound — pinning RAM/tokens. Every `claude` spawn (one-shot path, managed-
-    // session fallback, hook classify) routes through one semaphore, so excess
-    // calls QUEUE instead of forking. Per-process: the daemon is the process that
-    // fans out, so its singleton gate is what matters; short-lived hooks spawn ≤1
-    // anyway. Default 4 keeps throughput while making the 1600 case impossible.
-    get maxClaudeProcs() { return Math.max(1, Number(store().llm.maxClaudeProcs ?? 4) || 4); },
+    // Per-process guard for explicit Claude CLI generation.
+    get maxClaudeProcs() { return Math.max(1, Number(store().llm.maxClaudeProcs ?? 1) || 1); },
 
-    // Managed-session engine (warm tmux workers; see src/lib/llm/session/).
-    // Opt-in in v1: a NEW subsystem, so default OFF — when disabled the
-    // managed-session provider transparently uses the one-shot claude-cli path,
-    // so nothing breaks. Enable to amortize agentic cold-start across many
-    // ingest calls. Only meaningful on a host with `tmux` and the `claude` CLI.
-    managedSession: {
-      get enabled() { return store().llm.managedSession?.enabled === true; },
-      // Workers per source type. 1 = strictly serial per engine (matches the
-      // "one session per source type" model); raise to lift the serial-latency
-      // ceiling. Bounded RAM = poolSize × live agent processes per type.
-      get poolSize() { return Math.max(1, Number(store().llm.managedSession?.poolSize ?? 1) || 1); },
-      // Recycle a worker once it has processed ~this many tokens (the "context
-      // cap" / budget-window reset). Caps cross-task context bleed + memory creep.
-      get tokenBudget() { return Number(store().llm.managedSession?.tokenBudget ?? 60000) || 60000; },
-      // Dead-man timeout per task → one-shot fallback + recycle.
-      get taskTimeoutMs() { return Number(store().llm.managedSession?.taskTimeoutMs ?? 120000) || 120000; },
-      // Boot handshake window: how long to wait for a freshly-spawned worker's
-      // first get_task before re-nudging once, then recycling. Keeps a lost
-      // cold-boot keystroke to a short retry instead of a full dead-man timeout.
-      get firstTaskTimeoutMs() { return Number(store().llm.managedSession?.firstTaskTimeoutMs ?? 10000) || 10000; },
-      // How often the daemon sweeps BUSY workers for a wedged interactive dialog
-      // (catches a stuck auth/trust prompt before its dead-man timeout fires).
-      get healthProbeMs() { return Number(store().llm.managedSession?.healthProbeMs ?? 15000) || 15000; },
-      // Escape hatch: /clear between tasks (default on). false → prompt-ordering only.
-      get clearBetweenTasks() { return store().llm.managedSession?.clearBetweenTasks !== false; },
-    },
     // HTTP request timeout for network LLM providers/embedders (OpenAI,
     // OpenRouter, Voyage). Without it a hung connection blocks the daemon or a
     // hook indefinitely. 60s leaves headroom for large JSON completions while
@@ -158,23 +117,12 @@ const config = {
     get requestTimeout() { return Number(store().llm.requestTimeout ?? 60000) || 60000; },
   },
 
-  // The sections below are infra/tuning. config.json owns them (defaults merged
-  // on read by getConfig), so each getter just returns its store section — no
-  // env. Mutable knobs change live via patchConfig without a daemon restart.
-  get output() { return store().output; },
+  // The sections below are infra/tuning. config.json owns them.
   get http() { return store().http; },
-  // 'solo' | 'master' | 'follower' | 'lite-follower'. `enabled` is stored
-  // explicitly now (was derived from mode via env); `sigil join` sets both.
-  get network() { return store().network; },
   get defaults() { return store().defaults; },
-  // AUDM dedup/supersession + search floors. See config-store defaults() for the
-  // tuned values; change via patchConfig('memory', {...}) or the GUI.
+  // Search candidate and automatic-injection floors.
   get memory() { return store().memory; },
-  get search() { return store().search; },
   get ingest() { return store().ingest; },
-  get hebbian() { return store().hebbian; },
-  // User preferences (noUpdateCheck, …) — was SIGIL_NO_UPDATE_CHECK env.
-  get preferences() { return store().preferences; },
 };
 
 export default config;

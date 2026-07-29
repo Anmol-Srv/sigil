@@ -48,9 +48,8 @@ async function extractFactsFromChunk(chunk, systemPrompt, categories) {
   const fullPrompt = buildPrompt(systemPrompt, text, categories);
 
   // temperature: 0 — fact extraction must be reproducible. Non-deterministic
-  // phrasing of the same fact shifts its embedding, which in turn flips
-  // downstream AUDM supersession decisions run-to-run (the benchmark's main
-  // remaining source of variance).
+  // phrasing of the same fact shifts its embedding and defeats deterministic
+  // duplicate suppression on repeated extraction.
   const parsed = await promptJson(fullPrompt, { model: config.llm.extractionModel, caller: 'extractor', temperature: 0 });
   const facts = validateFacts(parsed, categories);
 

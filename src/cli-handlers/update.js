@@ -4,8 +4,8 @@
  * Sigil ships from git, not npm (see src/lib/git-update.js). This command is the
  * user-facing half of that: fast-forward the ~/.sigil/app clone, reinstall deps
  * only if they changed, re-pin the launcher shims, and restart the daemon so the
- * new code is actually serving. The daemon's background staleness check is what
- * tells the user an update is available; this is what applies it.
+ * new code is actually serving. Checks are explicit; the storage daemon never
+ * performs background git/network work.
  */
 import { execFile } from 'node:child_process';
 import { rm } from 'node:fs/promises';
@@ -24,7 +24,7 @@ import {
 const run = promisify(execFile);
 
 async function npmInstall() {
-  await run('npm', ['install', '--omit=dev', '--no-audit', '--no-fund', '--loglevel=error'], {
+  await run('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund', '--loglevel=error'], {
     cwd: PKG_ROOT,
     encoding: 'utf8',
   });
@@ -85,6 +85,7 @@ export async function runUpdate(args) {
 
   if (status.behind === 0 && !force) {
     console.log(`Already up to date (${status.local}, '${status.branch}').`);
+    await refreshManagedAssets({ log: (message) => console.log(message) });
     await clearFlag();
     return;
   }
@@ -98,7 +99,7 @@ export async function runUpdate(args) {
   }
 
   if (lockChanged || force) {
-    console.log('Dependencies changed — running npm install…');
+    console.log('Dependencies changed — running npm ci…');
     await npmInstall();
   }
 
@@ -110,14 +111,7 @@ export async function runUpdate(args) {
     await evictLegacyNpmInstall({ log: (m) => console.log(m) });
   } catch { /* best-effort — never block the update */ }
 
-  // Re-pin the launcher shims at the (unchanged) app dir + current node — cheap,
-  // idempotent, and self-heals a shim left stale by a node-version switch.
-  try {
-    const { writeLauncherShim } = await import('../lib/clients/shim.js');
-    await writeLauncherShim({});
-  } catch (err) {
-    console.error(`(warning) could not refresh launcher shims: ${err.message.split('\n')[0]}`);
-  }
+  await refreshManagedAssets({ log: (message) => console.log(message) });
 
   // Restart the daemon so the freshly-pulled code is the code that serves. A
   // code-only change (no version bump) wouldn't trip the CLI's version-mismatch
@@ -219,4 +213,63 @@ async function applyMigrationsOrRevert({ from, lockChanged }) {
 
 async function clearFlag() {
   await rm(SIGIL_UPDATE_FLAG, { force: true }).catch(() => {});
+}
+
+async function refreshManagedAssets({ log = () => {} } = {}) {
+  // Re-pin shims at the current app dir + Node runtime. This is cheap,
+  // idempotent, and fixes a moved install before any agent uses it.
+  try {
+    const { writeLauncherShim } = await import('../lib/clients/shim.js');
+    await writeLauncherShim({});
+  } catch (err) {
+    log(`(warning) could not refresh launcher shims: ${err.message.split('\n')[0]}`);
+  }
+
+  // A shim refresh alone cannot update generated instructions and skills that
+  // agents load from their own directories. Refresh ONLY the adapter-owned
+  // text assets for integrations that already verify as installed; never
+  // rewrite MCP config, hooks, or arbitrary user rules during an update.
+  return refreshInstalledAdapters({ log });
+}
+
+export async function refreshInstalledAdapters({
+  list = async () => (await import('../lib/clients/index.js')).listClients(),
+  log = () => {},
+} = {}) {
+  let adapters;
+  try {
+    adapters = await list();
+  } catch (err) {
+    log(`(warning) could not inspect connected agents for generated-content refresh: ${err.message.split('\n')[0]}`);
+    return { refreshed: [], skipped: [] };
+  }
+
+  const refreshed = [];
+  const skipped = [];
+  for (const adapter of adapters) {
+    let verified;
+    try {
+      verified = await adapter.verify();
+    } catch (err) {
+      skipped.push(adapter.id);
+      log(`(warning) could not inspect ${adapter.label || adapter.id}: ${err.message.split('\n')[0]}`);
+      continue;
+    }
+    if (!verified?.installed) {
+      skipped.push(adapter.id);
+      continue;
+    }
+
+    try {
+      const result = await adapter.refresh({ dryRun: false });
+      const changed = (result?.actions || []).some((action) => action.action !== 'skip');
+      if (changed) refreshed.push(adapter.id);
+    } catch (err) {
+      skipped.push(adapter.id);
+      log(`(warning) could not refresh Sigil-owned content for ${adapter.label || adapter.id}: ${err.message.split('\n')[0]}`);
+    }
+  }
+
+  if (refreshed.length) log(`Refreshed Sigil instructions/skills for: ${refreshed.join(', ')}.`);
+  return { refreshed, skipped };
 }

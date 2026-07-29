@@ -41,8 +41,7 @@ export async function startSocketServer({ registry, log }) {
     let closed = false;
     // PR review #16: per-connection Promise chain serializes handler
     // dispatch. Two `remember` calls on the same MCP connection now
-    // execute in arrival order; AUDM's pairwise dedup invariants
-    // (whose comments warn against parallel ingests) are preserved.
+    // execute in arrival order so pairwise duplicate checks see prior writes.
     let chain = Promise.resolve();
     socket.setEncoding('utf8');
 
@@ -113,7 +112,7 @@ async function handleFrame(line, socket, registry, log) {
     return;
   }
 
-  const { id = null, method, params, agent = null } = req || {};
+  const { id = null, method, params, agent = null, scope = null } = req || {};
   if (typeof method !== 'string') {
     writeFrame(socket, {
       id,
@@ -123,7 +122,7 @@ async function handleFrame(line, socket, registry, log) {
     return;
   }
 
-  const result = await registry.dispatch(method, params, { transport: 'socket', agent });
+  const result = await registry.dispatch(method, params, { transport: 'socket', agent, scope });
   writeFrame(socket, { id, ...result });
 
   if (!result.ok && process.env.SIGIL_DEBUG) {

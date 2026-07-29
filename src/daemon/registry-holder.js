@@ -21,11 +21,8 @@ let dbHealth = { healthy: null, error: null, checkedAt: null };
 export function setDbHealth(h) { dbHealth = { healthy: null, error: null, checkedAt: null, ...h }; }
 export function getDbHealth() { return dbHealth; }
 
-// Provider health — set by the boot probe (probeProviders) and exposed via
-// `status` so the GUI/CLI/preamble can show "LLM key revoked" / "embedder
-// unreachable" instead of letting the first ingest fail silently. `null` until
-// probed. The boot probe runs live; `status` serves this cached value (no live
-// provider call per poll).
+// Provider health is populated only by explicit diagnostics/setup. Daemon boot
+// must remain storage-only and must never launch a coding-agent CLI.
 let providerHealth = { llm: null, embedding: null, checkedAt: null };
 export function setProviderHealth(h) { providerHealth = { ...providerHealth, ...h }; }
 export function getProviderHealth() { return providerHealth; }

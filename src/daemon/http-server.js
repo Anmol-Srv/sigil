@@ -5,7 +5,6 @@
  *   GET  /                 → SPA shell (index.html)
  *   GET  /static/*         → static assets (css/js/svg)
  *   GET  /healthz          → no-auth health check
- *   GET  /api/v1/methods   → list registered RPC methods
  *   POST /api/v1/rpc       → JSON-RPC dispatch (auth required)
  *
  * Auth:
@@ -157,10 +156,6 @@ async function route(req, res, { registry, webDir, log }) {
   const authed = await checkAuth(req);
   if (!authed) {
     return writeJson(res, 401, { ok: false, error: { code: 'auth', message: 'unauthorized' } });
-  }
-
-  if (req.method === 'GET' && path === '/api/v1/methods') {
-    return writeJson(res, 200, { ok: true, data: { methods: registry.list() } });
   }
 
   if (req.method === 'POST' && path === '/api/v1/rpc') {

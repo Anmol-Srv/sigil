@@ -14,6 +14,7 @@ import { connectOrStartDaemon } from '../clients/auto-spawn.js';
 
 let clientPromise = null;
 let cachedClient = null;
+const TOOL_RPC_TIMEOUT_MS = 120_000;
 
 // In-process dispatch override. When the MCP tools run INSIDE the daemon (the
 // HTTP /mcp transport), there's no point opening a Unix socket back to our own
@@ -25,7 +26,7 @@ export function setInProcessDispatch(fn) { inProcessDispatch = fn; }
 async function getClient() {
   if (cachedClient) return cachedClient;
   if (!clientPromise) {
-    clientPromise = connectOrStartDaemon({ quiet: true })
+    clientPromise = connectOrStartDaemon({ quiet: true, timeoutMs: TOOL_RPC_TIMEOUT_MS })
       .then((c) => { cachedClient = c; return c; })
       .catch((err) => { clientPromise = null; throw err; });
   }

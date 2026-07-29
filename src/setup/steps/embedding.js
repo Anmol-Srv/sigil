@@ -11,20 +11,20 @@ import { patchConfig, getConfig } from '../config-store.js';
 import { StepError } from '../errors.js';
 import { EMBEDDING_DIM } from '../../lib/constants.js';
 import {
-  listCompatibleModels, isReachable, pullModel,
+  listCompatibleModels, isReachable,
   RECOMMENDED_EMBED_MODEL, OLLAMA_EMBED_MODELS,
 } from '../../lib/llm/ollama-admin.js';
 
 // Cloud providers are PINNED to one model (their only 1024-dim option here).
-// Ollama is different: `model` is the DEFAULT, but the user may pick any
-// compatible 1024-dim model from detect().ollama.models, and apply() pulls it
-// if it isn't installed yet. `shared` means the key can be reused from the LLM
-// step when that step picked the same provider.
+// Ollama is different: Sigil uses a compatible model the user has already
+// installed. Setup never starts a runtime or downloads a large model behind the
+// user's back. `shared` means the key can be reused from the LLM step when that
+// step picked the same provider.
 const PROVIDERS = [
   { id: 'openai', label: 'OpenAI', hint: 'text-embedding-3-large @ 1024 — best out-of-the-box quality', recommended: true, model: 'text-embedding-3-large', keyed: true, shared: true },
   { id: 'voyage', label: 'Voyage', hint: 'voyage-3 @ 1024', model: 'voyage-3', keyed: true, shared: false },
   { id: 'openrouter', label: 'OpenRouter', hint: 'Gateway; reuses your LLM key', model: 'openai/text-embedding-3-large', keyed: true, shared: true },
-  { id: 'ollama', label: 'Ollama (local)', hint: '1024-dim local embeddings, free — pick a model, auto-pulled if missing', model: RECOMMENDED_EMBED_MODEL, keyed: false, shared: false },
+  { id: 'ollama', label: 'Ollama (already running)', hint: 'Use a compatible local embedding model you already run', model: RECOMMENDED_EMBED_MODEL, keyed: false, shared: false },
 ];
 
 export const id = 'embedding';
@@ -54,8 +54,22 @@ export async function detect() {
   const host = ollamaHost();
   const reachable = await isReachable(host);
   const models = await listCompatibleModels(host);
+  const installed = models.filter((model) => model.installed);
+  const localAvailable = reachable && installed.length > 0;
   return {
-    providers: listProviders(),
+    providers: listProviders().map((provider) => {
+      if (provider.id !== 'ollama') return { ...provider, recommended: localAvailable ? false : provider.recommended };
+      return {
+        ...provider,
+        recommended: localAvailable,
+        available: localAvailable,
+        hint: localAvailable
+          ? `Local — ${installed.map((model) => model.name).join(', ')} detected`
+          : reachable
+            ? 'No compatible local embedding model detected'
+            : 'Not running on this machine',
+      };
+    }),
     ollama: { reachable, host, models, recommended: RECOMMENDED_EMBED_MODEL },
   };
 }
@@ -82,9 +96,8 @@ export async function apply(input, emit = () => {}) {
   const p = PROVIDERS.find((x) => x.id === input.provider);
   if (!p) throw new StepError({ message: `Unknown embedding provider: ${input.provider}`, kind: 'other' });
 
-  // Resolve the model. Cloud providers are pinned. For Ollama the user may pick
-  // any compatible model; validate the choice against the curated 1024-dim list
-  // so a free-text mistake can't slip a wrong-dimension model through.
+  // Resolve the model. Cloud providers are pinned. For Ollama accept a curated
+  // 1024-dim model and prefer one that is already installed locally.
   let model = p.model;
   if (p.id === 'ollama' && input.model) {
     const allowed = OLLAMA_EMBED_MODELS.map((m) => m.name);
@@ -106,35 +119,29 @@ export async function apply(input, emit = () => {}) {
     host: input.host || null,
   });
 
-  // Ollama: make sure the chosen model is actually present locally, pulling it
-  // (with streamed progress) if not. This is what closes the "GUI errored
-  // because the model wasn't pulled" gap — setup now provisions it.
+  // Ollama is opt-in only when it is ready. Running or downloading third-party
+  // software/models inside a memory installer makes resource use surprising,
+  // especially on VMs, so provide an honest recovery action instead.
   if (p.id === 'ollama') {
     const host = ollamaHost();
     if (!(await isReachable(host))) {
       throw new StepError({
         message: 'The local Ollama server is not reachable.',
-        hint: 'Start it with `ollama serve`, then retry.',
+        hint: 'Start your existing Ollama service, or choose an API-key provider instead.',
         kind: 'ollama-down',
       });
     }
-    const installed = (await listCompatibleModels(host)).find((m) => m.name === model)?.installed;
-    if (!installed) {
-      emit({ pct: 30, label: `Pulling ${model}…` });
-      try {
-        await pullModel(model, ({ status, percent }) => {
-          // Map the pull into the 30–50% band of this step's progress bar.
-          const pct = percent == null ? 35 : 30 + Math.round(percent * 0.2);
-          emit({ pct, label: `Pulling ${model}: ${status}${percent == null ? '' : ` ${percent}%`}` });
-        }, host);
-      } catch (err) {
-        throw new StepError({
-          message: `Failed to pull ${model} from Ollama: ${err.message}`,
-          hint: `Pull it manually with \`ollama pull ${model}\`, then retry.`,
-          kind: 'model-not-found',
-        });
-      }
+    const candidates = await listCompatibleModels(host);
+    const selected = candidates.find((candidate) => candidate.name === model && candidate.installed)
+      || candidates.find((candidate) => candidate.installed);
+    if (!selected) {
+      throw new StepError({
+        message: 'No compatible local embedding model is installed in Ollama.',
+        hint: `Install one of: ${OLLAMA_EMBED_MODELS.map((candidate) => candidate.name).join(', ')}; then retry, or choose an API-key provider.`,
+        kind: 'model-not-found',
+      });
     }
+    model = selected.name;
   }
 
   emit({ pct: 55, label: 'Testing embed call…' });
@@ -165,7 +172,7 @@ export async function apply(input, emit = () => {}) {
     } catch { /* best effort — never fail the step on the advisory check */ }
 
     emit({ pct: 100, label: `Embedder ready.${staleNote}` });
-    return { provider: p.id, model: p.model, dim: v.length, staleFacts: staleNote ? true : false };
+    return { provider: p.id, model, dim: v.length, staleFacts: staleNote ? true : false };
   } catch (err) {
     if (err instanceof StepError) throw err;
     // Classify provider/key/model failures honestly.

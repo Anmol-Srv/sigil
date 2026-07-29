@@ -26,7 +26,7 @@
     <div class="landing-inner">
       <img class="landing-mark" src="/static/design/sigil-mark.svg" alt="Sigil" width="72" height="72">
       <div class="landing-name">Sigil</div>
-      <div class="landing-tagline">Local-first memory for your AI agents</div>
+      <div class="landing-tagline">Machine-native memory for your AI tools</div>
       <div class="landing-spinner" aria-hidden="true"></div>
     </div>
   </div>
@@ -68,17 +68,14 @@
         <div class="navgroup-label">Memory</div>
         <a href="#health"   data-route="health" class="active">Home</a>
         <a href="#kb"       data-route="kb">Knowledge Base</a>
-        <a href="#graph"    data-route="graph">Graph</a>
         <a href="#activity" data-route="activity">Activity</a>
       </div>
       <div class="navgroup">
         <div class="navgroup-label">Connections</div>
         <a href="#agents"   data-route="agents">Agents</a>
-        <a href="#devices"  data-route="devices">Devices</a>
       </div>
       <div class="navgroup">
         <div class="navgroup-label">System</div>
-        <a href="#engine"   data-route="engine">Engine</a>
         <a href="#settings" data-route="settings">Settings</a>
       </div>
     </nav>
@@ -101,27 +98,31 @@
         <div class="actions"><button class="btn" id="home-refresh">Refresh</button></div>
       </div>
 
-      <!-- stat strip — memory as the hero (real counts; recall computed from traces) -->
+      <!-- stat strip — the small amount of state that matters at a glance -->
       <div class="stat-grid">
-        <div class="stat"><span class="lbl">Facts</span><span class="val" id="hm-facts">—</span><span class="sub">stored memories</span></div>
-        <div class="stat"><span class="lbl">Entities</span><span class="val" id="hm-entities">—</span><span class="sub">people · topics · docs</span></div>
-        <div class="stat"><span class="lbl">Relations</span><span class="val" id="hm-relations">—</span><span class="sub">graph edges</span></div>
-        <div class="stat"><span class="lbl"><span class="hm-dot" id="hm-recall-dot"></span>Recall hit-rate</span><span class="val" id="hm-recall">—</span><span class="sub" id="hm-recall-sub">recent searches</span></div>
+        <div class="stat"><span class="lbl">Memories</span><span class="val" id="hm-facts">—</span><span class="sub">saved facts</span></div>
+        <div class="stat"><span class="lbl">Source documents</span><span class="val" id="hm-documents">—</span><span class="sub">optional files and notes</span></div>
+        <div class="stat"><span class="lbl">Memory mode</span><span class="val">Local</span><span class="sub">this machine only</span></div>
       </div>
 
-      <div class="home-cols">
-        <!-- recall health -->
-        <div class="panel panel-pad">
-          <h3 class="home-h">Recall health</h3>
-          <p class="muted text-sm" style="margin:2px 0 var(--s-4)">Is memory answering when your agents ask? (recent searches)</p>
-          <div class="home-recall">
-            <div class="hm-metric"><span class="hmv" id="hm-searches">—</span><span class="hmk">searches</span></div>
-            <div class="hm-metric"><span class="hmv" id="hm-hitrate">—</span><span class="hmk">returned ≥1 fact</span><div class="hm-bar"><i id="hm-hitbar"></i></div></div>
-            <div class="hm-metric"><span class="hmv" id="hm-avgfacts">—</span><span class="hmk">avg facts / search</span></div>
-            <div class="hm-metric"><span class="hmv" id="hm-latency">—</span><span class="hmk">median latency</span></div>
+      <section class="panel home-search" aria-labelledby="home-search-title">
+        <div class="home-search-head">
+          <div>
+            <h3 id="home-search-title">Search memory</h3>
+            <p>Ask about a decision, preference, or piece of context your agents have saved.</p>
           </div>
+          <button type="button" class="btn ghost small" id="home-search-clear" hidden>Clear</button>
         </div>
+        <form class="home-search-form" id="home-search-form">
+          <label class="sr-only" for="home-search-query">Search your memory</label>
+          <input class="input home-search-input" id="home-search-query" type="search" required maxlength="8000" placeholder="e.g. What did we decide about the local database?" autocomplete="off">
+          <button type="submit" class="btn primary" id="home-search-submit">Search</button>
+        </form>
+        <p class="home-search-hint">Runs Sigil’s local hybrid search across saved memories and source documents.</p>
+        <div class="home-search-results" id="home-search-results" aria-live="polite" hidden></div>
+      </section>
 
+      <div class="home-cols">
         <!-- recent activity -->
         <div class="panel panel-pad">
           <h3 class="home-h">Recent activity <a href="#activity" data-route="activity" class="home-link">View all →</a></h3>
@@ -141,20 +142,13 @@
       <div class="section-head">
         <div class="title-block">
           <h2>Knowledge Base</h2>
-          <p>Browse the facts, entities, and pods Sigil has stored. Select any row to inspect its provenance, links, and relations.</p>
+          <p>Browse durable facts and inspect their source provenance.</p>
         </div>
         <div class="actions"><button class="btn" id="kb-refresh">Refresh</button></div>
       </div>
 
       <!-- counts strip -->
       <div class="kb-stats" id="kb-stats" aria-label="Knowledge base totals"></div>
-
-      <!-- section sub-nav -->
-      <div class="kb-subnav" role="tablist" aria-label="Knowledge base sections">
-        <button class="kb-tab active" type="button" role="tab" data-kbtab="facts" aria-selected="true">Facts</button>
-        <button class="kb-tab" type="button" role="tab" data-kbtab="entities" aria-selected="false">Entities</button>
-        <button class="kb-tab" type="button" role="tab" data-kbtab="pods" aria-selected="false">Pods</button>
-      </div>
 
       <!-- FACTS -->
       <div class="kb-panel" id="kb-tab-facts" role="tabpanel">
@@ -172,56 +166,6 @@
         </div>
       </div>
 
-      <!-- ENTITIES -->
-      <div class="kb-panel" id="kb-tab-entities" role="tabpanel" hidden>
-        <div class="kb-browser">
-          <div class="kb-list-col">
-            <div class="kb-toolbar">
-              <input class="input kb-search" id="kb-entity-search" type="search" placeholder="Search entities by name…" aria-label="Search entities" autocomplete="off">
-            </div>
-            <div class="kb-filter-row" id="kb-entity-type" aria-label="Entity type filter"></div>
-            <div class="kb-list" id="kb-entity-list" role="listbox" aria-label="Entities"></div>
-          </div>
-          <div class="kb-detail" id="kb-entity-detail" aria-live="polite"></div>
-        </div>
-      </div>
-
-      <!-- PODS -->
-      <div class="kb-panel" id="kb-tab-pods" role="tabpanel" hidden>
-        <div class="kb-list kb-pod-list" id="kb-pod-list"></div>
-      </div>
-    </section>
-
-    <!-- ── Graph ────────────────────────────────────────────────── -->
-    <section id="view-graph" class="view">
-      <div class="section-head">
-        <div class="title-block">
-          <h2>Graph</h2>
-          <p>Every fact and entity in your memory, linked by what mentions what. Drag to explore, scroll to zoom, click a node to open it.</p>
-        </div>
-        <div class="actions">
-          <span class="graph-meta" id="graph-meta"></span>
-          <button class="btn" id="graph-relayout" title="Re-run the layout">Re-run layout</button>
-          <button class="btn" id="graph-refresh">Refresh</button>
-        </div>
-      </div>
-
-      <div class="graph-stage" id="graph-stage">
-        <div id="graph-canvas"></div><!-- force-graph mounts its canvas here -->
-        <div class="graph-legend" id="graph-legend" aria-hidden="true">
-          <span class="gl-item"><span class="gl-dot entity person"></span>Person</span>
-          <span class="gl-item"><span class="gl-dot entity topic"></span>Topic</span>
-          <span class="gl-item"><span class="gl-dot entity document"></span>Document</span>
-          <span class="gl-item"><span class="gl-dot fact"></span>Fact</span>
-        </div>
-        <div class="graph-zoom" role="group" aria-label="Zoom">
-          <button class="btn ghost small" id="graph-zoom-out" aria-label="Zoom out">−</button>
-          <button class="btn ghost small" id="graph-zoom-fit" aria-label="Fit to view">Fit</button>
-          <button class="btn ghost small" id="graph-zoom-in" aria-label="Zoom in">+</button>
-        </div>
-        <div class="graph-tooltip" id="graph-tooltip" hidden></div>
-        <div class="graph-overlay" id="graph-overlay"></div>
-      </div>
     </section>
 
     <!-- ── Agents ───────────────────────────────────────────────── -->
@@ -229,60 +173,36 @@
       <div class="section-head">
         <div class="title-block">
           <h2>Agents</h2>
-          <p>One shared memory across every AI coding tool on this machine. Connect a tool and Sigil writes a small, reversible hook so it reads and writes the same brain.</p>
+          <p>One shared local memory across your coding tools. An agent name shows the connection and who wrote a fact, not a separate memory pod.</p>
         </div>
         <div class="actions"><button class="btn" id="agents-refresh">Refresh</button></div>
       </div>
 
       <div class="connector-grid" id="agents-connectors"><div class="muted">detecting installed tools…</div></div>
 
-      <h3 class="section-sub">Activity by agent</h3>
-      <p class="muted text-sm" style="margin-top: calc(var(--s-3) * -1 + 2px); margin-bottom: var(--s-3);">Reads and writes attributed to each agent, from recent activity.</p>
+      <section class="panel agents-scope" aria-labelledby="agents-scope-title">
+        <div>
+          <span class="settings-kicker">Memory scope</span>
+          <h3 id="agents-scope-title">Shared on this machine</h3>
+          <p class="muted text-sm">Every connected tool reads and writes the same local memory today. Project-specific scopes are not enabled yet, so nothing is hidden inside a Codex or Claude pod.</p>
+        </div>
+      </section>
+
+      <h3 class="section-sub">Automatic recall</h3>
+      <p class="muted text-sm" style="margin-top: calc(var(--s-3) * -1 + 2px); margin-bottom: var(--s-3);">One read-only search runs per prompt only for supported, ready connections. Results below are runtime-only, so searching never creates a database write.</p>
       <div class="table-wrap">
-        <table id="agents-activity">
-          <thead><tr><th>Agent</th><th class="num">Searches</th><th class="num">Writes</th><th class="num">Last seen</th></tr></thead>
+        <table id="agents-recall">
+          <thead><tr><th>Agent</th><th>Readiness</th><th>Last attempt</th><th>Result</th></tr></thead>
           <tbody><tr><td colspan="4" class="empty">loading…</td></tr></tbody>
         </table>
       </div>
-    </section>
 
-    <!-- ── Devices ──────────────────────────────────────────────── -->
-    <section id="view-devices" class="view">
-      <div class="section-head">
-        <div class="title-block">
-          <h2>Devices</h2>
-          <p>Other Sigil installs paired with this one. Identity is an Ed25519 NodeID — revoke locks a device out without losing the data it wrote.</p>
-        </div>
-        <div class="actions">
-          <button class="btn" id="dev-refresh">Refresh</button>
-          <button class="btn primary" id="dev-new">+ Add device</button>
-        </div>
-      </div>
-
-      <div class="row-meta"><span id="dev-count">—</span></div>
-
+      <h3 class="section-sub">Activity by agent</h3>
+      <p class="muted text-sm" style="margin-top: calc(var(--s-3) * -1 + 2px); margin-bottom: var(--s-3);">Successful saved-memory operations, attributed to the caller. Open a fact in the Knowledge Base to see its writer provenance.</p>
       <div class="table-wrap">
-        <table id="dev-table">
-          <thead>
-            <tr>
-              <th>Device</th>
-              <th>NodeID</th>
-              <th>Role</th>
-              <th>Namespaces</th>
-              <th>Last seen</th>
-              <th>Status</th>
-              <th style="text-align:right">Actions</th>
-            </tr>
-          </thead>
-          <tbody><tr><td colspan="7" class="empty">loading…</td></tr></tbody>
-        </table>
-      </div>
-
-      <h3 class="section-sub">Pending pairing codes</h3>
-      <div class="table-wrap">
-        <table id="dev-codes">
-          <thead><tr><th>Code id</th><th>Device name</th><th>Role</th><th>Expires</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead>
-          <tbody><tr><td colspan="6" class="empty">loading…</td></tr></tbody>
+        <table id="agents-activity">
+          <thead><tr><th>Agent</th><th class="num">Saves</th><th class="num">Last save</th></tr></thead>
+          <tbody><tr><td colspan="3" class="empty">loading…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -292,7 +212,7 @@
       <div class="section-head">
         <div class="title-block">
           <h2>Activity</h2>
-          <p>Complete causal log. Every search records its routing decision, matched entity, and per-fact scores — cosine similarity, RRF fusion, ACT-R activation (recency + frequency decay), and final ranking. Every ingest records classification, per-fact AUDM verdicts with the similarity that drove them, and entity links. Persisted and replayable.</p>
+          <p>Bounded operational log of durable memory writes and daemon events. Search remains read-only and returns ranking evidence directly to its caller.</p>
         </div>
         <div class="actions">
           <button class="btn" id="trace-refresh">Refresh</button>
@@ -303,10 +223,9 @@
 
       <div class="trace-filters" id="trace-filters">
         <button class="chip active" type="button" data-trace-filter="">All</button>
-        <button class="chip" type="button" data-trace-filter="search">Search</button>
+        <button class="chip" type="button" data-trace-filter="remember">Remember</button>
         <button class="chip" type="button" data-trace-filter="ingest">Ingest</button>
-        <button class="chip" type="button" data-trace-filter="engine">Engine</button>
-        <button class="chip" type="button" data-trace-filter="lifecycle">Lifecycle</button>
+        <button class="chip" type="button" data-trace-filter="correct">Correct</button>
       </div>
 
       <div class="trace-filters" id="trace-agent-filters">
@@ -320,80 +239,7 @@
       </div>
 
       <ul id="trace-list" class="trace-list"></ul>
-      <div class="empty" id="activity-empty">no activity yet — run <code>sigil search "..."</code> or <code>sigil remember "..."</code> and it'll appear here</div>
-    </section>
-
-    <!-- ── Engine (managed-session warm tmux workers) ──────────────── -->
-    <section id="view-engine" class="view">
-      <div class="section-head">
-        <div class="title-block">
-          <h2>Engine</h2>
-          <p>The LLM core. When the managed-session engine is on, Sigil keeps warm <code>claude</code> workers alive in tmux (one <code>sigil-&lt;worker&gt;</code> session each) to amortize agentic cold-starts across ingest + expansion calls. When off, every call uses the one-shot <code>claude -p</code> path. Live worker state below; per-task dispatch/result/fallback events stream into Activity (filter: Engine).</p>
-        </div>
-        <div class="actions">
-          <button class="btn" id="engine-refresh">Refresh</button>
-          <span class="conn-status" id="engine-status">—</span>
-        </div>
-      </div>
-
-      <div class="stat-grid">
-        <div class="stat"><span class="lbl">Mode</span><span class="val" id="eng-mode">—</span><span class="sub" id="eng-mode-sub">—</span></div>
-        <div class="stat"><span class="lbl">Pool size</span><span class="val" id="eng-pool">—</span><span class="sub" id="eng-budget">—</span></div>
-        <div class="stat"><span class="lbl">Queued</span><span class="val" id="eng-queued">—</span><span class="sub">tasks waiting</span></div>
-        <div class="stat"><span class="lbl">Pending</span><span class="val" id="eng-pending">—</span><span class="sub">in flight</span></div>
-      </div>
-
-      <h3 class="section-sub">Workers</h3>
-      <div id="engine-workers"></div>
-
-      <div class="muted text-xs" id="engine-hint" style="margin-top:var(--s-4)"></div>
-    </section>
-
-    <!-- ── Setup (legacy DB test tab; same as onboarding) ─────────── -->
-    <section id="view-setup" class="view">
-      <div class="section-head">
-        <div class="title-block">
-          <h2>Database</h2>
-          <p>Re-test or re-configure your Postgres connection. Use this if you switched providers or need to install pgvector.</p>
-        </div>
-      </div>
-
-      <form id="db-form" class="panel" style="padding: var(--s-5);">
-        <label class="field">
-          <span class="label">Mode</span>
-          <select id="db-mode">
-            <option value="url">Connection URL</option>
-            <option value="fields">Host / Port / Database / User / Password</option>
-          </select>
-        </label>
-
-        <div id="db-url-pane">
-          <label class="field">
-            <span class="label">Postgres URL</span>
-            <input type="text" id="db-url" placeholder="postgres://user:pass@host.neon.tech/db?sslmode=require" autocomplete="off">
-          </label>
-        </div>
-
-        <div id="db-fields-pane" style="display:none">
-          <div class="row-2col">
-            <label class="field"><span class="label">Host</span><input type="text" id="db-host" value="localhost" autocomplete="off"></label>
-            <label class="field"><span class="label">Port</span><input type="number" id="db-port" value="5432"></label>
-          </div>
-          <div class="row-2col">
-            <label class="field"><span class="label">Database</span><input type="text" id="db-database" value="sigil" autocomplete="off"></label>
-            <label class="field"><span class="label">User</span><input type="text" id="db-user" value="sigil_app" autocomplete="off"></label>
-          </div>
-          <label class="field"><span class="label">Password</span><input type="password" id="db-password" autocomplete="off"></label>
-        </div>
-
-        <div class="flex-row">
-          <button type="button" class="btn primary" id="db-test">Test connection</button>
-          <button type="button" class="btn" id="db-pgvector" disabled hidden>Install pgvector</button>
-          <button type="button" class="btn" id="db-migrate" disabled>Run migrations</button>
-        </div>
-      </form>
-
-      <pre id="db-result" class="result" style="display:none"></pre>
+      <div class="empty" id="activity-empty">no write activity yet — run <code>sigil remember "..."</code> or ingest a document</div>
     </section>
 
     <!-- ── Settings ─────────────────────────────────────────────── -->
@@ -401,24 +247,79 @@
       <div class="section-head">
         <div class="title-block">
           <h2>Configuration</h2>
-          <p>Switch your database, LLM, or embedding provider any time. Changes apply after the daemon restarts (automatic).</p>
+          <p>Keep the local memory engine healthy, change providers, and recover safely when something needs attention.</p>
         </div>
       </div>
 
-      <!-- Coding agents now live on their own page (Connections › Agents). -->
-      <p class="muted text-sm" style="margin-bottom: var(--s-4);">Connect coding tools to this memory on the <a href="#agents" data-route="agents">Agents</a> page.</p>
-
-      <!-- Current config + switch controls -->
-      <div class="panel" style="padding: var(--s-5); margin-bottom: var(--s-4);">
-        <div class="row"><div class="k">Database</div><div class="v" id="cfg-db">…</div></div>
-        <div class="row"><div class="k">LLM provider</div><div class="v" id="cfg-llm">…</div></div>
-        <div class="row"><div class="k">Embedding</div><div class="v" id="cfg-emb">…</div></div>
-        <div class="flex-row" style="margin-top: var(--s-4);">
-          <button type="button" class="btn" id="cfg-change-llm">Change LLM</button>
-          <button type="button" class="btn" id="cfg-change-emb">Change embedding</button>
-          <a href="#setup" class="btn" data-route="setup">Change database</a>
+      <div class="panel settings-runtime" id="runtime-card" aria-busy="true">
+        <div class="settings-panel-head">
+          <div>
+            <span class="settings-kicker">Runtime</span>
+            <h3>Keep Sigil ready</h3>
+            <p id="runtime-summary" class="muted">Checking whether Sigil starts automatically on this machine…</p>
+          </div>
+          <span id="runtime-state" class="badge info">checking</span>
         </div>
+        <div class="settings-runtime-detail" id="runtime-detail">The memory engine runs locally and never needs a cloud account.</div>
+        <div class="settings-actions" id="runtime-actions"></div>
+        <div class="settings-confirm" id="runtime-confirm"></div>
+        <div class="result" id="runtime-result" role="status" aria-live="polite" hidden></div>
       </div>
+
+      <div class="settings-inline-route">
+        <span>Using coding agents?</span>
+        <a href="#agents" data-route="agents">Manage agent connections</a>
+      </div>
+
+      <!-- Core configuration is presented as three distinct capabilities. -->
+      <section class="panel settings-config" aria-labelledby="cfg-foundation-title">
+        <div class="settings-panel-head">
+          <div>
+            <h3 id="cfg-foundation-title">Memory setup</h3>
+            <p>Storage and search are required. Generation is optional.</p>
+          </div>
+        </div>
+
+        <div class="settings-capabilities">
+          <div class="settings-capability">
+            <div class="settings-capability-copy">
+              <span class="settings-capability-label">Storage</span>
+              <strong id="cfg-db">…</strong>
+              <span>Where your memory lives on this machine.</span>
+            </div>
+            <div class="settings-capability-side">
+              <span id="cfg-db-state" class="badge">checking</span>
+              <code>sigil init</code>
+            </div>
+          </div>
+
+          <div class="settings-capability">
+            <div class="settings-capability-copy">
+              <span class="settings-capability-label">Memory search</span>
+              <strong id="cfg-emb">…</strong>
+              <span>Finds related memories for your agents.</span>
+            </div>
+            <div class="settings-capability-side settings-capability-actions">
+              <span id="cfg-emb-state" class="badge">checking</span>
+              <button type="button" class="btn" id="cfg-change-emb">Change</button>
+            </div>
+          </div>
+
+          <div class="settings-capability">
+            <div class="settings-capability-copy">
+              <span class="settings-capability-label">Optional generation</span>
+              <strong id="cfg-llm">…</strong>
+              <span>Only used when you explicitly extract facts from a document.</span>
+            </div>
+            <div class="settings-capability-side settings-capability-actions">
+              <span id="cfg-llm-state" class="badge">checking</span>
+              <button type="button" class="btn" id="cfg-change-llm">Change</button>
+              <button type="button" class="btn danger" id="cfg-disable-llm" hidden>Turn off</button>
+            </div>
+          </div>
+        </div>
+        <div class="settings-confirm" id="cfg-llm-confirm"></div>
+      </section>
 
       <!-- Inline provider switcher (hidden until "Change" clicked) -->
       <div id="cfg-switch" class="panel" style="padding: var(--s-5); display:none; margin-bottom: var(--s-4);">
@@ -427,16 +328,16 @@
         <div id="cfg-switch-fields" style="margin-top: var(--s-4);"></div>
         <div id="cfg-switch-conflict"></div>
         <div class="flex-row" style="margin-top: var(--s-4);">
-          <button type="button" class="btn primary" id="cfg-switch-apply">Apply &amp; restart</button>
+          <button type="button" class="btn primary" id="cfg-switch-apply">Apply &amp; verify</button>
           <button type="button" class="btn" id="cfg-switch-cancel">Cancel</button>
         </div>
         <pre id="cfg-switch-result" class="result" style="display:none"></pre>
       </div>
 
       <!-- Config snapshot (advanced, collapsed) -->
-      <details class="panel" style="padding: var(--s-5);">
-        <summary style="cursor:pointer;">Advanced — configuration (<code>~/.sigil/config.json</code>)</summary>
-        <p class="muted text-sm">Secrets are shown as "configured", never the value.</p>
+      <details class="settings-advanced">
+        <summary>Inspect local configuration <code>~/.sigil/config.json</code></summary>
+        <p class="muted text-sm">Secrets are shown as “configured”, never their value.</p>
         <div class="table-wrap">
           <table id="env-table">
             <thead><tr><th>Key</th><th>Value</th></tr></thead>
@@ -445,36 +346,32 @@
         </div>
       </details>
 
-      <!-- ── Danger zone ──────────────────────────────────────────── -->
-      <div class="section-head" style="margin-top: var(--s-6);">
-        <div class="title-block">
-          <h2>Danger zone</h2>
-          <p>Reset Sigil — disconnect every agent, optionally wipe stored memory, and start setup over.</p>
+      <!-- ── Reset ────────────────────────────────────────────────── -->
+      <section class="settings-danger" aria-labelledby="reset-title">
+        <div class="settings-danger-copy">
+          <span class="settings-kicker">Last resort</span>
+          <h3 id="reset-title">Reset Sigil</h3>
+          <p>Disconnect agents and clear local setup. Stored memory stays unless you choose to wipe it.</p>
         </div>
-      </div>
-      <div class="panel" style="padding: var(--s-5);">
-        <label class="field" style="flex-direction:row; align-items:center; gap: var(--s-2);">
-          <input type="checkbox" id="reset-wipe-memory" checked>
-          <span class="label" style="text-transform:none; letter-spacing:0;">Also wipe stored memory (all facts &amp; embeddings)</span>
-        </label>
-        <div id="reset-result" class="result" style="display:none; margin-top: var(--s-3);"></div>
-        <div class="flex-row" style="margin-top: var(--s-3);">
-          <div id="reset-confirm"></div>
-          <button type="button" class="btn danger" id="cfg-reset">Reset Sigil…</button>
+        <div class="settings-danger-controls">
+          <label class="settings-check">
+            <input type="checkbox" id="reset-wipe-memory">
+            <span><strong>Also erase stored memory</strong><small>Deletes facts and embeddings. This cannot be undone here.</small></span>
+          </label>
+          <label class="settings-check">
+            <input type="checkbox" id="reset-understand">
+            <span><strong>I understand the impact</strong><small>Every agent is disconnected and Sigil must be set up again.</small></span>
+          </label>
+          <div class="settings-danger-action">
+            <button type="button" class="btn danger" id="cfg-reset" disabled>Reset Sigil</button>
+            <span>Requires acknowledgement</span>
+          </div>
         </div>
-      </div>
+        <div id="reset-result" class="result" style="display:none;"></div>
+        <div id="reset-confirm" class="settings-confirm"></div>
+      </section>
     </section>
 
-    <!-- ── RPC ──────────────────────────────────────────────────── -->
-    <section id="view-methods" class="view">
-      <div class="section-head">
-        <div class="title-block">
-          <h2>RPC methods</h2>
-          <p>All methods registered on this daemon. CLI, MCP server, and this GUI dispatch through the same registry.</p>
-        </div>
-      </div>
-      <ul id="methods-list" class="methods-grid"></ul>
-    </section>
   </main>
 
   <footer>
@@ -485,86 +382,6 @@
   </footer>
 
   <!-- ── Pair-create modal ──────────────────────────────────────── -->
-  <div id="dev-modal" class="modal" hidden>
-    <div class="modal-body" role="dialog" aria-modal="true">
-      <div class="modal-header">
-        <h3>Add device</h3>
-        <button class="modal-close" data-close-modal="dev-modal" aria-label="Close">×</button>
-      </div>
-      <div class="modal-content">
-        <form id="dev-form">
-          <label class="field"><span class="label">Device name</span><input type="text" id="dev-name" placeholder="laptop-b" autocomplete="off"></label>
-          <div class="row-2col">
-            <label class="field"><span class="label">Role</span>
-              <select id="dev-role">
-                <option value="reader">reader — read only</option>
-                <option value="writer" selected>writer — read + write</option>
-                <option value="admin">admin — full access</option>
-              </select>
-            </label>
-            <label class="field"><span class="label">TTL (seconds)</span><input type="number" id="dev-ttl" value="600"></label>
-          </div>
-          <label class="field"><span class="label">Namespaces <span class="muted">(comma-separated; empty = all)</span></span><input type="text" id="dev-ns" autocomplete="off"></label>
-        </form>
-
-        <div id="dev-result-view" hidden>
-          <div class="code-card">
-            <div class="lbl">Pairing code</div>
-            <div class="code" id="dev-result-code">—<button class="copy-btn" data-copy="dev-result-code">copy</button></div>
-          </div>
-          <div class="code-card">
-            <div class="lbl">Master NodeID</div>
-            <div class="code mono" style="font-size: var(--t-base);" id="dev-result-master">—<button class="copy-btn" data-copy="dev-result-master">copy</button></div>
-          </div>
-          <p class="muted text-sm">On the joining device, run:</p>
-          <div class="join-cmd" id="dev-result-cmd">—</div>
-          <button class="copy-btn" data-copy="dev-result-cmd" style="margin-top: var(--s-2);">copy command</button>
-          <p class="muted text-xs" style="margin-top: var(--s-3);">Expires <span id="dev-result-expiry" class="mono">—</span></p>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn ghost" data-close-modal="dev-modal" id="dev-cancel">Cancel</button>
-        <button type="button" class="btn primary" id="dev-create">Create pairing code</button>
-        <button type="button" class="btn primary" id="dev-done" hidden data-close-modal="dev-modal">Done</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Revoke modal ───────────────────────────────────────────── -->
-  <div id="revoke-modal" class="modal" hidden>
-    <div class="modal-body" role="dialog" aria-modal="true">
-      <div class="modal-header">
-        <h3>Revoke device</h3>
-        <button class="modal-close" data-close-modal="revoke-modal" aria-label="Close">×</button>
-      </div>
-      <div class="modal-content">
-        <p style="margin: 0 0 var(--s-3); color: var(--fg-2);">Revoke <strong id="revoke-target-name">—</strong>?</p>
-        <div class="radio-card-group">
-          <label class="radio-card selected">
-            <input type="radio" name="revoke-reason" value="paused" checked>
-            <div>
-              <div class="rc-title">Paused</div>
-              <div class="rc-desc">Temporary. The device can be re-activated from this dashboard.</div>
-            </div>
-          </label>
-          <label class="radio-card danger">
-            <input type="radio" name="revoke-reason" value="compromised">
-            <div>
-              <div class="rc-title">Compromised</div>
-              <div class="rc-desc">Terminal. The keypair leaked — re-activation is blocked.</div>
-            </div>
-          </label>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button type="button" class="btn ghost" data-close-modal="revoke-modal">Cancel</button>
-        <button type="button" class="btn danger" id="revoke-confirm">Revoke</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- force-graph (vasturiano), vendored UMD — defines window.ForceGraph -->
-  <script src="/static/vendor/force-graph.min.js"></script>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

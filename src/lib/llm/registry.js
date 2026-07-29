@@ -10,14 +10,7 @@ const PROVIDERS = {
   openrouter: () => import('./providers/openrouter.js'),
   'claude-cli': () => import('./providers/claude-cli.js'),
   ollama: () => import('./providers/ollama.js'),
-  // Internal routing provider — selected by llm.js (not the init picker) when
-  // SIGIL_MANAGED_SESSION=true and the resolved provider is claude-cli. Excluded
-  // from listProvidersForSetup so it never appears in `sigil init`.
-  'managed-session': () => import('./providers/managed-session.js'),
 };
-
-// Providers that exist only as internal routing targets — never user-pickable.
-const INTERNAL_PROVIDERS = new Set(['managed-session']);
 
 const EMBEDDERS = {
   ollama: () => import('./embedders/ollama.js'),
@@ -152,28 +145,6 @@ function resetDetection() {
   detectedEmbedder = null;
 }
 
-// --- Init flow ---------------------------------------------------------
-// Load every provider module so `sigil init` can render a single picker
-// over all of them and dispatch to the chosen provider's `setup()`.
-// Adding a provider = drop one file under `providers/` exporting
-// `{ chat, meta, setup }`; this list discovers it automatically.
-async function listProvidersForSetup() {
-  const entries = await Promise.all(
-    Object.entries(PROVIDERS)
-      .filter(([id]) => !INTERNAL_PROVIDERS.has(id))
-      .map(async ([id, load]) => {
-        const mod = await load();
-        if (!mod.meta || typeof mod.setup !== 'function') {
-          throw new Error(
-            `Provider "${id}" is missing the init contract — expected exports: meta, setup`,
-          );
-        }
-        return { ...mod.meta, setup: mod.setup };
-      }),
-  );
-  return entries;
-}
-
 export {
   getProvider,
   getEmbedder,
@@ -183,5 +154,4 @@ export {
   resetDetection,
   isOllamaReachable,
   isClaudeCliAvailable,
-  listProvidersForSetup,
 };

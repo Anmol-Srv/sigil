@@ -19,6 +19,9 @@ import { currentRequestContext, currentAgent } from './request-context.js';
 // of candidates) can't bloat a row or the WS frame. Detail is already
 // shaped/capped by callers; this is a backstop.
 const MAX_DETAIL_BYTES = 256 * 1024;
+const MAX_TRACE_ROWS = 1_000;
+const PRUNE_EVERY_WRITES = 100;
+let writesSincePrune = 0;
 
 function provenance() {
   // request-context (AsyncLocalStorage) is populated by rpc-registry.dispatch
@@ -27,7 +30,6 @@ function provenance() {
   // also falls back to SIGIL_AGENT for in-process callers (the hooks).
   const ctx = currentRequestContext();
   return {
-    deviceId: ctx?.device?.id ?? null,
     transport: ctx?.transport ?? null,
     agent: currentAgent(),
   };
@@ -40,14 +42,12 @@ function provenance() {
  * @param {object} [p.detail]    structured causal trace (jsonb)
  * @param {string} [p.namespace]
  * @param {number} [p.durationMs]
- * @param {string} [p.sessionId]  originating session (not in request-context —
- *                                the caller must pass it explicitly)
  * @returns {Promise<string|null>} the trace uid, or null if persistence failed
  */
-async function recordTrace({ kind, summary, detail = {}, namespace = null, durationMs = null, sessionId = null }) {
+async function recordTrace({ kind, summary, detail = {}, namespace = null, durationMs = null }) {
   const uid = `trace-${nanoid(16)}`;
   const ts = new Date().toISOString();
-  const { deviceId, transport, agent } = provenance();
+  const { transport, agent } = provenance();
 
   // Bound the detail size — drop to a marker rather than reject the row.
   let safeDetail = detail;
@@ -61,7 +61,7 @@ async function recordTrace({ kind, summary, detail = {}, namespace = null, durat
 
   // Live broadcast first (cheap, never blocks on DB).
   try {
-    bus.emit('trace', { uid, kind, summary, namespace, durationMs, deviceId, transport, agent, sessionId, detail: safeDetail });
+    bus.emit('trace', { uid, kind, summary, namespace, durationMs, transport, agent, detail: safeDetail });
   } catch { /* bus never throws, but be safe */ }
 
   // Durable write (best-effort).
@@ -73,12 +73,20 @@ async function recordTrace({ kind, summary, detail = {}, namespace = null, durat
       duration_ms: durationMs,
       namespace,
       summary,
-      device_id: deviceId,
       transport,
       agent,
-      session_id: sessionId,
       detail: JSON.stringify(safeDetail),
     });
+    writesSincePrune += 1;
+    if (writesSincePrune >= PRUNE_EVERY_WRITES) {
+      writesSincePrune = 0;
+      // Keep diagnostics bounded without adding a count/delete query to every
+      // write. At most 99 rows can temporarily exceed the cap.
+      await cortexDb.raw(
+        'DELETE FROM trace_event WHERE id IN (SELECT id FROM trace_event ORDER BY ts DESC OFFSET ?)',
+        [MAX_TRACE_ROWS],
+      ).catch(() => {});
+    }
     return uid;
   } catch (err) {
     console.error('[trace-store] persist failed:', err.message);
@@ -89,7 +97,7 @@ async function recordTrace({ kind, summary, detail = {}, namespace = null, durat
 /** Latest traces, newest first. Optionally filtered by kind / agent / namespace / before-ts. */
 async function listTraces({ kind = null, agent = null, namespace = null, before = null, limit = 50 } = {}) {
   let q = cortexDb('trace_event')
-    .select('uid', 'kind', 'ts', 'duration_ms as durationMs', 'namespace', 'summary', 'device_id as deviceId', 'transport', 'agent', 'session_id as sessionId', 'detail')
+    .select('uid', 'kind', 'ts', 'duration_ms as durationMs', 'namespace', 'summary', 'transport', 'agent', 'detail')
     .orderBy('ts', 'desc')
     .limit(Math.min(Number(limit) || 50, 200));
   if (kind) q = q.where({ kind });
@@ -101,15 +109,6 @@ async function listTraces({ kind = null, agent = null, namespace = null, before 
   return rows.map((r) => ({ ...r, detail: typeof r.detail === 'string' ? safeParse(r.detail) : r.detail }));
 }
 
-async function getTrace(uid) {
-  const row = await cortexDb('trace_event')
-    .select('uid', 'kind', 'ts', 'duration_ms as durationMs', 'namespace', 'summary', 'device_id as deviceId', 'transport', 'agent', 'session_id as sessionId', 'detail')
-    .where({ uid })
-    .first();
-  if (!row) return null;
-  return { ...row, detail: typeof row.detail === 'string' ? safeParse(row.detail) : row.detail };
-}
-
 async function clearTraces() {
   const n = await cortexDb('trace_event').del();
   return { cleared: n };
@@ -117,4 +116,4 @@ async function clearTraces() {
 
 function safeParse(s) { try { return JSON.parse(s); } catch { return {}; } }
 
-export { recordTrace, listTraces, getTrace, clearTraces };
+export { recordTrace, listTraces, clearTraces };

@@ -5,7 +5,7 @@
 // time, which honours $HOME), so the real ~/.sigil and ~/.claude are untouched.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -78,7 +78,7 @@ describe('claude-code install uses the stable shim, never a baked package path',
       .flatMap((entry) => entry.hooks)
       .map((h) => h.command);
 
-    expect(commands.length).toBe(4);
+    expect(commands.length).toBe(1);
     for (const cmd of commands) {
       expect(cmd).toContain('sigil-hook');
       // The breaking pattern we are eliminating: a frozen `node /abs/.../*.js`.
@@ -93,17 +93,29 @@ describe('claude-code install uses the stable shim, never a baked package path',
 
     const v = await claudeCode.verify({});
     expect(v.installed).toBe(true);
+
+    const instructionsPath = join(SANDBOX, '.sigil', 'CLAUDE.md');
+    const skillPath = join(SANDBOX, '.claude', 'skills', 'sigil', 'SKILL.md');
+    writeFileSync(instructionsPath, readFileSync(instructionsPath, 'utf8').replace('sigil-instructions:v11', 'sigil-instructions:v10'));
+    writeFileSync(skillPath, readFileSync(skillPath, 'utf8').replace('sigil-skill:v7', 'sigil-skill:v6'));
+    expect(await claudeCode.verify({})).toMatchObject({
+      installed: true,
+      attentionKind: 'outdated',
+      attention: expect.stringContaining('sigil update'),
+    });
+    await claudeCode.refresh({});
+    expect(await claudeCode.verify({})).toMatchObject({ installed: true, attention: null });
   });
 
   it('re-running install does not duplicate hooks and preserves the user\'s own hooks', async () => {
     await claudeCode.install({});
     const settings = JSON.parse(readFileSync(join(SANDBOX, '.claude', 'settings.json'), 'utf8'));
-    // Exactly one sigil entry per event (UserPromptSubmit/PostToolUse/Stop/SessionEnd).
-    for (const event of ['UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd']) {
-      const sigilEntries = settings.hooks[event].filter((e) =>
-        e.hooks.some((h) => h.command.includes('sigil-hook')));
-      expect(sigilEntries.length).toBe(1);
-    }
+    const sigilEntries = settings.hooks.UserPromptSubmit.filter((entry) =>
+      entry.hooks.some((hook) => hook.command.includes('sigil-hook')));
+    expect(sigilEntries).toHaveLength(1);
+    expect(settings.hooks.PostToolUse).toBeUndefined();
+    expect(settings.hooks.Stop).toBeUndefined();
+    expect(settings.hooks.SessionEnd).toBeUndefined();
   });
 });
 
@@ -122,8 +134,18 @@ describe('MCP clients register the stable sigil-mcp shim, never a baked server p
   it('Codex config.toml command points at sigil-mcp', async () => {
     await codex.install({});
     const toml = readFileSync(join(SANDBOX, '.codex', 'config.toml'), 'utf8');
+    const hooks = JSON.parse(readFileSync(join(SANDBOX, '.codex', 'hooks.json'), 'utf8'));
+    const skill = readFileSync(join(SANDBOX, '.codex', 'skills', 'sigil', 'SKILL.md'), 'utf8');
     expect(toml).toContain('sigil-mcp');
+    expect(toml).toContain('SIGIL_AGENT = "codex"');
     expect(toml).not.toMatch(/server\.js/);
+    const sigilHooks = hooks.hooks.UserPromptSubmit
+      .flatMap((entry) => entry.hooks)
+      .filter((hook) => hook.command.includes('sigil-hook'));
+    expect(sigilHooks).toHaveLength(1);
+    expect(sigilHooks[0].command).toContain('SIGIL_AGENT=codex');
+    expect(skill).toContain('## Preamble (run first)');
+    expect(skill).toContain('Prefer the Sigil MCP `status` tool');
     expect(await codex.verify({})).toMatchObject({ installed: true });
   });
 

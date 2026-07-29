@@ -15,9 +15,8 @@
  *     call, don't blow up — the hook still returns successfully so it
  *     doesn't block Claude Code, but it logs to .hook-errors.log)
  *
- * Two variants:
- *   - validateConfig()      synchronous, regex-only checks
- *   - validateConfigDeep()  async, also tries Postgres connect
+ * Database reachability is checked through the daemon's `status` RPC by
+ * `sigil doctor`; this module validates configuration shape only.
  */
 
 import config from '../config.js';
@@ -57,28 +56,9 @@ export function validateConfig() {
 
   validateEmbedding(issues);
   validateLlm(issues);
+  validateGenerationFeatures(issues);
   validateDb(issues);
   validateSetup(issues);
-
-  return issues;
-}
-
-export async function validateConfigDeep() {
-  const issues = validateConfig();
-
-  if (config.db.type === 'postgres' && !issues.some((i) => i.code.startsWith('DB_'))) {
-    try {
-      const cortexDb = (await import('../db/cortex.js')).default;
-      await cortexDb.raw('SELECT 1');
-    } catch (err) {
-      issues.push({
-        level: 'fail',
-        code: 'DB_UNREACHABLE',
-        message: `Postgres at ${config.db.host}:${config.db.port}/${config.db.database} unreachable: ${err.message.split('\n')[0]}`,
-        fix: 'Start Postgres (e.g. `docker start sigil-pg` or your equivalent), then re-check the database step in the GUI Setup or `sigil init`.',
-      });
-    }
-  }
 
   return issues;
 }
@@ -98,7 +78,7 @@ function validateEmbedding(issues) {
       issues.push({
         level: 'fail',
         code: 'EMBEDDING_PROVIDER_MODEL_MISMATCH',
-        message: `EMBEDDING_PROVIDER=${provider} but EMBEDDING_MODEL=${model} is a ${actualProvider} model.`,
+        message: `embedding.provider=${provider} but embedding.model=${model} is a ${actualProvider} model.`,
         fix: suggestEmbeddingFix(provider, model, actualProvider),
       });
     }
@@ -140,11 +120,26 @@ function validateLlm(issues) {
       issues.push({
         level: 'warn',
         code: 'OPENROUTER_MODEL_FORMAT',
-        message: `LLM_OPENROUTER_MODEL=${config.llm.openrouterModel} doesn't look like vendor/model format.`,
+        message: `llm.model=${config.llm.openrouterModel} doesn't look like vendor/model format for OpenRouter.`,
         fix: 'Use format like "anthropic/claude-haiku-4-5" or "google/gemini-2.5-flash".',
       });
     }
   }
+}
+
+function validateGenerationFeatures(issues) {
+  if (config.llm.provider) return;
+
+  const enabled = [];
+  if (config.ingest?.eagerExtract) enabled.push('ingest.eagerExtract');
+  if (!enabled.length) return;
+
+  issues.push({
+    level: 'fail',
+    code: 'LLM_REQUIRED_FOR_ENABLED_FEATURE',
+    message: `Generation features are enabled without an LLM provider: ${enabled.join(', ')}.`,
+    fix: 'Configure an LLM in Settings, or disable those optional generation features.',
+  });
 }
 
 function validateDb(issues) {
@@ -179,12 +174,9 @@ function validateDb(issues) {
   }
 }
 
-// Onboarding must produce a COMPLETE config — with config.json as the sole
-// source of truth, a missing field has no env fallback, so surface it loudly.
+// The local memory core requires embeddings but not generation. Missing LLM
+// configuration is valid unless an explicitly enabled feature needs it.
 function validateSetup(issues) {
-  if (!config.llm.provider) {
-    issues.push({ level: 'fail', code: 'LLM_NOT_CONFIGURED', message: 'No LLM provider configured (setup incomplete).', fix: 'Finish the LLM step in the GUI Setup or `sigil init`.' });
-  }
   if (!config.embedding.provider || !config.embedding.model) {
     issues.push({ level: 'fail', code: 'EMBEDDING_NOT_CONFIGURED', message: 'No embedding provider/model configured (setup incomplete).', fix: 'Finish the embedding step in the GUI Setup or `sigil init`.' });
   }
@@ -197,5 +189,5 @@ function suggestEmbeddingFix(provider, model, actualProvider) {
     ollama: 'nomic-embed-text, mxbai-embed-large',
   }[provider] || '(see provider docs)';
 
-  return `Either set EMBEDDING_PROVIDER=${actualProvider} (matches your current model), or change EMBEDDING_MODEL to one of: ${examples}`;
+  return `Either choose embedding provider ${actualProvider} (matches the current model), or choose a ${provider} model such as: ${examples}`;
 }

@@ -3,7 +3,7 @@
  *
  * Responsibilities (and ONLY these — each step owns its own logic/validation/
  * errors):
- *   - hold the ordered step list (DB → LLM → Embed → Name)
+ *   - hold the ordered setup list (DB → Embed, then optional integrations)
  *   - expose state derived from config.json's setup.steps
  *   - run a step: validate → mark active → apply (streaming progress) → mark
  *     done/error, persisting status to config.json so the flow resumes
@@ -14,30 +14,29 @@
  *   { type:'setup', step, status:'active'|'done'|'error'|'reset', pct, label,
  *     hint?, kind?, errors?, result? }
  *
- * NOTE: only the `database` step is registered today. LLM/Embed/Name land once
- * config.js reads from the config store (they need runtime config + the DB
- * pool). The service + GUI render whatever steps are registered, so adding them
- * later requires no orchestration changes.
+ * Generation is deliberately outside the required path. A user can store and
+ * retrieve memory with only a database and embedder; an LLM provider enables
+ * opt-in enrichment features but must never hold onboarding or health hostage.
  */
 import bus from '../daemon/events.js';
-import { getConfig, setStepStatus, markSetupComplete, resetConfig, EMBEDDING_DIM } from './config-store.js';
+import { getConfig, patchConfig, setStepStatus, markSetupComplete, EMBEDDING_DIM } from './config-store.js';
 import databaseStep from './steps/database.js';
 import llmStep from './steps/llm.js';
 import embeddingStep from './steps/embedding.js';
 import connectorsStep from './steps/connectors.js';
-import identityStep from './steps/identity.js';
 
-// Ordered: DB → LLM → Embeddings → Coding agents → Your name.
-const STEPS = [databaseStep, llmStep, embeddingStep, connectorsStep, identityStep];
+// Only storage and semantic search are prerequisites for a usable local memory
+// system. Agent wiring and generation add capabilities, but neither should keep
+// a user from a ready CLI/MCP install.
+const STEPS = [databaseStep, embeddingStep, connectorsStep, llmStep];
 
 // The full intended order for display, so the GUI can show upcoming steps even
 // before they're implemented. Steps not in STEPS are shown but not runnable.
 const PLANNED = [
-  { id: 'database', title: 'Database' },
-  { id: 'llm', title: 'LLM provider' },
-  { id: 'embedding', title: 'Embeddings' },
-  { id: 'connectors', title: 'Coding agents' },
-  { id: 'identity', title: 'Your name' },
+  { id: 'database', title: 'Database', required: true },
+  { id: 'embedding', title: 'Embeddings', required: true },
+  { id: 'connectors', title: 'Coding agents', required: false },
+  { id: 'llm', title: 'LLM provider', required: false },
 ];
 
 // Mask credentials in a step result before it crosses the bus / RPC boundary.
@@ -77,20 +76,26 @@ export function listSteps() {
   return PLANNED.map((p) => ({ ...p, implemented: runnable.has(p.id) }));
 }
 
-/** Current setup state: per-step status (from config.json) + the next step. */
-export function getSetupState() {
-  const cfg = getConfig();
+/**
+ * Pure state derivation kept separate from config IO so completion semantics
+ * are easy to regression-test. Optional steps remain visible to Settings but
+ * are excluded from both the onboarding cursor and completion gate.
+ */
+export function deriveSetupState(cfg) {
   const steps = PLANNED.map((p) => ({
     ...p,
     implemented: STEPS.some((s) => s.id === p.id),
     status: cfg.setup?.steps?.[p.id] || 'pending',
   }));
-  const next = steps.find((s) => s.implemented && s.status !== 'done')?.id || null;
-  // Derive completion from the steps so adding a new step (e.g. connectors)
-  // automatically reopens setup until it's done — never trust a stale persisted
-  // flag. (markSetupComplete is still written for any external readers.)
-  const complete = steps.length > 0 && steps.every((s) => s.status === 'done');
+  const required = steps.filter((s) => s.required);
+  const next = required.find((s) => s.implemented && s.status !== 'done')?.id || null;
+  const complete = required.length > 0 && required.every((s) => s.status === 'done');
   return { complete, steps, currentStep: next };
+}
+
+/** Current setup state: per-step status (from config.json) + the next step. */
+export function getSetupState() {
+  return deriveSetupState(getConfig());
 }
 
 /** Run a step's detection (drives the UI's choices). {} when it has none. */
@@ -125,10 +130,12 @@ export async function runStep(id, input = {}) {
     const safeResult = redactSecrets(result);
     bus.emit('setup', { step: id, status: 'done', pct: 100, label: `${step.title} ready.`, result: safeResult });
 
-    // Mark the whole setup complete only when every PLANNED step is done.
+    // Persist the derived core completion flag for external/legacy readers.
+    // Optional enrichment steps never reopen an otherwise working setup.
     const state = getSetupState();
-    const allDone = state.steps.every((s) => s.status === 'done');
-    if (allDone && !state.complete) markSetupComplete(true);
+    if (getConfig().setup?.complete !== state.complete) {
+      markSetupComplete(state.complete);
+    }
 
     return { ok: true, step: id, result: safeResult, state: getSetupState() };
   } catch (err) {
@@ -150,16 +157,22 @@ export function getSetupConfig() {
     database: { mode: c.database.mode, host: c.database.host, port: c.database.port, name: c.database.name, urlHost },
     llm: { provider: c.llm.provider, model: c.llm.model, hasKey: Boolean(c.llm.apiKey) },
     embedding: { provider: c.embedding.provider, model: c.embedding.model, dim: EMBEDDING_DIM, hasKey: Boolean(c.embedding.apiKey) },
-    identity: { name: c.identity.name },
     setup: c.setup,
   };
 }
 
-/** Clean-break reset — wipe config and start setup over. */
-export function resetSetup() {
-  resetConfig();
-  bus.emit('setup', { step: null, status: 'reset', pct: 0, label: 'Setup reset.' });
-  return getSetupState();
+/**
+ * Generation is optional. Turning it off removes the configured provider and
+ * credential while preserving storage, embeddings, and every stored memory.
+ */
+export async function disableLlm() {
+  patchConfig('llm', { provider: null, model: null, apiKey: null, host: null });
+  setStepStatus('llm', 'pending');
+  try {
+    const { resetDetection } = await import('../lib/llm/registry.js');
+    resetDetection();
+  } catch { /* the config change is still valid if the optional registry is unavailable */ }
+  return { disabled: true, config: getSetupConfig() };
 }
 
 /**

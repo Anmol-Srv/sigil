@@ -9,7 +9,7 @@
  *   unavailable — client not detected here
  *   error       — surfaced by the GUI when a connect/verify call throws
  *
- * Reuses the registry contract unchanged: meta/detect/install/uninstall/verify.
+ * Reuses the bounded registry contract: detect/plan/apply/verify/uninstall.
  */
 import { listClients } from '../../lib/clients/index.js';
 import { AppError } from '../../lib/errors.js';
@@ -46,12 +46,30 @@ export function registerConnectors(registry) {
           hint: c.hint,
           detected: Boolean(detected),
           installed,
+          automaticRecall: Boolean(c.automaticRecall),
+          capabilities: c.capabilities,
+          adapterVersion: c.manifest?.version ?? null,
           status: uiStatus(Boolean(detected), installed),
           reason: verified?.reason || null,
+          attention: verified?.attention || null,
+          attentionKind: verified?.attentionKind || null,
         };
       }),
     );
     return { connectors };
+  });
+
+  // A plan is strictly read-only and lets future CLI/GUI surfaces preview the
+  // exact Sigil-owned files before they mutate a client configuration.
+  registry.register('planConnector', async (params = {}) => {
+    const client = await findClient(params.id);
+    const result = await client.plan();
+    return {
+      id: client.id,
+      capabilities: client.capabilities,
+      adapterVersion: client.manifest?.version ?? null,
+      actions: result?.actions || [],
+    };
   });
 
   // Install Sigil into a client, then verify it actually took.
@@ -59,7 +77,7 @@ export function registerConnectors(registry) {
     const client = await findClient(params.id);
     let actions = [];
     try {
-      const res = await client.install({ dryRun: false });
+      const res = await client.apply();
       actions = res?.actions || [];
     } catch (err) {
       throw new AppError({ errorCode: 'CONNECTOR_INSTALL_FAILED', message: err?.message, data: { id: client.id } });
@@ -74,7 +92,14 @@ export function registerConnectors(registry) {
         data: { id: client.id, reason: verified?.reason || null },
       });
     }
-    return { ok: true, id: client.id, status: 'connected', actions };
+    return {
+      ok: true,
+      id: client.id,
+      status: 'connected',
+      attention: verified?.attention || null,
+      attentionKind: verified?.attentionKind || null,
+      actions,
+    };
   });
 
   registry.register('disconnectConnector', async (params = {}) => {

@@ -4,7 +4,7 @@
  * launchctl/systemctl/schtasks on their behalf.
  */
 import {
-  installServiceUnit, uninstallService, serviceStatus,
+  installServiceUnit, uninstallService, restartService, serviceStatus,
 } from '../../supervisor/index.js';
 import { getDbHealth } from '../registry-holder.js';
 
@@ -29,5 +29,21 @@ export function registerSupervisor(registry) {
   registry.register('serviceUninstall', async () => {
     const res = await uninstallService();
     return { ok: true, ...res };
+  });
+
+  registry.register('serviceRestart', async () => {
+    const status = await serviceStatus();
+    if (!status.supervisor?.installed) {
+      const err = new Error('Automatic start is not enabled yet. Enable it before restarting the managed service.');
+      err.code = 'service_not_installed';
+      throw err;
+    }
+    const res = await restartService();
+    if (!res.ok) {
+      const err = new Error(`Could not restart the ${res.manager || 'managed'} service.`);
+      err.code = 'service_restart_failed';
+      throw err;
+    }
+    return res;
   });
 }

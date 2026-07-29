@@ -9,7 +9,7 @@
  * close that gap by exercising the real path:
  *   - verifyMcpRoundTrip: spawn the MCP server exactly as the client would,
  *     do the JSON-RPC handshake, and call the `status` tool.
- *   - verifyClaudeHookRoundTrip: run the registered hook command with a
+ *   - verifyPromptHookRoundTrip: run the registered hook command with a
  *     synthetic UserPromptSubmit payload and confirm it emits valid JSON.
  *
  * Both are heavier than a file check (spawn a process, maybe touch the DB), so
@@ -62,21 +62,21 @@ export async function verifyMcpRoundTrip(serverPath, { timeoutMs = 12000 } = {})
   });
 }
 
-/** Run the registered hook command with a synthetic payload; expect clean JSON (or empty). */
-export async function verifyClaudeHookRoundTrip(hookCmd, { timeoutMs = 12000 } = {}) {
+/** Run the registered prompt hook with a synthetic payload; expect clean JSON (or empty). */
+export async function verifyPromptHookRoundTrip(hookCmd, { timeoutMs = 12000 } = {}) {
   if (!hookCmd) return { ok: false, reason: 'no hook command' };
-  // hookCmd looks like `node /abs/path/user-prompt-submit.js`
-  const parts = hookCmd.split(' ').filter(Boolean);
-  const cmd = parts[0];
-  const args = parts.slice(1);
-  const scriptPath = args.find((a) => a.endsWith('.js'));
-  if (scriptPath && !existsSync(scriptPath)) {
-    return { ok: false, reason: `hook script not found at ${scriptPath}` };
-  }
   return new Promise((resolve) => {
     let done = false;
     let out = '';
-    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    // Hook command strings are shell commands by contract. Running them through
+    // sh preserves quoted shim paths and future environment prefixes without
+    // re-implementing a shell parser in connector verification.
+    const child = spawn('/bin/sh', ['-c', hookCmd], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // Do not let a diagnostic shell invocation appear as a real automatic
+      // recall in the runtime-only observability ledger.
+      env: { ...process.env, SIGIL_HOOK_VERIFY: '1' },
+    });
     const finish = (r) => {
       if (done) return;
       done = true;
@@ -101,3 +101,7 @@ export async function verifyClaudeHookRoundTrip(hookCmd, { timeoutMs = 12000 } =
     try { child.stdin.write(payload); child.stdin.end(); } catch { /* */ }
   });
 }
+
+// Kept as a compatibility export for the existing Claude connector. Both
+// clients use the same UserPromptSubmit payload and JSON output contract.
+export const verifyClaudeHookRoundTrip = verifyPromptHookRoundTrip;

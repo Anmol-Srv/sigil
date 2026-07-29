@@ -1,8 +1,22 @@
 import { readFile, writeFile, unlink, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 
-import { SIGIL_DAEMON_PID, SIGIL_DAEMON_SOCK, SIGIL_HEARTBEAT, SIGIL_HOME } from '../lib/paths.js';
+import {
+  PKG_ROOT,
+  SIGIL_DAEMON_LOCK,
+  SIGIL_DAEMON_PID,
+  SIGIL_DAEMON_SOCK,
+  SIGIL_HEARTBEAT,
+  SIGIL_HOME,
+} from '../lib/paths.js';
 
 /**
  * Check whether a PID is alive. `process.kill(pid, 0)` is the POSIX trick:
@@ -44,6 +58,71 @@ export async function removeSocketFile() {
   try { await unlink(SIGIL_DAEMON_SOCK); } catch { /* missing is fine */ }
 }
 
+function readDaemonLock(path = SIGIL_DAEMON_LOCK) {
+  try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
+}
+
+/**
+ * The daemon lifetime lock replaces the GUI port as the split-brain guard.
+ * Keeping storage safe must not require loading an HTTP/WebSocket server.
+ */
+export function daemonLockDecision(existing, { selfPid = process.pid, isAlive = isPidAlive } = {}) {
+  if (!existing || !Number.isInteger(existing.pid)) return 'reclaim';
+  if (existing.pid === selfPid) return 'held';
+  return isAlive(existing.pid) ? 'refuse' : 'reclaim';
+}
+
+let heldDaemonLock = null;
+
+export function acquireDaemonLock(path = SIGIL_DAEMON_LOCK) {
+  const record = JSON.stringify({
+    pid: process.pid,
+    root: PKG_ROOT,
+    startedAt: Date.now(),
+  });
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = openSync(path, 'wx');
+      try { writeFileSync(fd, record, 'utf8'); } finally { closeSync(fd); }
+      heldDaemonLock = path;
+      return { acquired: true };
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      const existing = readDaemonLock(path);
+      const decision = daemonLockDecision(existing);
+      if (decision === 'held') {
+        heldDaemonLock = path;
+        return { acquired: true };
+      }
+      if (decision === 'refuse') {
+        const lockErr = new Error(
+          `sigild is already owned by process ${existing.pid}`
+          + `${existing.root ? ` at ${existing.root}` : ''}`,
+        );
+        lockErr.code = 'daemon_owned';
+        lockErr.owner = existing;
+        throw lockErr;
+      }
+      try { unlinkSync(path); } catch { /* another contender reclaimed it */ }
+    }
+  }
+
+  const lockErr = new Error(`could not acquire daemon lock ${path}`);
+  lockErr.code = 'daemon_owned';
+  lockErr.owner = readDaemonLock(path);
+  throw lockErr;
+}
+
+export function releaseDaemonLock(path = heldDaemonLock || SIGIL_DAEMON_LOCK) {
+  if (!path) return;
+  const existing = readDaemonLock(path);
+  if (existing?.pid === process.pid) {
+    try { unlinkSync(path); } catch { /* missing is fine */ }
+  }
+  if (heldDaemonLock === path) heldDaemonLock = null;
+}
+
 // The daemon refreshes heartbeat.json every 15s. Treat a heartbeat as stale
 // after three missed beats — long enough to absorb scheduling jitter / a busy
 // event loop, short enough that a recycled PID can't masquerade as live for
@@ -59,37 +138,6 @@ async function readHeartbeat() {
   }
 }
 
-/** Best-effort read of the heartbeat pid (the most accurate "who's serving"). */
-async function readHeartbeatPid() {
-  const hb = await readHeartbeat();
-  return Number.isFinite(hb?.pid) ? hb.pid : null;
-}
-
-/**
- * Probe GET /healthz on the configured HTTP port. A 200 means a daemon is
- * already serving the GUI — authoritative even when the pidfile is stale or
- * was written by a different process (e.g. a `node src/daemon` dev run). The
- * HTTP port is the one resource that can't be silently stolen (TCP bind is
- * exclusive), so it's the most reliable "is a daemon already up?" signal.
- */
-async function isHttpDaemonServing() {
-  try {
-    const { default: config } = await import('../config.js');
-    if (!config.http.enabled) return false;
-    const { host, port } = config.http;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 500);
-    try {
-      const res = await fetch(`http://${host}:${port}/healthz`, { signal: ctrl.signal });
-      return res.ok;
-    } finally {
-      clearTimeout(timer);
-    }
-  } catch {
-    return false; // nothing listening / refused / timed out
-  }
-}
-
 /**
  * Returns the live daemon PID if one is running, otherwise null and cleans
  * up any stale pid/socket files. Call this before starting a new daemon.
@@ -99,37 +147,29 @@ async function isHttpDaemonServing() {
  * a reboot the pidfile can name a recycled PID now held by an unrelated process
  * (or, via the EPERM branch in isPidAlive, another user's process) — which used
  * to make the booting daemon declare itself a duplicate and exit without ever
- * binding its socket, leaving the CLI to time out. So we corroborate liveness
- * with two daemon-specific signals:
- *   1. a fresh heartbeat.json whose pid matches the pidfile, OR
- *   2. something answers /healthz on the configured HTTP port (authoritative —
- *      the TCP bind is exclusive, so the port can't be silently stolen).
- * Only then is the slot considered occupied; otherwise we clean up the stale
- * pid/socket so a fresh start can succeed.
+ * binding its socket. A fresh heartbeat confirms identity. The separate
+ * lifetime lock closes the race between two processes that both observe stale
+ * state at the same time.
  */
 export async function detectRunningDaemon() {
   const pid = await readPidFile();
+  const hb = await readHeartbeat();
+  const freshHeartbeat = hb
+    && Number.isFinite(hb.ts)
+    && (Date.now() - hb.ts) < HEARTBEAT_STALE_MS
+    && Number.isFinite(hb.pid)
+    && isPidAlive(hb.pid);
 
   // A live PID only counts as *our* daemon if a fresh heartbeat confirms it.
   if (pid && isPidAlive(pid)) {
-    const hb = await readHeartbeat();
-    const fresh = hb && Number.isFinite(hb.ts) && (Date.now() - hb.ts) < HEARTBEAT_STALE_MS;
-    if (fresh && hb.pid === pid) return pid;
-    // Live PID but no matching fresh heartbeat: either a recycled/unrelated PID
-    // or a daemon mid-boot before its first heartbeat. Fall through to the
-    // authoritative port probe rather than trusting the PID alone.
+    if (freshHeartbeat && hb.pid === pid) return pid;
   }
 
-  // The /healthz probe is the trustworthy signal: a daemon started outside this
-  // pidfile may still be serving, and the port can't be silently stolen. If it
-  // answers, leave the socket/pidfile untouched (they're the incumbent's) and
-  // report the real pid from the heartbeat when we can.
-  if (await isHttpDaemonServing()) {
-    return (await readHeartbeatPid()) ?? 'unknown';
-  }
+  // A fresh daemon writes its heartbeat immediately before or after the pidfile.
+  // Trust that short startup window only when no conflicting pidfile exists.
+  if (!pid && freshHeartbeat) return hb.pid;
 
-  // Genuinely stale (no live+confirmed PID, nothing serving) — clean up so a
-  // fresh start succeeds.
+  // Genuinely stale — clean up so a fresh start succeeds.
   if (pid) await removePidFile();
   if (existsSync(SIGIL_DAEMON_SOCK)) await removeSocketFile();
   return null;

@@ -82,12 +82,15 @@ describe('daemon MCP-over-HTTP (POST /mcp)', () => {
     try {
       const { tools } = await client.listTools();
       const names = tools.map((t) => t.name);
-      // A representative slice of the 11 registered tools.
+      // The deliberately small, user-facing memory surface.
       expect(names).toContain('status');
       expect(names).toContain('search');
       expect(names).toContain('remember');
       expect(names).toContain('prime');
-      expect(names.length).toBeGreaterThanOrEqual(10);
+      expect(names.sort()).toEqual([
+        'correct', 'get_fact_context', 'ingest', 'prime',
+        'remember', 'search', 'status',
+      ]);
     } finally {
       await transport.close();
     }

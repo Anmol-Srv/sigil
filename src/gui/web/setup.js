@@ -6,9 +6,9 @@
  * /api/v1/events WebSocket. No terminal logs: every step shows a progress bar +
  * a single error slot.
  *
- * Steps: Database (mode cards) → LLM provider (provider cards) → Embeddings
- * (provider cards) → Your name (form). The flow advances itself as each step
- * completes; the last step flips setup.complete and drops into the dashboard.
+ * Required setup: Database → memory search. Coding-agent connections and an
+ * optional LLM are offered after the core is ready; neither blocks local CLI or
+ * MCP memory use.
  */
 import { rpc } from './api.js';
 import { toast } from './toast.js';
@@ -19,11 +19,12 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 
 const STEP_DESC = {
   database: 'Where memory lives',
-  llm: 'Fact extraction + reasoning',
-  embedding: 'Semantic search',
-  connectors: 'Editors & tools that share this brain',
-  identity: 'Personalize + smoke-test',
+  llm: 'Optional fact extraction',
+  embedding: 'Find related memories',
+  connectors: 'Optional integrations',
 };
+
+const AGENT_SETUP_PROMPT = `Set up Sigil on this machine through the terminal. If Sigil is not installed, use the official installer:\n\ncurl -fsSL https://raw.githubusercontent.com/Anmol-Srv/sigil/master/install.sh | sh\n\nThen run \`sigil init\`. Default to Sigil's built-in local database unless I explicitly ask to use an existing, Docker, or external Postgres database. Explain each provider choice in plain language. Use an embedding provider that is already configured, or ask me to provide its key without printing it. Connect only coding agents you detect. Do not install or download Ollama or models automatically. Finish with \`sigil doctor\` and report whether storage and memory search are healthy. Do not delete, reset, or overwrite existing Sigil data.`;
 
 let state = null;
 let busy = false;
@@ -73,7 +74,7 @@ function railClass(s) {
 }
 function renderRail() {
   const host = $('#setup-rail'); if (!host) return;
-  host.innerHTML = state.steps.map((s, i) => `
+  host.innerHTML = state.steps.filter((s) => s.id !== 'llm').map((s, i) => `
     <li class="onboarding-step ${railClass(s)}" data-setup-step="${esc(s.id)}">
       <div class="num">${s.status === 'done' ? '✓' : i + 1}</div>
       <div>
@@ -85,7 +86,7 @@ function renderRail() {
 
 // ── shared scaffolding every step renders into #setup-main ───────────────────
 function shell({ title, lede, body }) {
-  const order = (state?.steps || []).map((s) => s.id);
+  const order = (state?.steps || []).filter((s) => s.id !== 'llm').map((s) => s.id);
   const idx = order.indexOf(viewStep);
   const canBack = idx > 0;
   $('#setup-main').innerHTML = `
@@ -96,7 +97,7 @@ function shell({ title, lede, body }) {
     <div class="wizard-actions">
       <button class="btn ghost" id="setup-back"${canBack ? '' : ' hidden'}>← Back</button>
       <div class="spacer"></div>
-      <button class="btn primary large" id="setup-run" disabled>${esc(title.startsWith('What') ? 'Finish setup' : 'Continue')}</button>
+      <button class="btn primary large" id="setup-run" disabled>${esc(title.startsWith('What') || viewStep === 'connectors' ? 'Finish setup' : 'Continue')}</button>
     </div>
     <div id="setup-progress" class="setup-progress" hidden>
       <div class="setup-progress-bar"><span id="setup-progress-fill"></span></div>
@@ -143,7 +144,6 @@ async function enterStep(stepId) {
   if (stepId === 'llm') return renderProviderStep('llm');
   if (stepId === 'embedding') return renderProviderStep('embedding');
   if (stepId === 'connectors') return renderConnectorsStep();
-  if (stepId === 'identity') return renderIdentityStep();
   renderComingSoon();
 }
 
@@ -154,13 +154,15 @@ function renderComingSoon() {
 // ── Database step (mode cards) ───────────────────────────────────────────────
 async function renderDatabaseStep() {
   shell({
-    title: 'Set up your database.',
-    lede: 'Sigil stores every fact and embedding in Postgres + pgvector. Use the built-in database (nothing to install), connect one you run, spin one up in Docker, or point it at a managed database.',
+    title: 'Keep memory on this machine.',
+    lede: 'Start with Sigil’s built-in database. It needs no server and keeps memory at ~/.sigil/db. If you already operate Postgres or need a remote database for this VM, you can choose that instead.',
     body: `<div id="setup-detect" class="setup-detect muted">Checking this machine…</div>
       <div class="provider-card-grid" id="setup-db-modes"></div>
+      <details class="setup-advanced" id="setup-db-advanced"><summary>Use another database</summary><div class="provider-card-grid" id="setup-db-alternatives"></div></details>
       <div id="setup-fields" hidden></div>`,
   });
   $('#setup-run').addEventListener('click', runDatabase);
+  addAgentAssist();
   dbDetect = await rpc('setup.detect', { step: 'database' }, { quiet: true }).catch(() => null);
   renderDbModes();
 }
@@ -172,37 +174,40 @@ function renderDbModes() {
   else if (det.local?.installed) s.innerHTML = 'Postgres is installed but not running. The built-in database needs nothing installed.';
   else s.innerHTML = 'No local Postgres detected — the built-in database below needs nothing installed.';
 
-  const cards = [];
+  const defaultCards = [];
+  const alternativeCards = [];
   // Embedded (PGlite) — the zero-prerequisite default. Always available: a full
   // Postgres 17 + pgvector compiled to WASM, running in-process under ~/.sigil/db.
   if (det.embedded?.available !== false) {
-    cards.push(card('mode', 'embedded',
+    defaultCards.push(card('mode', 'embedded',
       'Use the built-in database <span class="badge info" style="margin-left:var(--s-2);">RECOMMENDED</span>',
       'No install — Postgres + pgvector run inside Sigil, stored at ~/.sigil/db'));
   }
-  if (det.local?.running) cards.push(card('mode', 'local', 'Connect to local Postgres', `localhost:${det.local.port} · reuse your running server`, { action: 'connect' }));
-  else if (det.local?.installed) cards.push(card('mode', 'local', 'Start &amp; connect local Postgres', 'Start your installed Postgres, then set up', { action: 'start' }));
+  if (det.local?.running) alternativeCards.push(card('mode', 'local', 'Connect to local Postgres', `localhost:${det.local.port} · reuse your running server`, { action: 'connect' }));
+  else if (det.local?.installed) alternativeCards.push(card('mode', 'local', 'Start &amp; connect local Postgres', 'Start your installed Postgres, then set up', { action: 'start' }));
   if (det.docker?.installed) {
     const hint = det.docker.running
       ? 'Docker — dedicated pgvector Postgres, zero setup'
       : "Docker is installed but not running — we'll start it for you";
-    cards.push(card('mode', 'docker', 'Spin up a Sigil container', hint));
+    alternativeCards.push(card('mode', 'docker', 'Spin up a Sigil container', hint));
   } else {
-    cards.push(cardDisabled('Spin up a Sigil container', det.docker?.reason || 'Docker not installed'));
+    alternativeCards.push(cardDisabled('Spin up a Sigil container', det.docker?.reason || 'Docker not installed'));
   }
-  cards.push(card('mode', 'url', 'External database', 'Managed (Neon / Supabase / RDS) or a connection string'));
+  alternativeCards.push(card('mode', 'url', 'External database', 'Managed (Neon / Supabase / RDS) or a connection string'));
 
-  $('#setup-db-modes').innerHTML = cards.join('');
-  $$all('#setup-db-modes [data-mode]').forEach((c) => c.addEventListener('click', () => {
+  $('#setup-db-modes').innerHTML = defaultCards.join('');
+  $('#setup-db-alternatives').innerHTML = alternativeCards.join('');
+  $$all('#setup [data-mode]').forEach((c) => c.addEventListener('click', () => {
     selectedMode = c.dataset.mode;
     selectedExtra = JSON.parse(c.dataset.extra || '{}');
-    $$all('#setup-db-modes [data-mode]').forEach((x) => x.classList.toggle('selected', x === c));
+    $$all('#setup [data-mode]').forEach((x) => x.classList.toggle('selected', x === c));
     const fields = selectedMode === 'url' ? [{ name: 'url', label: 'Connection string', type: 'text', placeholder: 'postgres://user:pass@host:5432/dbname' }] : [];
     const host = $('#setup-fields');
     host.hidden = fields.length === 0;
     host.innerHTML = fieldInputs(fields);
     wireRequiredGate();
   }));
+  $('#setup-db-modes [data-mode="embedded"]')?.click();
 }
 
 async function runDatabase() {
@@ -235,19 +240,53 @@ function confirmExternal(url) {
   });
 }
 
+function addAgentAssist() {
+  const host = $('#setup-main');
+  const block = document.createElement('div');
+  block.className = 'setup-agent-assist';
+  block.innerHTML = `<div><strong>Let your coding agent handle setup</strong><p class="muted text-sm">Copy a guarded prompt that uses the same installer, keeps the local default, and asks before any credentials or destructive action.</p></div><button type="button" class="btn" id="setup-copy-agent">Copy agent prompt</button>`;
+  host.querySelector('#setup-confirm').before(block);
+  block.querySelector('#setup-copy-agent').addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    try {
+      await copyText(AGENT_SETUP_PROMPT);
+      button.textContent = 'Copied';
+      setTimeout(() => { if (button.isConnected) button.textContent = 'Copy agent prompt'; }, 1600);
+    } catch {
+      toast({ variant: 'error', message: 'Could not copy the prompt. Select it from the Sigil README instead.' });
+    }
+  });
+}
+
+async function copyText(value) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+  const input = document.createElement('textarea');
+  input.value = value;
+  input.style.position = 'fixed';
+  input.style.opacity = '0';
+  document.body.appendChild(input);
+  input.select();
+  const copied = document.execCommand('copy');
+  input.remove();
+  if (!copied) throw new Error('copy failed');
+}
+
 // ── LLM + Embedding steps (provider cards) ───────────────────────────────────
 const PROVIDER_COPY = {
-  llm: { title: 'Choose your LLM provider.', lede: 'Sigil uses an LLM to classify input, extract facts, and answer searches. Pick one — Claude Code reuses your existing subscription.' },
-  embedding: { title: 'Choose your embedder.', lede: 'Embeddings power semantic search. Every option is pinned to 1024 dimensions, so it always matches your database.' },
+  llm: { title: 'Choose an optional LLM provider.', lede: 'An LLM is only used when you explicitly extract facts from a document. Storage and search work without one.' },
+  embedding: { title: 'Set up memory search.', lede: 'Sigil needs one embedding provider to find related memories. Choose a provider you already use; its key stays only in your local Sigil configuration.' },
 };
 
 async function renderProviderStep(stepId) {
   const copy = PROVIDER_COPY[stepId];
   shell({ title: copy.title, lede: copy.lede, body: `<div class="provider-card-grid" id="setup-providers"></div><div id="setup-fields"></div>` });
   $('#setup-run').addEventListener('click', () => runProviderStep(stepId));
+  if (stepId === 'llm') addLlmSkip();
   const det = await rpc('setup.detect', { step: stepId }, { quiet: true }).catch(() => ({ providers: [] }));
   providers = det.providers || [];
-  $('#setup-providers').innerHTML = providers.map((p) => card('prov', p.id, `${esc(p.label)}${p.recommended ? ' <span class="badge info" style="margin-left:var(--s-2);">RECOMMENDED</span>' : ''}`, p.hint)).join('');
+  $('#setup-providers').innerHTML = providers.map((p) => p.available === false
+    ? cardDisabled(p.label, p.hint)
+    : card('prov', p.id, `${esc(p.label)}${p.recommended ? ' <span class="badge info" style="margin-left:var(--s-2);">RECOMMENDED</span>' : ''}`, p.hint)).join('');
   $$all('#setup-providers [data-prov]').forEach((c) => c.addEventListener('click', () => selectProvider(stepId, c.dataset.prov)));
   const rec = providers.find((p) => p.recommended) || providers[0];
   if (rec) selectProvider(stepId, rec.id);
@@ -346,8 +385,8 @@ function runProviderStep(stepId) {
 // ── Connectors step (multi-toggle list) ──────────────────────────────────────
 async function renderConnectorsStep() {
   shell({
-    title: 'Connect your coding agents.',
-    lede: 'Sigil installs memory hooks into the AI tools you already use — one shared brain across Claude Code, Cursor, Codex, Kiro, and more. Connect any you want; you can change this any time in Settings.',
+    title: 'Connect your coding agents (optional).',
+    lede: 'Connect the AI tools you use so they can recall Sigil memory. You can skip this, keep using the CLI or MCP directly, and connect tools later from Settings.',
     body: '<div class="connector-grid" id="setup-connectors"><div class="muted">detecting installed tools…</div></div>',
   });
   // Connectors are optional — Continue is always enabled.
@@ -384,28 +423,13 @@ async function onSetupConnectorAction(id, action) {
   return loadSetupConnectors();
 }
 
-// ── Identity step (form) ─────────────────────────────────────────────────────
-function renderIdentityStep() {
-  shell({
-    title: 'What should we call you?',
-    lede: "We'll save this as your first memory — which doubles as a live test of your whole setup.",
-    body: `<div id="setup-fields">${fieldInputs([{ name: 'name', label: 'Your name', type: 'text', placeholder: 'e.g. Anmol' }])}</div>`,
-  });
-  const input = $('#setup-fields [data-setup-field="name"]');
-  const btn = $('#setup-run');
-  const sync = () => { btn.disabled = !input.value.trim(); };
-  input.addEventListener('input', sync); sync();
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && input.value.trim()) runStep('identity', { name: input.value.trim() }); });
-  btn.addEventListener('click', () => runStep('identity', { name: input.value.trim() }));
-}
-
 // ── shared run + progress ────────────────────────────────────────────────────
 async function runStep(stepId, input) {
   if (busy) return;
   startBusy();
   try {
     const res = await rpc('setup.run', { step: stepId, input }, { quiet: true });
-    if (res.ok) { setProgress(100, 'Done.'); await onStepDone(); }
+    if (res.ok) { setProgress(100, 'Done.'); await onStepDone(stepId); }
     else showError(res.error || (res.errors && Object.values(res.errors)[0]) || 'Setup failed.', res.hint);
   } catch (err) {
     showError(err.message, err.hint);
@@ -427,11 +451,45 @@ function showError(message, hint) {
   $('#setup-progress').hidden = true;
 }
 
-async function onStepDone() {
+async function onStepDone(completedStep) {
   state = await rpc('setup.state', {}, { quiet: true }).catch(() => state);
   renderRail();
-  if (state.complete) { toast({ variant: 'success', message: 'Setup complete.' }); setTimeout(() => window.location.reload(), 700); return; }
+  if (completedStep === 'embedding' && state.complete && state.steps.some((step) => step.id === 'connectors' && step.status !== 'done')) {
+    await enterStep('connectors');
+    return;
+  }
+  if (completedStep === 'connectors' && state.complete && state.steps.some((step) => step.id === 'llm' && step.status !== 'done')) {
+    renderOptionalLlmOffer();
+    return;
+  }
+  if (state.complete) { finishOnboarding(); return; }
   await enterStep(state.currentStep || null);
+}
+
+function renderOptionalLlmOffer() {
+  viewStep = 'llm-offer';
+  renderRail();
+  shell({
+    title: 'Add optional document fact extraction?',
+    lede: 'Storage and memory search are ready. An LLM only helps when you explicitly ask Sigil to extract atomic facts from a document.',
+    body: `<div class="result"><strong>Use it when you want decision logs, runbooks, or long notes distilled into searchable facts.</strong><div class="muted" style="margin-top:6px;">It never runs during ordinary saves, searches, or document ingestion unless you opt in with <code>--extract-facts</code>.</div><div class="flex-row" style="margin-top:12px;"><button type="button" class="btn" id="setup-add-llm">Configure an LLM</button></div></div>`,
+  });
+  const finish = $('#setup-run');
+  finish.disabled = false;
+  finish.textContent = 'Not now, finish setup';
+  finish.addEventListener('click', finishOnboarding);
+  $('#setup-add-llm').addEventListener('click', () => enterStep('llm'));
+}
+
+function addLlmSkip() {
+  const host = $('#setup-confirm');
+  host.innerHTML = '<button type="button" class="btn ghost" id="setup-skip-llm">Not now</button>';
+  $('#setup-skip-llm').addEventListener('click', finishOnboarding);
+}
+
+function finishOnboarding() {
+  toast({ variant: 'success', message: 'Setup complete.' });
+  setTimeout(() => window.location.reload(), 700);
 }
 
 function onSetupEvent(evt) {

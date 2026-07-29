@@ -4,15 +4,13 @@
  * The daemon already probes the DB at boot, but a valid-looking-but-dead
  * provider (revoked key, unreachable Ollama, wrong model) stayed invisible
  * until the first real ingest/hook failed. This probes the LLM and embedder
- * with a tiny live call so the failure is loud at boot, in `status`/the GUI,
- * in `sigil doctor`, and in the session preamble.
+ * with a tiny live call when the user explicitly runs `sigil doctor`.
  *
  * NEVER throws — mirrors the preamble's contract. Every path returns a
  * structured `{ ok, provider, model, error }` so callers can render status.
  *
- * Cost: one tiny LLM completion + one cache-bypassed embed. Run at boot and
- * on-demand (doctor) — NOT per `status` poll (the result is cached in the
- * registry-holder for that).
+ * Cost: one tiny optional-LLM completion + one cache-bypassed embed. Never run
+ * at daemon boot, during recall, or during status polling.
  */
 import config from '../config.js';
 import { EMBEDDING_DIM } from './constants.js';

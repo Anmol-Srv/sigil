@@ -4,8 +4,7 @@
  * Installs four things into the user's ~/.claude/ directory:
  *   1. ~/.sigil/CLAUDE.md              — shared instructions (delegated to instructions.js)
  *   2. ~/.claude/CLAUDE.md             — adds one @import line pointing at (1)
- *   3. ~/.claude/settings.json         — merges 4 hook entries (UserPromptSubmit,
- *                                        PostToolUse, Stop, SessionEnd)
+ *   3. ~/.claude/settings.json         — installs one targeted-recall hook
  *   4. ~/.claude/skills/sigil/SKILL.md — the `/sigil` skill: a preamble that
  *                                        self-tests the live connection + guides
  *                                        the user (delegated to skill.js)
@@ -20,8 +19,8 @@ import { existsSync } from 'node:fs';
 
 import { safeWrite } from '../safe-write.js';
 import { detectInstalled } from './detect.js';
-import { writeSharedInstructions, SHARED_INSTRUCTIONS_PATH } from './instructions.js';
-import { writeSigilSkill, removeSigilSkill, SIGIL_SKILL_PATH } from './skill.js';
+import { writeSharedInstructions, SHARED_INSTRUCTIONS_PATH, hasCurrentInstructions } from './instructions.js';
+import { writeSigilSkill, removeSigilSkill, SIGIL_SKILL_PATH, hasCurrentSigilSkill } from './skill.js';
 import { HOOK_SHIM_PATH, writeLauncherShim } from './shim.js';
 
 const CLAUDE_HOME = join(homedir(), '.claude');
@@ -32,6 +31,7 @@ const meta = {
   id: 'claude-code',
   label: 'Claude Code',
   hint: 'hooks + @import — full auto-injection',
+  automaticRecall: true,
 };
 
 async function detect() {
@@ -65,7 +65,7 @@ async function writeImportLine({ dryRun = false } = {}) {
   };
 }
 
-// Merges Sigil's 4 hook entries into ~/.claude/settings.json.
+// Installs Sigil's targeted-recall hook and removes legacy capture hooks.
 //
 // Hook commands invoke the STABLE hook shim (~/.sigil/bin/sigil-hook <name>)
 // rather than `node /abs/path/dist/hooks/<name>.js`. The shim path never moves,
@@ -110,31 +110,6 @@ async function mergeHooks({ dryRun = false } = {}) {
         statusMessage: 'Searching memory...',
       }],
     },
-    PostToolUse: {
-      matcher: 'Edit|Write|Bash',
-      hooks: [{
-        type: 'command',
-        command: hook('post-tool-use'),
-        timeout: 10,
-        async: true,
-      }],
-    },
-    Stop: {
-      hooks: [{
-        type: 'command',
-        command: hook('stop'),
-        timeout: 30,
-        async: true,
-      }],
-    },
-    SessionEnd: {
-      hooks: [{
-        type: 'command',
-        command: hook('session-end'),
-        timeout: 10,
-        async: true,
-      }],
-    },
   };
 
   const existedBefore = existsSync(CLAUDE_SETTINGS_PATH);
@@ -156,12 +131,16 @@ async function mergeHooks({ dryRun = false } = {}) {
     && (cmd.includes('sigil-hook')
       || SIGIL_HOOK_FILES.some((fn) => cmd.endsWith(fn) || cmd.includes(`/${fn}`)));
 
-  for (const [event, entry] of Object.entries(sigilHooks)) {
+  for (const event of Object.keys(settings.hooks)) {
     const existing = settings.hooks[event] || [];
     const filtered = existing.filter(
       (h) => !h.hooks?.some((inner) => isSigilHook(inner.command)),
     );
-    settings.hooks[event] = [...filtered, entry];
+    if (filtered.length) settings.hooks[event] = filtered;
+    else delete settings.hooks[event];
+  }
+  for (const [event, entry] of Object.entries(sigilHooks)) {
+    settings.hooks[event] = [...(settings.hooks[event] || []), entry];
   }
 
   if (!dryRun) await fs.mkdir(CLAUDE_HOME, { recursive: true });
@@ -171,8 +150,8 @@ async function mergeHooks({ dryRun = false } = {}) {
     action: result.action,
     path: CLAUDE_SETTINGS_PATH,
     detail: existedBefore
-      ? '+UserPromptSubmit, +PostToolUse, +Stop, +SessionEnd hooks (other settings preserved)'
-      : 'new settings.json with sigil hooks',
+      ? '+UserPromptSubmit hook; retired capture hooks removed (other settings preserved)'
+      : 'new settings.json with targeted-recall hook',
   };
 }
 
@@ -206,6 +185,22 @@ async function install({ dryRun = false } = {}) {
   return { actions };
 }
 
+// Refresh only Sigil-owned generated content after a Sigil update. Do not
+// rewrite Claude's settings.json or import line here: their config is already
+// valid, and upgrade-time mutation should be narrower than an explicit repair.
+async function refresh({ dryRun = false } = {}) {
+  const actions = [];
+  const instructions = await writeSharedInstructions({ dryRun });
+  if (instructions) actions.push({
+    action: instructions.action,
+    path: instructions.path,
+    detail: `${instructions.bytes ?? 0} bytes`,
+  });
+  const skill = await writeSigilSkill({ dryRun });
+  if (skill) actions.push({ action: skill.action, path: skill.path, detail: `${skill.bytes ?? 0} bytes` });
+  return { actions };
+}
+
 // Returns whether Sigil is currently installed into Claude Code's config —
 // distinct from `detect()` which only asks "is Claude Code present on this
 // machine." `sigil doctor` uses this to flag drift (e.g., user edited
@@ -213,6 +208,7 @@ async function install({ dryRun = false } = {}) {
 async function verify({ deep = false } = {}) {
   const fs = await import('node:fs/promises');
   const importLine = `@${SHARED_INSTRUCTIONS_PATH}`;
+  const guidanceIssues = [];
 
   if (!existsSync(CLAUDE_MD_PATH)) {
     return { installed: false, reason: '~/.claude/CLAUDE.md missing — run `sigil init`' };
@@ -220,6 +216,12 @@ async function verify({ deep = false } = {}) {
   const md = await fs.readFile(CLAUDE_MD_PATH, 'utf8');
   if (!md.includes(importLine)) {
     return { installed: false, reason: '@import line missing from ~/.claude/CLAUDE.md' };
+  }
+  try {
+    const sharedInstructions = await fs.readFile(SHARED_INSTRUCTIONS_PATH, 'utf8');
+    if (!hasCurrentInstructions(sharedInstructions)) guidanceIssues.push('instructions');
+  } catch {
+    guidanceIssues.push('instructions');
   }
 
   if (!existsSync(CLAUDE_SETTINGS_PATH)) {
@@ -233,7 +235,7 @@ async function verify({ deep = false } = {}) {
   }
   const hooks = settings.hooks || {};
   const HOOK_FILES = ['user-prompt-submit.js', 'post-tool-use.js', 'stop.js', 'session-end.js'];
-  const required = ['UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd'];
+  const required = ['UserPromptSubmit'];
 
   // Find the command string registered for an event, if any. Recognises both
   // the new shim form (`'~/.sigil/bin/sigil-hook' stop`) and the legacy
@@ -275,11 +277,19 @@ async function verify({ deep = false } = {}) {
     }
   }
 
-  // The /sigil skill (preamble self-test + guidance). Less critical than hooks —
-  // memory still works without it — but a healthy install ships it, so flag its
-  // absence as drift `sigil init` will repair.
+  // The /sigil skill is deliberate guidance, not a dependency of recall. Its
+  // absence/outdated marker is actionable drift, but must not make doctor say
+  // an otherwise live hook is disconnected (or prevent `sigil update` from
+  // repairing the managed text).
   if (!existsSync(SIGIL_SKILL_PATH)) {
-    return { installed: false, reason: '/sigil skill missing — run `sigil init`' };
+    guidanceIssues.push('skill');
+  } else {
+    try {
+      const skill = await fs.readFile(SIGIL_SKILL_PATH, 'utf8');
+      if (!hasCurrentSigilSkill(skill)) guidanceIssues.push('skill');
+    } catch {
+      guidanceIssues.push('skill');
+    }
   }
 
   // Deep: actually run the UserPromptSubmit hook with a synthetic payload and
@@ -292,7 +302,10 @@ async function verify({ deep = false } = {}) {
     if (!rt.ok) return { installed: false, reason: `hook round-trip failed: ${rt.reason}` };
   }
 
-  return { installed: true };
+  const attention = guidanceIssues.length
+    ? `Sigil ${[...new Set(guidanceIssues)].join(' and ')} ${guidanceIssues.length === 1 ? 'is' : 'are'} missing or out of date — run \`sigil update\` to refresh them. Automatic recall remains connected.`
+    : null;
+  return { installed: true, attention, attentionKind: attention ? 'outdated' : null };
 }
 
 // Symmetric to install(). Removes the @import line, strips Sigil's hook
@@ -361,6 +374,7 @@ export {
   meta,
   detect,
   install,
+  refresh,
   uninstall,
   verify,
   // Exposed for direct use by `sigil reset` and similar low-level callers.

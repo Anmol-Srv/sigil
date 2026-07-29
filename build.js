@@ -28,9 +28,7 @@ const EXTERNAL = [
   '@modelcontextprotocol/sdk/server/mcp.js',
   '@modelcontextprotocol/sdk/server/stdio.js',
   '@modelcontextprotocol/sdk/server/streamableHttp.js',
-  'dotenv',                    // light, better to externalize for config flexibility
   'ws',                        // WebSocket — bufferutil/utf-8-validate optional natives
-  '@number0/iroh',             // Iroh NAPI binding — prebuilt native, must be external
 ];
 
 const ENTRIES = [
@@ -38,12 +36,6 @@ const ENTRIES = [
   { in: 'src/server.js', out: 'server.js', shebang: true },
   { in: 'src/daemon/index.js', out: 'daemon.js', shebang: true },
   { in: 'src/hooks/user-prompt-submit.js', out: 'hooks/user-prompt-submit.js', shebang: true },
-  { in: 'src/hooks/post-tool-use.js', out: 'hooks/post-tool-use.js', shebang: true },
-  { in: 'src/hooks/stop.js', out: 'hooks/stop.js', shebang: true },
-  { in: 'src/hooks/session-end.js', out: 'hooks/session-end.js', shebang: true },
-  // Managed-session worker MCP server — spawned by a warm worker via
-  // --mcp-config, so it must exist as a standalone runnable entry in dist/.
-  { in: 'src/mcp/worker-server.js', out: 'mcp/worker-server.js', shebang: true },
 ];
 
 async function run() {
