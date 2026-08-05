@@ -13,9 +13,9 @@ const ollamaHost = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
 __setTestConfig({
   database: { mode: 'embedded', url: null },
   embedding: { provider: 'ollama', model: 'mxbai-embed-large', host: ollamaHost },
-  // LLM paths (AUDM-decide, classify, router, synthesis) are stubbed/bypassed
-  // per-suite; set a provider so config reads never look unconfigured.
-  llm: { provider: 'ollama', host: ollamaHost },
+  // Generation is intentionally absent: this gate covers the retained memory
+  // core, which depends on embeddings but never starts an LLM session.
+  llm: { provider: '' },
 });
 
 // Embedded DB path redirect stays an env var — it's an allowlisted launch/test

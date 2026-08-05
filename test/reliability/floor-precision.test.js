@@ -33,7 +33,7 @@ suite('floor precision (real embeddings)', () => {
   it('off-topic query with the floor ON injects NOTHING (empty beats wrong)', async () => {
     // Completely unrelated to payments — the "gstack garry tan skills" case.
     const r = await ctx.doSearch('garry tan startup founder advice and skills', {
-      podScope: null, applyFloor: true, limit: 10,
+      applyFloor: true, limit: 10,
     });
     expect(r.facts).toHaveLength(0);
     expect(r._trace.floor.applied).toBe(true);
@@ -42,7 +42,7 @@ suite('floor precision (real embeddings)', () => {
 
   it('off-topic query with the floor OFF (explicit search) still returns matches', async () => {
     const r = await ctx.doSearch('garry tan startup founder advice and skills', {
-      podScope: null, applyFloor: false, limit: 10,
+      applyFloor: false, limit: 10,
     });
     // Without the floor, low-similarity facts come back — this is the explicit
     // human-search behaviour, and the contrast proves the floor is what's doing
@@ -52,7 +52,7 @@ suite('floor precision (real embeddings)', () => {
 
   it('on-topic query surfaces facts even with the floor ON', async () => {
     const r = await ctx.doSearch('how do I make payment webhooks safe against retries', {
-      podScope: null, applyFloor: true, limit: 10,
+      applyFloor: true, limit: 10,
     });
     expect(r.facts.length).toBeGreaterThan(0);
     // every surfaced fact cleared the floor

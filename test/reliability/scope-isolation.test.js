@@ -1,12 +1,11 @@
-// Scope isolation — THE bug class this whole effort started from: a query in
-// one project leaking facts from another (the "Maya Iyer payment webhooks in a
-// gstack session" injection). Run against real embeddings so the scope wall is
+// Project-namespace isolation — a query in one project must not inject facts
+// from another project. Run against real embeddings so the namespace wall is
 // tested as a hard boundary, not a mock.
 //
-// Strongest assertion: scope to project A, ask about project B's content — B's
-// facts must NOT appear even though they're the relevant match. That proves
-// pod scope is a wall, not a ranking nudge. Plus the empty-scope fix: [] means
-// "nothing", not "global".
+// Strongest assertion: search project A for project B's content — B's facts
+// must NOT appear even though they're the relevant match. That proves the
+// namespace is a wall, not a ranking nudge. Plus the empty-namespace fix: []
+// means "nothing", not "global".
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
@@ -17,18 +16,15 @@ const ready = await ollamaReady();
 if (!ready) console.warn(`\n[reliability] ${OLLAMA_SKIP_MSG}\n`);
 const suite = ready ? describe : describe.skip;
 
-suite('scope isolation (real embeddings)', () => {
+suite('namespace isolation (real embeddings)', () => {
   let ctx;
-  let podA;
-  let podB;
+  const projectA = 'project:auth-service';
+  const projectB = 'project:recipe-app';
   const aIds = [];
   const bIds = [];
 
   beforeAll(async () => {
     ctx = await createReliabilityContext();
-
-    podA = await ctx.seedPod({ type: 'project', externalId: '/proj/auth-service' });
-    podB = await ctx.seedPod({ type: 'project', externalId: '/proj/recipe-app' });
 
     // Project A: authentication domain.
     for (const content of [
@@ -36,7 +32,7 @@ suite('scope isolation (real embeddings)', () => {
       'User sessions expire after 30 minutes of inactivity.',
       'Password reset links are single-use and valid for one hour.',
     ]) {
-      const r = await ctx.seedFact({ content, podUid: podA.uid });
+      const r = await ctx.seedFact({ content, namespace: projectA });
       aIds.push(r.factId);
     }
 
@@ -46,42 +42,42 @@ suite('scope isolation (real embeddings)', () => {
       'Sear the steak at high heat to build a crust before resting it.',
       'Caramelizing onions takes about 40 minutes on low heat.',
     ]) {
-      const r = await ctx.seedFact({ content, podUid: podB.uid });
+      const r = await ctx.seedFact({ content, namespace: projectB });
       bIds.push(r.factId);
     }
   });
 
   afterAll(async () => { if (ctx) await ctx.destroy(); });
 
-  it('scoped to A, a B-topic query never returns B facts (scope is a wall)', async () => {
-    // Ask about B's content while scoped to A. Without floor so we see whatever
+  it('in namespace A, a B-topic query never returns B facts (namespace is a wall)', async () => {
+    // Ask about B's content in namespace A. Without floor so we see whatever
     // is in scope — the point is that NO B fact leaks in.
     const r = await ctx.doSearch('how do I sear a steak for a good crust', {
-      podScope: [podA.uid], applyFloor: false, limit: 10,
+      namespaces: [projectA], applyFloor: false, limit: 10,
     });
     const returned = r.facts.map((f) => f.id);
     for (const bId of bIds) expect(returned).not.toContain(bId);
   });
 
-  it('the same B-topic query DOES find B facts when scoped to B (scope works both ways)', async () => {
+  it('the same B-topic query finds B facts in namespace B', async () => {
     const r = await ctx.doSearch('how do I sear a steak for a good crust', {
-      podScope: [podB.uid], applyFloor: false, limit: 10,
+      namespaces: [projectB], applyFloor: false, limit: 10,
     });
     const returned = r.facts.map((f) => f.id);
     expect(returned.some((id) => bIds.includes(id))).toBe(true);
     for (const aId of aIds) expect(returned).not.toContain(aId);
   });
 
-  it('empty scope [] returns NOTHING (not the whole brain — the SQL leak fix)', async () => {
+  it('empty namespaces [] returns nothing (not the whole brain)', async () => {
     const r = await ctx.doSearch('authentication login session', {
-      podScope: [], applyFloor: false, limit: 10,
+      namespaces: [], applyFloor: false, limit: 10,
     });
     expect(r.facts).toHaveLength(0);
   });
 
-  it('an on-topic A query scoped to A returns A facts', async () => {
+  it('an on-topic A query in namespace A returns A facts', async () => {
     const r = await ctx.doSearch('how does login and token signing work', {
-      podScope: [podA.uid], applyFloor: false, limit: 10,
+      namespaces: [projectA], applyFloor: false, limit: 10,
     });
     const returned = r.facts.map((f) => f.id);
     expect(returned.some((id) => aIds.includes(id))).toBe(true);

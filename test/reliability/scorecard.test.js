@@ -19,7 +19,7 @@ import { ollamaReady, OLLAMA_SKIP_MSG } from './harness/ollama.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
-// Gate thresholds. Leak-rate is the hard one (cross-scope / off-topic
+// Gate thresholds. Leak-rate is the hard one (cross-project / off-topic
 // injection must never happen). Recall raised to 0.8 now that real numbers
 // show 1.0; precision stays 0.75 (the no-floor leak-check case legitimately
 // surfaces in-scope-but-not-target facts, which is expected, not a defect).
@@ -33,43 +33,40 @@ suite('reliability scorecard', () => {
   let ctx;
   const auth = {}; // named fact ids
   const cook = {};
-  let podAuth;
-  let podCook;
+  const authProject = 'project:auth-service';
+  const cookProject = 'project:cooking-service';
 
   beforeAll(async () => {
     ctx = await createReliabilityContext();
-    podAuth = await ctx.seedPod({ type: 'project', externalId: '/proj/auth' });
-    podCook = await ctx.seedPod({ type: 'project', externalId: '/proj/cook' });
+    auth.jwt = (await ctx.seedFact({ content: 'Login issues JWT access tokens signed with RS256.', namespace: authProject })).factId;
+    auth.session = (await ctx.seedFact({ content: 'User sessions expire after 30 minutes of inactivity.', namespace: authProject })).factId;
+    auth.reset = (await ctx.seedFact({ content: 'Password reset links are single-use and expire in one hour.', namespace: authProject })).factId;
 
-    auth.jwt = (await ctx.seedFact({ content: 'Login issues JWT access tokens signed with RS256.', podUid: podAuth.uid })).factId;
-    auth.session = (await ctx.seedFact({ content: 'User sessions expire after 30 minutes of inactivity.', podUid: podAuth.uid })).factId;
-    auth.reset = (await ctx.seedFact({ content: 'Password reset links are single-use and expire in one hour.', podUid: podAuth.uid })).factId;
-
-    cook.sourdough = (await ctx.seedFact({ content: 'Sourdough needs a 24 hour cold ferment in the fridge.', podUid: podCook.uid })).factId;
-    cook.steak = (await ctx.seedFact({ content: 'Sear steak on high heat to build a crust before resting.', podUid: podCook.uid })).factId;
-    cook.onions = (await ctx.seedFact({ content: 'Caramelizing onions takes about 40 minutes on low heat.', podUid: podCook.uid })).factId;
+    cook.sourdough = (await ctx.seedFact({ content: 'Sourdough needs a 24 hour cold ferment in the fridge.', namespace: cookProject })).factId;
+    cook.steak = (await ctx.seedFact({ content: 'Sear steak on high heat to build a crust before resting.', namespace: cookProject })).factId;
+    cook.onions = (await ctx.seedFact({ content: 'Caramelizing onions takes about 40 minutes on low heat.', namespace: cookProject })).factId;
   });
 
   afterAll(async () => { if (ctx) await ctx.destroy(); });
 
   it('meets the reliability gate (precision / recall / leak-rate)', async () => {
-    // Labeled cases: query, scope, which fact set is relevant, which is
+    // Labeled cases: query, namespace, which fact set is relevant, which is
     // forbidden, and whether the injection floor is on (auto-injection) or off.
     const allAuth = Object.values(auth);
     const allCook = Object.values(cook);
     // Per-query relevant sets (the fact the query is actually about), not the
     // whole topic — that's how retrieval precision/recall is properly scored.
     const cases = [
-      { name: 'jwt (inject)', q: 'how does login token signing work', scope: [podAuth.uid], floor: true, relevant: [auth.jwt], forbidden: allCook },
-      { name: 'session (inject)', q: 'when do user sessions time out', scope: [podAuth.uid], floor: true, relevant: [auth.session], forbidden: allCook },
-      { name: 'sourdough (inject)', q: 'how long to cold ferment sourdough', scope: [podCook.uid], floor: true, relevant: [cook.sourdough], forbidden: allAuth },
+      { name: 'jwt (inject)', q: 'how does login token signing work', namespaces: [authProject], floor: true, relevant: [auth.jwt], forbidden: allCook },
+      { name: 'session (inject)', q: 'when do user sessions time out', namespaces: [authProject], floor: true, relevant: [auth.session], forbidden: allCook },
+      { name: 'sourdough (inject)', q: 'how long to cold ferment sourdough', namespaces: [cookProject], floor: true, relevant: [cook.sourdough], forbidden: allAuth },
       // Paraphrase robustness: the query shares no keywords with the fact
       // ("time out" vs "expire", "stay logged in") — semantic recall must hold.
-      { name: 'paraphrase (inject)', q: 'how long can I stay logged in before being kicked out', scope: [podAuth.uid], floor: true, relevant: [auth.session], forbidden: allCook },
-      // Cross-scope leak guard: B-topic query scoped to A, no floor — A facts
+      { name: 'paraphrase (inject)', q: 'how long can I stay logged in before being kicked out', namespaces: [authProject], floor: true, relevant: [auth.session], forbidden: allCook },
+      // Cross-project leak guard: B-topic query in A, no floor — A facts
       // may show (in-scope) but no B fact may leak.
-      { name: 'cross-scope-leak (search)', q: 'how to sear a steak crust', scope: [podAuth.uid], floor: false, relevant: [], forbidden: allCook },
-      { name: 'off-topic (inject)', q: 'best programming language for game dev', scope: [podAuth.uid], floor: true, relevant: [], forbidden: [...allAuth, ...allCook] },
+      { name: 'cross-project-leak (search)', q: 'how to sear a steak crust', namespaces: [authProject], floor: false, relevant: [], forbidden: allCook },
+      { name: 'off-topic (inject)', q: 'best programming language for game dev', namespaces: [authProject], floor: true, relevant: [], forbidden: [...allAuth, ...allCook] },
     ];
 
     const perCase = [];
@@ -79,7 +76,7 @@ suite('reliability scorecard', () => {
     let leaked = 0;
 
     for (const c of cases) {
-      const res = await ctx.doSearch(c.q, { podScope: c.scope, applyFloor: c.floor, limit: 10 });
+      const res = await ctx.doSearch(c.q, { namespaces: c.namespaces, applyFloor: c.floor, limit: 10 });
       const got = res.facts.map((f) => f.id);
       const relevantGot = got.filter((id) => c.relevant.includes(id));
       const forbiddenGot = got.filter((id) => c.forbidden.includes(id));

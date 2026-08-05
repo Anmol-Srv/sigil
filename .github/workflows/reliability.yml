@@ -4,8 +4,9 @@ name: reliability
 #   - fast: the mocked unit suite (quick signal on every push)
 #   - reliability: the REAL retrieval stack (PGlite + real schema + real Ollama
 #     embeddings) running the behavioral suites + the precision/recall/leak-rate
-#     scorecard. This is the gate that catches the mock-vs-reality bugs (scope
-#     leaks, off-topic injection, dedup) the unit suite structurally can't.
+#     scorecard. This is the gate that catches the mock-vs-reality bugs
+#     (namespace leaks, off-topic injection, deterministic dedup) the unit
+#     suite structurally can't.
 
 on:
   push:
