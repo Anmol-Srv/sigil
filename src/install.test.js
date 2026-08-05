@@ -7,6 +7,11 @@ const installer = readFileSync(resolve(process.cwd(), 'install.sh'), 'utf8');
 describe('official installer contract', () => {
   it('uses a lockfile install and hands off to the shared first-run flow', () => {
     expect(installer).toContain('npm ci --omit=dev');
+    expect(installer).toContain('node "$CLI" connect --shims-only');
+    expect(installer).toContain('node "$CLI" daemon restart');
+    expect(installer.indexOf('connect --shims-only')).toBeLessThan(
+      installer.indexOf('exec node "$CLI" < /dev/tty'),
+    );
     expect(installer).toContain('exec node "$CLI" < /dev/tty');
     expect(installer).toContain('node $CLI init');
   });

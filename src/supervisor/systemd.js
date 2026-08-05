@@ -42,10 +42,15 @@ function uctl(args) {
   return sh('systemctl', ['--user', ...args]);
 }
 
-export function install() {
+export function writeServiceUnit() {
   const path = unitPath();
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, unitFile(), 'utf8');
+  return path;
+}
+
+export function install() {
+  const path = writeServiceUnit();
   uctl(['daemon-reload']);
   const r = uctl(['enable', '--now', UNIT]);
   if (r.code !== 0) {
@@ -76,6 +81,20 @@ export function status() {
 export function restart() {
   const r = uctl(['restart', UNIT]);
   return { ok: r.code === 0, manager: MANAGER };
+}
+
+// Unlike install(), this never enables the service. It updates the command
+// path of a service the user already chose to run automatically, reloads
+// systemd's unit cache, then restarts exactly that unit.
+export function refresh({
+  writeUnit = writeServiceUnit,
+  reload = () => uctl(['daemon-reload']),
+  restartService = restart,
+} = {}) {
+  writeUnit();
+  const reloaded = reload();
+  if (reloaded.code !== 0) return { ok: false, manager: MANAGER };
+  return restartService();
 }
 
 export function start() {

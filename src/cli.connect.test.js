@@ -16,11 +16,11 @@ const CLI = join(ROOT, 'dist', 'cli.js');
 
 // Run `sigil connect <args>` against a fresh sandbox HOME. Returns
 // { status, stdout, stderr, home }.
-function connect(args, { seedClaude = true } = {}) {
+function connect(args, { seedClaude = true, path = process.env.PATH } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'sigil-connect-test-'));
   if (seedClaude) mkdirSync(join(home, '.claude'), { recursive: true });
   const res = spawnSync(process.execPath, [CLI, 'connect', ...args], {
-    env: { ...process.env, HOME: home },
+    env: { ...process.env, HOME: home, PATH: path },
     stdio: ['ignore', 'pipe', 'pipe'], // stdin ignored → non-TTY branch
     encoding: 'utf8',
     timeout: 30000,
@@ -57,6 +57,14 @@ describe('sigil connect', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
+  it('--shims-only re-pins launchers without touching an agent configuration', () => {
+    const { status, home } = connect(['--shims-only']);
+    expect(status).toBe(0);
+    expect(existsSync(join(home, '.sigil', 'bin', 'sigil'))).toBe(true);
+    expect(existsSync(join(home, '.claude', 'settings.json'))).toBe(false);
+    rmSync(home, { recursive: true, force: true });
+  });
+
   it('a real run re-pins shims and writes shim-based hook config', () => {
     const { status, home } = connect(['--clients', 'claude-code']);
     expect(status).toBe(0);
@@ -80,7 +88,7 @@ describe('sigil connect', () => {
 
   it('with no clients detected and none specified, re-pins shims and exits cleanly', () => {
     // No ~/.claude seeded → nothing detected; non-TTY → no picker.
-    const { status, stdout, home } = connect(['--all'], { seedClaude: false });
+    const { status, stdout, home } = connect(['--all'], { seedClaude: false, path: '/not-a-real-bin' });
     expect(status).toBe(0);
     expect(stdout).toMatch(/Nothing to connect|No AI clients detected/);
     rmSync(home, { recursive: true, force: true });

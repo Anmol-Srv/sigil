@@ -366,7 +366,7 @@ async function runConnect(args) {
     console.log(`sigil connect — (Re)register Sigil with your AI clients
 
 Usage:
-  sigil connect [--clients <a,b,...>] [--all] [--dry-run]
+  sigil connect [--clients <a,b,...>] [--all] [--shims-only] [--dry-run]
 
 Re-pins the stable launcher shims (~/.sigil/bin/) to the current install and
 re-syncs each client's generated config (Claude Code hooks + CLAUDE.md, Cursor,
@@ -378,6 +378,8 @@ Options:
   --clients <a,b,...>   Comma-separated client ids. Accepts: claude-code (claude),
                         cursor, codex-cli (codex), kiro, hermes.
   --all                 (Re)connect every detected client without prompting.
+  --shims-only          Re-pin only Sigil's stable launchers. Does not inspect
+                        or modify any agent configuration.
   --dry-run             Show what would change; write nothing.
 
 Non-interactive: with --clients/--all, or when stdin is not a TTY, the picker is
@@ -387,6 +389,7 @@ skipped (agent/CI-friendly).`);
 
   const dryRun = args.includes('--dry-run');
   const all = args.includes('--all');
+  const shimsOnly = args.includes('--shims-only');
 
   // Parse --clients <list> (supports both `--clients a,b` and `--clients=a,b`).
   const ALIASES = {
@@ -422,6 +425,17 @@ skipped (agent/CI-friendly).`);
   // 1. Re-pin the stable launcher shims (always — even with no clients picked).
   const { writeLauncherShim } = await import('./lib/clients/shim.js');
   const shimRes = await writeLauncherShim({ dryRun });
+
+  // Reinstalling Sigil must be able to move the machine-native entry point to
+  // the new git checkout without rewriting a user's Codex TOML, hook-trust, or
+  // any agent configuration. The installer uses this narrow path before it
+  // restarts the daemon; it is also the safe manual recovery for path drift.
+  if (shimsOnly) {
+    const lines = shimRes.actions.map((a) => `  ${pad(a.action, 8)} [shim] ${a.path}${a.detail ? `  (${a.detail})` : ''}`);
+    note(lines.join('\n') || '(no changes)', dryRun ? 'Plan' : 'Launchers re-pinned');
+    outro(dryRun ? 'Dry run complete. Re-run without --dry-run to apply.' : 'Done. Agent configuration was not changed.');
+    process.exit(0);
+  }
 
   const { listClients } = await import('./lib/clients/index.js');
   const clients = await listClients();

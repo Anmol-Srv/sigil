@@ -97,6 +97,13 @@ export async function restartService() {
   return (await backend()).restart();
 }
 
+// Rewrite an already-installed service's runtime path, then restart it. This
+// deliberately does not call install(): a normal update must not enable
+// automatic start for someone who opted out of it.
+export async function refreshService() {
+  return (await backend()).refresh();
+}
+
 export async function serviceStatus() {
   let supervisor;
   try {

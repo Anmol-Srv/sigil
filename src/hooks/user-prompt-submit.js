@@ -24,6 +24,7 @@ import { maskSecrets } from './secret-mask.js';
 import { recordHookError, failClosedOnBadConfig } from './error-log.js';
 import { breakerOpen, tripBreaker, resetBreaker } from './daemon-breaker.js';
 import { readStdin } from './io.js';
+import { promptText } from './prompt-input.js';
 
 if (!process.env.SIGIL_AGENT) process.env.SIGIL_AGENT = 'claude-code';
 
@@ -39,6 +40,10 @@ const CALL_TIMEOUT_MS = 8_000;
 const OVERALL_DEADLINE_MS = 9_000;
 
 const TIMEOUT = Symbol('timeout');
+// Only emitted by `sigil doctor --deep`'s synthetic hook invocation. It proves
+// that the hook reached the daemon and completed a search without putting a
+// real prompt or recalled fact in any observability ledger.
+export const HOOK_VERIFY_MARKER = 'sigil-hook-verify: daemon search completed';
 
 function withDeadline(ms, promise) {
   let timer;
@@ -75,7 +80,7 @@ async function main() {
   if (!raw) return respond();
 
   const input = JSON.parse(raw);
-  const query = input.prompt || '';
+  const query = promptText(input);
 
   // Skip short/trivial prompts.
   if (query.length < MIN_QUERY_LENGTH) return respond();
@@ -120,6 +125,11 @@ async function main() {
     process.stderr.write('[sigil:user-prompt-submit] search exceeded budget — skipping injection\n');
     return respond();
   }
+
+  // An empty hook response is intentionally fail-safe in a real agent turn,
+  // but it is not enough evidence for a diagnostic. Make the synthetic deep
+  // check unambiguous: only a completed daemon search gets this marker.
+  if (process.env.SIGIL_HOOK_VERIFY === '1') return respond(HOOK_VERIFY_MARKER);
 
   const facts = data?.facts || [];
   // An empty result is precision-correct, not an error.

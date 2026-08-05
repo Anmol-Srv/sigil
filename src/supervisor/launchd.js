@@ -63,10 +63,18 @@ function plistXml() {
 `;
 }
 
-export function install() {
+// Keep writing the unit separate from loading it. A refresh must replace the
+// command path before it restarts the job; `kickstart` alone keeps launchd's
+// already-loaded (and potentially stale) ProgramArguments.
+export function writeServiceUnit() {
   const path = plistPath();
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, plistXml(), 'utf8');
+  return path;
+}
+
+export function install() {
+  const path = writeServiceUnit();
 
   // Modern bootstrap; if a stale label is loaded, bootout then retry; finally
   // fall back to the legacy load -w for older macOS.
@@ -150,6 +158,18 @@ export async function restart({ release = releaseDaemonForServiceReload } = {}) 
   // already been released above, so this cannot create a competing daemon.
   const fallback = sh('launchctl', ['kickstart', '-k', serviceTarget()]);
   return { ok: fallback.code === 0, manager: MANAGER };
+}
+
+// Preserve the user's automatic-start choice while moving an existing service
+// to this Sigil checkout. The unit is rewritten first, then restart() fully
+// unloads the old job and waits for its PGlite owner before bootstrapping the
+// replacement. This avoids a stale daemon or a single-writer crash loop.
+export async function refresh({
+  writeUnit = writeServiceUnit,
+  restartService = restart,
+} = {}) {
+  writeUnit();
+  return restartService();
 }
 
 export function start() {

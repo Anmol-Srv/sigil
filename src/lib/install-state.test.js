@@ -39,6 +39,7 @@ describe('diffInstallState', () => {
     });
     expect(r.ok).toBe(false);
     expect(r.issues.map((i) => i.code)).toContain('shim-mismatch');
+    expect(r.issues.find((i) => i.code === 'shim-mismatch').fix).toContain('connect --shims-only');
   });
 
   it('flags a daemon running a stale version', () => {
@@ -57,6 +58,7 @@ describe('diffInstallState', () => {
       heartbeat: { version: '0.20.0', root: '/usr/local/lib/node_modules/@anmol-srv/sigil', pid: 7 },
     });
     expect(r.issues.map((i) => i.code)).toContain('daemon-foreign-root');
+    expect(r.issues.find((i) => i.code === 'daemon-foreign-root').fix).toContain('daemon restart');
   });
 
   it('does not flag version/root when no daemon is running', () => {

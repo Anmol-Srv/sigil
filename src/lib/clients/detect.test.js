@@ -1,24 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { detectInstalled } from './detect.js';
 
-describe('client auto-detection', () => {
-  it('does not treat a stale or Sigil-created config directory as an installed client', () => {
-    const detected = detectInstalled(
-      { dirs: ['/Users/example/.cursor'], apps: ['Cursor'], bins: ['cursor'] },
-      { checkApp: () => false, checkBin: () => false },
-    );
+import { binInstalled } from './detect.js';
 
-    expect(detected).toBe(false);
-  });
-
-  it('recognizes a real app bundle or executable', () => {
-    expect(detectInstalled(
-      { apps: ['Cursor'], bins: ['cursor'] },
-      { checkApp: () => true, checkBin: () => false },
-    )).toBe(true);
-    expect(detectInstalled(
-      { apps: ['Cursor'], bins: ['cursor'] },
-      { checkApp: () => false, checkBin: () => true },
-    )).toBe(true);
+describe('binInstalled', () => {
+  it('recognises a client executable available through an absolute PATH directory', () => {
+    // Node itself is guaranteed to exist in its active executable directory;
+    // this covers version-managed install paths without depending on nvm/fnm.
+    const previous = process.env.PATH;
+    process.env.PATH = `${process.execPath.slice(0, process.execPath.lastIndexOf('/'))}:/not-a-real-bin`;
+    try {
+      expect(binInstalled([process.execPath.slice(process.execPath.lastIndexOf('/') + 1)])).toBe(true);
+    } finally {
+      process.env.PATH = previous;
+    }
   });
 });

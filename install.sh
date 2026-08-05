@@ -111,6 +111,9 @@ step "Installing runtime dependencies…"
 ( cd "$APP_DIR" && npm ci --omit=dev --no-audit --no-fund --loglevel=error ) \
   || die "\`npm ci\` failed in $APP_DIR. Re-run the installer, or cd there and inspect."
 
+CLI="$APP_DIR/dist/cli.js"
+[ -f "$CLI" ] || die "Install looks incomplete — $CLI is missing. Re-run the installer."
+
 # ── 3b. evict any leftover GLOBAL npm install ─────────────────────────────────
 # Before git-native, Sigil shipped via npm. A stale `npm i -g @anmol-srv/sigil`
 # carries its own daemon + PGlite version; two installs fighting over the
@@ -123,6 +126,17 @@ if [ -n "$NPM_GLOBAL_ROOT" ] && [ -d "$NPM_GLOBAL_ROOT/@anmol-srv/sigil" ]; then
   npm rm -g @anmol-srv/sigil >/dev/null 2>&1 \
     || warn "Could not remove the global npm install — remove it with: npm rm -g @anmol-srv/sigil"
 fi
+
+# The application checkout, stable shims, and daemon must move together. A
+# prior development checkout can otherwise keep owning the shims and PGlite
+# daemon even after this installer successfully cloned the canonical app. This
+# narrow command modifies only Sigil's own launchers, never agent config; the
+# restart refreshes an already-enabled OS service without enabling one anew.
+step "Activating this Sigil install…"
+node "$CLI" connect --shims-only \
+  || die "Could not re-pin Sigil's launchers to $APP_DIR. Re-run the installer after resolving the error above."
+node "$CLI" daemon restart \
+  || die "Could not restart Sigil from $APP_DIR. Run: node $CLI daemon restart"
 
 # ── 4. put ~/.sigil/bin on PATH ───────────────────────────────────────────────
 # `sigil init` writes the launcher shims into $BIN_DIR; that dir is the single
@@ -159,9 +173,6 @@ PATH="$BIN_DIR:$PATH"; export PATH
 # the same step engine that does the rich DB + connector detection AND writes the
 # launcher shims into ~/.sigil/bin. We invoke it by ABSOLUTE PATH (the shims don't
 # exist yet on a first install), so this works before PATH is wired.
-CLI="$APP_DIR/dist/cli.js"
-[ -f "$CLI" ] || die "Install looks incomplete — $CLI is missing. Re-run the installer."
-
 say ""
 say "${B}Starting Sigil${R} — it will detect your database and AI clients next."
 say ""

@@ -19,12 +19,16 @@ function taskRun() {
   return `\\"${nodeExecPath()}\\" \\"${resolveDaemonScript()}\\"`;
 }
 
-export function install() {
+export function registerTask() {
   const r = sh('schtasks', [
     '/Create', '/SC', 'ONLOGON', '/TN', TASK,
     '/TR', taskRun(), '/RL', 'LIMITED', '/F',
   ]);
   if (r.code !== 0) throw new Error(`schtasks /Create failed: ${r.err || 'unknown'}`);
+}
+
+export function install() {
+  registerTask();
   sh('schtasks', ['/Run', '/TN', TASK]);
   return { installed: true, manager: MANAGER, unitPath: `Task Scheduler\\${TASK}` };
 }
@@ -45,6 +49,18 @@ export function restart() {
   sh('schtasks', ['/End', '/TN', TASK]);
   const r = sh('schtasks', ['/Run', '/TN', TASK]);
   return { ok: r.code === 0, manager: MANAGER };
+}
+
+// Re-register with the current executable first, then restart. Re-registering
+// an existing task with /F preserves its logon schedule; this is the Windows
+// equivalent of a launchd/systemd service refresh.
+export function refresh({ register = registerTask, restartService = restart } = {}) {
+  try {
+    register();
+  } catch {
+    return { ok: false, manager: MANAGER };
+  }
+  return restartService();
 }
 
 export function start() {

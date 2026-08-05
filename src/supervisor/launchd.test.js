@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./sh.js', () => ({ sh: vi.fn() }));
 
 import { sh } from './sh.js';
-import { LABEL, releaseDaemonForServiceReload, restart } from './launchd.js';
+import { LABEL, refresh, releaseDaemonForServiceReload, restart } from './launchd.js';
 
 const target = `gui/${process.getuid()}/${LABEL}`;
 
@@ -61,5 +61,15 @@ describe('launchd restart', () => {
     expect(sh).toHaveBeenNthCalledWith(1, 'launchctl', ['bootout', target]);
     expect(sh).toHaveBeenNthCalledWith(2, 'launchctl', ['bootstrap', `gui/${process.getuid()}`, expect.any(String)]);
     expect(sh).toHaveBeenNthCalledWith(3, 'launchctl', ['kickstart', '-k', target]);
+  });
+
+  it('writes the current service unit before reloading its managed daemon', async () => {
+    const calls = [];
+    const result = await refresh({
+      writeUnit: () => calls.push('write'),
+      restartService: async () => { calls.push('restart'); return { ok: true, manager: 'launchd' }; },
+    });
+    expect(calls).toEqual(['write', 'restart']);
+    expect(result).toEqual({ ok: true, manager: 'launchd' });
   });
 });

@@ -119,17 +119,18 @@ async function cmdStart(args) {
  * Restart semantics must respect the process owner. When automatic start is
  * enabled, launchd/systemd owns the daemon; sending SIGTERM from this CLI and
  * immediately calling `start` only observes the still-managed process and
- * leaves the old executable running. Delegate that case to the supervisor.
+ * leaves the old executable running. Refresh the existing service unit in
+ * that case so it follows the current Sigil checkout before it restarts.
  */
 export async function restartDaemonLifecycle({
   isServiceInstalled,
-  restartService,
+  refreshService,
   stop,
   start,
   sleep = delay,
 } = {}) {
   if (await isServiceInstalled()) {
-    const result = await restartService();
+    const result = await refreshService();
     if (!result?.ok) {
       throw new Error(`could not restart the ${result?.manager || 'managed'} Sigil service`);
     }
@@ -146,7 +147,7 @@ async function cmdRestart(args) {
   const supervisor = await import('../supervisor/index.js');
   const result = await restartDaemonLifecycle({
     isServiceInstalled: supervisor.isServiceInstalled,
-    restartService: supervisor.restartService,
+    refreshService: supervisor.refreshService,
     stop: () => cmdStop(args),
     start: () => cmdStart(args),
   });

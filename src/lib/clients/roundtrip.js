@@ -18,6 +18,8 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 
+const HOOK_VERIFY_MARKER = 'sigil-hook-verify: daemon search completed';
+
 /** Spawn `node <serverPath> --mcp`, handshake, call `status`. */
 export async function verifyMcpRoundTrip(serverPath, { timeoutMs = 12000 } = {}) {
   if (!serverPath || !existsSync(serverPath)) {
@@ -62,7 +64,13 @@ export async function verifyMcpRoundTrip(serverPath, { timeoutMs = 12000 } = {})
   });
 }
 
-/** Run the registered prompt hook with a synthetic payload; expect clean JSON (or empty). */
+/**
+ * Run the registered prompt hook with a synthetic payload and require its
+ * verification marker. A parseable empty response is correct during a normal
+ * agent turn (no match, timeout, or fail-safe fallback), but cannot prove that
+ * automatic recall is functioning. The hook emits the marker only after the
+ * daemon completed its bounded search.
+ */
 export async function verifyPromptHookRoundTrip(hookCmd, { timeoutMs = 12000 } = {}) {
   if (!hookCmd) return { ok: false, reason: 'no hook command' };
   return new Promise((resolve) => {
@@ -90,11 +98,15 @@ export async function verifyPromptHookRoundTrip(hookCmd, { timeoutMs = 12000 } =
     child.stdout.on('data', (d) => { out += d.toString(); });
     child.on('close', () => {
       const trimmed = out.trim();
-      // A hook that legitimately injects nothing (no matching memory) may emit
-      // empty output — that's a healthy round-trip, not a failure.
-      if (!trimmed) return finish({ ok: true, note: 'ran; no injection (no matching memory)' });
-      try { JSON.parse(trimmed); finish({ ok: true }); }
-      catch { finish({ ok: false, reason: `hook emitted non-JSON: ${trimmed.slice(0, 80)}` }); }
+      if (!trimmed) return finish({ ok: false, reason: 'hook returned no verified daemon response' });
+      try {
+        const parsed = JSON.parse(trimmed);
+        const context = parsed?.hookSpecificOutput?.additionalContext;
+        if (context === HOOK_VERIFY_MARKER) return finish({ ok: true });
+        return finish({ ok: false, reason: 'hook did not confirm a completed daemon search' });
+      } catch {
+        return finish({ ok: false, reason: `hook emitted non-JSON: ${trimmed.slice(0, 80)}` });
+      }
     });
 
     const payload = JSON.stringify({ prompt: 'sigil round-trip verification probe', session_id: 'verify', cwd: process.cwd() });

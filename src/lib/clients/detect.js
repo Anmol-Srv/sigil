@@ -9,7 +9,7 @@
  */
 import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, isAbsolute, join } from 'node:path';
 
 const HOME = homedir();
 
@@ -22,7 +22,7 @@ export function appInstalled(appNames = []) {
 
 /** Is a CLI binary present in a common install dir? (PATH-independent.) */
 export function binInstalled(binNames = []) {
-  const dirs = [
+  const knownDirs = [
     '/opt/homebrew/bin',
     '/usr/local/bin',
     '/usr/bin',
@@ -30,6 +30,15 @@ export function binInstalled(binNames = []) {
     join(HOME, '.bun', 'bin'),
     join(HOME, '.cargo', 'bin'),
   ];
+  // Version managers deliberately install binaries outside the conventional
+  // locations above (for example ~/.nvm/.../bin/claude). The active terminal
+  // can execute them, so doctor and client discovery must recognise them too.
+  // Only absolute PATH entries are considered: a project-relative directory
+  // must not make a repository file look like a machine-wide installed client.
+  const pathDirs = (process.env.PATH || '')
+    .split(delimiter)
+    .filter((dir) => isAbsolute(dir));
+  const dirs = [...new Set([...knownDirs, ...pathDirs])];
   const exts = platform() === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
   return binNames.some((b) => dirs.some((d) => exts.some((e) => existsSync(join(d, b + e)))));
 }

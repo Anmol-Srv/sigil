@@ -95,7 +95,7 @@ export function diffInstallState({ canonical, shimDist, heartbeat } = {}) {
     issues.push({
       code: 'shim-mismatch',
       message: `launcher shims point at ${shimDist}, not the git install (${canonical.dist})`,
-      fix: 'sigil update --force   (re-pins the shims; or reinstall via the curl installer)',
+      fix: `node ${canonical.dist}/cli.js connect --shims-only   (re-pins only Sigil's launchers)`,
     });
   }
 
@@ -115,7 +115,7 @@ export function diffInstallState({ canonical, shimDist, heartbeat } = {}) {
     issues.push({
       code: 'daemon-foreign-root',
       message: `daemon is running from ${heartbeat.root}, not the git install (${canonical.dir})`,
-      fix: 'sigil daemon restart   (starts it from the git install)',
+      fix: `node ${canonical.dist}/cli.js daemon restart   (reloads the service from the git install)`,
     });
   }
 

@@ -94,6 +94,23 @@ Re-running the official installer is also safe: if its managed Git checkout
 contains local edits, it saves them to a recoverable Git stash before replacing
 the release files.
 
+### Repair an interrupted install
+
+If `sigil doctor` reports that the launchers or daemon are running from a
+different directory than `~/.sigil/app`, do not use the stale `sigil` command
+to update itself. Run the canonical installation directly:
+
+```bash
+node "$HOME/.sigil/app/dist/cli.js" connect --shims-only
+node "$HOME/.sigil/app/dist/cli.js" daemon restart
+sigil doctor --deep
+```
+
+This re-pins only Sigil's stable launchers, reloads the existing automatic-start
+service from the managed install when it is enabled, and leaves agent settings
+and hook trust untouched. Re-run the official installer if the managed checkout
+does not exist.
+
 ## Quick start
 
 ```bash
