@@ -75,10 +75,11 @@ export async function ensureProjectPod({ cwd, namespace = null }) {
   const isGitRoot = rootPath !== cwd ? false : detectGitRoot(cwd) === cwd;
   const gitRoot = isGitRoot ? rootPath : detectGitRoot(cwd);
 
+  const projectName = basename(rootPath) || rootPath;
   const { pod } = await podStore.upsertPod({
     podType: POD_TYPE,
     externalId: rootPath,
-    name: basename(rootPath) || rootPath,
+    name: projectName,
     namespace: ns,
     attrs: {
       root_path: rootPath,
@@ -88,6 +89,16 @@ export async function ensureProjectPod({ cwd, namespace = null }) {
     },
     startedAt: new Date(),
   });
+
+  // Bind the pod to an entity named after the project, so a fact ABOUT this
+  // project reaches it even when written from somewhere else. Identity stays
+  // the git root (externalId); the entity is only a routing anchor. Best-effort
+  // — an unbound pod still works, it just won't collect subject matches.
+  try {
+    const { bindPodToEntity } = await import('../subject-router.js');
+    await bindPodToEntity({ podId: pod.id, name: projectName, namespace: ns });
+  } catch { /* routing is an enhancement, never a reason to fail the pod */ }
+
   return pod;
 }
 
