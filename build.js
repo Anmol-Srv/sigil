@@ -28,7 +28,6 @@ const EXTERNAL = [
   '@modelcontextprotocol/sdk/server/mcp.js',
   '@modelcontextprotocol/sdk/server/stdio.js',
   '@modelcontextprotocol/sdk/server/streamableHttp.js',
-  'dotenv',                    // light, better to externalize for config flexibility
   'ws',                        // WebSocket — bufferutil/utf-8-validate optional natives
   '@number0/iroh',             // Iroh NAPI binding — prebuilt native, must be external
 ];
