@@ -1918,6 +1918,13 @@ Usage:
       .join(', ') || '—';
 
     console.log(`Sigil Knowledge Base${data.namespace ? ` (${data.namespace})` : ''}`);
+    if (data.unavailable) {
+      // Counts are null, not zero — say we couldn't read the store rather than
+      // printing "0 facts", which reads as "your memory is gone".
+      console.log(`  Store unreadable: ${data.db?.error || 'database unavailable'}`);
+      if (data.writeQueue) console.log(`  (${data.writeQueue} write${data.writeQueue === 1 ? '' : 's'} in flight — the embedded engine has one connection; retry shortly)`);
+      return;
+    }
     console.log(`  Documents:  ${data.documents}`);
     console.log(`  Chunks:     ${data.chunks}`);
     console.log(`  Facts:      ${data.facts} active`);

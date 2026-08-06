@@ -80,7 +80,9 @@ export async function buildPreamble({ cwd = process.cwd(), limit = 12, call } = 
     let status = null;
     try {
       status = await callFn('status', {});
-      r.totals = { facts: status.facts ?? 0, documents: status.documents ?? 0 };
+      // null counts mean "couldn't read", not "empty" — keep them null so the
+      // preamble never reports a healthy-looking 0-fact brain during an outage.
+      r.totals = { facts: status.facts ?? null, documents: status.documents ?? null };
       r.checks.db = status.db?.healthy
         ? { ok: true, detail: `${status.facts ?? 0} facts` }
         : { ok: false, detail: status.db?.error || 'unreachable' };
