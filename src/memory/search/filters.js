@@ -41,12 +41,18 @@ function buildFactFilters({ minConfidence = 'medium', pointInTime, categories })
  */
 function buildChunkPodFilter(podIds) {
   if (!Array.isArray(podIds)) return { clause: '', params: [] };
-  if (podIds.length === 0) return { clause: 'AND FALSE', params: [] };
+  // Unpodded documents stay visible, matching the fact-side rule in
+  // hybrid-sql.js: no membership means "unknown subject", not "someone else's".
+  const UNPODDED = `NOT EXISTS (
+    SELECT 1 FROM pod_membership pm
+    WHERE pm.member_type = 'document' AND pm.member_id = document_id
+  )`;
+  if (podIds.length === 0) return { clause: `AND ${UNPODDED}`, params: [] };
   return {
-    clause: `AND document_id = ANY(
+    clause: `AND (document_id = ANY(
       SELECT member_id FROM pod_membership
       WHERE member_type = 'document' AND pod_id = ANY(?::int[])
-    )`,
+    ) OR ${UNPODDED})`,
     params: [podIds],
   };
 }

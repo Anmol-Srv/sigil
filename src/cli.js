@@ -1364,7 +1364,12 @@ Usage:
 
 Options:
   --namespace=<ns>   Target namespace (default: from config / DEFAULT_NAMESPACE)
+  --pod=<name|uid>   Attach to this pod instead of the current project. Use when
+                     the fact is ABOUT something other than where you are.
   --bg               Save in background and return immediately
+
+Facts attach to the current project's pod automatically (from the working
+directory), so they surface when you come back to that project.
 
 Examples:
   sigil remember "I prefer tabs over spaces"
@@ -1382,6 +1387,7 @@ Examples:
   // persistent daemon already resolved its own DEFAULT_NAMESPACE at startup, so injecting
   // DEFAULT_NAMESPACE into this subprocess's env has no effect on the daemon.
   const namespace = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1] || undefined;
+  const podArg = flags.find((f) => f.startsWith('--pod='))?.split('=')[1] || undefined;
 
   // Collect facts: each positional arg is a separate fact
   let facts = textArgs.filter(Boolean);
@@ -1427,7 +1433,11 @@ Examples:
     // A save runs a chain of LLM calls; the 30s read default reported failure
     // on writes the daemon went on to complete, and the user's retry then
     // queued behind the still-running first attempt.
-    const { data } = await client.call('remember', { facts, namespace }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
+    // cwd scopes the save to this project's pod; --pod overrides it when the
+    // fact is about something other than where you're standing.
+    const { data } = await client.call('remember', {
+      facts, namespace, cwd: process.cwd(), pod: podArg || null,
+    }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
     const parts = [];
     if (data.added)        parts.push(`${data.added} new`);
     if (data.updated)      parts.push(`${data.updated} updated`);

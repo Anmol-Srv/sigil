@@ -67,6 +67,15 @@ async function saveFacts(facts, params) {
     const { default: config } = await import('../../config.js');
     const namespace = params.namespace || config.defaults.namespace;
 
+    // Attach to the active pods, exactly like the Stop hook's ingestTurn does.
+    // `remember` never passed podUids, so every explicit save an agent made —
+    // and the instructions tell agents to use `remember` — landed with no
+    // membership at all. Those facts then became invisible to pod-scoped recall
+    // the moment any pod existed. An explicit save is the LAST thing that should
+    // be unreachable. `pod` (or `about`) overrides the resolution entirely, for
+    // when the agent knows the subject better than the cwd does.
+    const podUids = await resolveRememberPods(params, namespace);
+
     let added = 0;
     let updated = 0;
     let alreadyKnown = 0;
@@ -74,7 +83,7 @@ async function saveFacts(facts, params) {
     const inputs = []; // per-input causal trace
 
     for (const text of facts) {
-      const result = await ingestDocument({ content: text, namespace, classify: true });
+      const result = await ingestDocument({ content: text, namespace, classify: true, podUids });
       if (result.skipped || result.route === 'noise') {
         alreadyKnown++;
         inputs.push({ input: String(text).slice(0, 240), route: result.route ?? null, skipped: true, verdicts: result.facts?.verdicts || [] });
@@ -110,4 +119,46 @@ async function saveFacts(facts, params) {
     }).catch(() => {});
 
     return { added, updated, alreadyKnown, namespace };
+}
+
+/**
+ * Pods an explicitly-remembered fact should join.
+ *
+ * Priority: an agent-declared `pod`/`about` wins outright — it knows the subject
+ * better than the working directory does ("remember that srver uses Cloud
+ * Hypervisor" typed while sitting in the sigil repo). Otherwise fall back to
+ * provenance: the active session + project pods for this cwd.
+ */
+async function resolveRememberPods(params, namespace) {
+  const declared = params.pod || params.about;
+  if (declared) {
+    const names = Array.isArray(declared) ? declared : [declared];
+    const { default: cortexDb } = await import('../../db/cortex.js');
+    const rows = await cortexDb('pod')
+      .where({ namespace })
+      .andWhere(function () { this.whereIn('uid', names).orWhereIn('name', names); })
+      .select('uid');
+    if (rows.length) return rows.map((r) => r.uid);
+    // An unknown name is a caller mistake worth surfacing, not silently
+    // downgrading to cwd — the agent asked for a specific scope.
+    const err = new Error(`remember: no pod matches ${JSON.stringify(names)} — run \`sigil pod list\` to see them`);
+    err.code = 'invalid_params';
+    throw err;
+  }
+
+  if (!params.cwd && !params.sessionId) return [];
+  try {
+    const { ensureActivePodsForHook } = await import('../../memory/pods/hook-dispatcher.js');
+    const { podUids } = await ensureActivePodsForHook({
+      sessionId: params.sessionId || null,
+      cwd: params.cwd || null,
+      namespace,
+    });
+    return podUids || [];
+  } catch (err) {
+    // Never fail a save because pod resolution broke — an unpodded fact is
+    // still reachable (see the unpodded rule in hybrid-sql.js).
+    console.error(`[remember] pod resolution failed: ${err.message}`);
+    return [];
+  }
 }

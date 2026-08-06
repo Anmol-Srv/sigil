@@ -35,26 +35,40 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
   const { temporalClause, categoryClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories });
   const overfetchLimit = limit * OVERFETCH;
 
-  // Pod-scope filter — applied identically to both CTEs. THREE distinct cases,
-  // and conflating the first two was a silent global leak:
+  // Pod-scope filter — applied identically to both CTEs.
   //   - null / undefined  → no scope requested → global, no filter.
-  //   - []                → scope requested but resolved to NOTHING → match no
-  //                          rows (NOT global!). An agent/context with zero
-  //                          readable pods must see zero facts, not the whole
-  //                          brain. `AND FALSE` short-circuits both CTEs.
-  //   - [ids]             → membership filter to those pods.
-  // Caller (hybrid.js resolvePodScope) returns null for global, [] for
-  // scoped-empty, [ids] for scoped.
+  //   - []                → scope requested, nothing active → UNPODDED only.
+  //   - [ids]             → those pods, PLUS unpodded facts.
+  //
+  // "Unpodded" is deliberately included. A fact with no membership row means
+  // "we don't know what this is about", NOT "this belongs to someone else" —
+  // and excluding it is how 60 of 82 facts in a real store became invisible
+  // from every directory the moment the first pod was created. Hiding on
+  // absence-of-evidence is the dangerous default; the relevance floor already
+  // keeps off-topic matches out. Facts that DO carry a membership still scope
+  // strictly, so a fact known to belong to another project stays out.
   const podScopeRequested = Array.isArray(podIds);
   const podScopeEmpty = podScopeRequested && podIds.length === 0;
+  // Indexed by pod_membership (member_type, member_id) — the reverse-lookup
+  // index that migration 20260512120100 added for exactly this question.
+  //
+  // `fact.id` is qualified deliberately. Written as bare `id`, Postgres resolves
+  // it against the SUBQUERY's scope (pod_membership also has an `id`), so the
+  // correlation silently becomes `pm.member_id = pm.id` — which is nearly always
+  // false, making every fact look podded and hiding the unpodded ones this
+  // clause exists to surface. A test caught it; the failure is invisible in SQL.
+  const UNPODDED = `NOT EXISTS (
+    SELECT 1 FROM pod_membership pm
+    WHERE pm.member_type = 'fact' AND pm.member_id = fact.id
+  )`;
   const podScopeClause = !podScopeRequested
     ? ''
     : podScopeEmpty
-      ? 'AND FALSE'
-      : `AND id = ANY(
+      ? `AND ${UNPODDED}`
+      : `AND (fact.id = ANY(
            SELECT member_id FROM pod_membership
            WHERE member_type = 'fact' AND pod_id = ANY(?::int[])
-         )`;
+         ) OR ${UNPODDED})`;
   const podScopeParams = (podScopeRequested && !podScopeEmpty) ? [podIds] : [];
 
   // Params order (matches the `?` sequence below):
