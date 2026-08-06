@@ -65,18 +65,18 @@ export async function verifyMcpRoundTrip(serverPath, { timeoutMs = 12000 } = {})
 /** Run the registered hook command with a synthetic payload; expect clean JSON (or empty). */
 export async function verifyClaudeHookRoundTrip(hookCmd, { timeoutMs = 12000 } = {}) {
   if (!hookCmd) return { ok: false, reason: 'no hook command' };
-  // hookCmd looks like `node /abs/path/user-prompt-submit.js`
-  const parts = hookCmd.split(' ').filter(Boolean);
-  const cmd = parts[0];
-  const args = parts.slice(1);
-  const scriptPath = args.find((a) => a.endsWith('.js'));
-  if (scriptPath && !existsSync(scriptPath)) {
-    return { ok: false, reason: `hook script not found at ${scriptPath}` };
-  }
+  // Run it through a shell — that is exactly how the harness executes the
+  // registered command, so this verifies the real thing. Splitting on spaces
+  // and spawning directly (what we used to do) could never work: mergeHooks
+  // writes the command SINGLE-QUOTED (`'~/.sigil/bin/sigil-hook' <name>`) so a
+  // home directory with spaces survives, and spawn() then looked for a file
+  // literally named "'...sigil-hook'" → ENOENT on every healthy install. The one
+  // check that proves hooks run was reporting a permanent false alarm.
   return new Promise((resolve) => {
     let done = false;
     let out = '';
-    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    let errOut = '';
+    const child = spawn(hookCmd, { shell: true, stdio: ['pipe', 'pipe', 'pipe'] });
     const finish = (r) => {
       if (done) return;
       done = true;
@@ -88,7 +88,15 @@ export async function verifyClaudeHookRoundTrip(hookCmd, { timeoutMs = 12000 } =
     timer.unref?.();
     child.on('error', (e) => finish({ ok: false, reason: `spawn failed: ${e.message}` }));
     child.stdout.on('data', (d) => { out += d.toString(); });
-    child.on('close', () => {
+    child.stderr.on('data', (d) => { errOut += d.toString(); });
+    child.on('close', (code) => {
+      // Under a shell, a missing/unrunnable command surfaces as a non-zero exit
+      // (127), not a spawn error — so the exit code, not just stdout, decides.
+      // Note a healthy shim exits 0 even when it fails safe; that IS the design,
+      // and verify() checks the shim's existence separately.
+      if (code !== 0) {
+        return finish({ ok: false, reason: `hook exited ${code}${errOut.trim() ? `: ${errOut.trim().slice(0, 120)}` : ''}` });
+      }
       const trimmed = out.trim();
       // A hook that legitimately injects nothing (no matching memory) may emit
       // empty output — that's a healthy round-trip, not a failure.

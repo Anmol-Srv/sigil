@@ -70,8 +70,10 @@ describe('sigil connect', () => {
     const commands = Object.values(settings.hooks)
       .flatMap((arr) => arr).flatMap((e) => e.hooks).map((h) => h.command);
     expect(commands.length).toBe(4);
+    // Every hook runs a stable shim under ~/.sigil/bin/ — sigil-hook for the
+    // hook scripts, sigil for SessionStart's preamble.
     for (const cmd of commands) {
-      expect(cmd).toContain('sigil-hook');
+      expect(cmd).toContain(join(home, '.sigil', 'bin'));
       expect(cmd).not.toMatch(/node\s+\/.*\.js/);
     }
     rmSync(home, { recursive: true, force: true });
