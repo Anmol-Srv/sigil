@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { daemonCall } from '../daemon-call.js';
 import { textResponse } from '../utils.js';
 
+// Writes legitimately outlast a read budget (classify → extract → AUDM → link).
+const WRITE_RPC_TIMEOUT_MS = 10 * 60 * 1000;
+
 function registerRememberTool(server) {
   server.tool(
     'remember',
@@ -16,7 +19,9 @@ Facts are written under the agent provenance "mcp" and survive across sessions.`
       namespace: z.string().optional().describe('Target namespace. Defaults to the config default namespace.'),
     },
     async ({ facts, namespace }) => {
-      const data = await daemonCall('remember', { facts, namespace });
+      // Saves run a chain of LLM calls; a read-sized budget would report
+      // failure on a write the daemon is still completing.
+      const data = await daemonCall('remember', { facts, namespace }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
 
       const parts = [];
       if (data.added)        parts.push(`${data.added} new`);

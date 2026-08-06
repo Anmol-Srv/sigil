@@ -153,6 +153,11 @@ async function launchAndOpenBrowser() {
   openBrowser(url);
 }
 
+// Writes run a chain of LLM calls (classify → extract → AUDM decide → entity
+// link) and legitimately outlast the 30s read budget. Bound generously rather
+// than reporting a failure the daemon is still completing.
+const WRITE_RPC_TIMEOUT_MS = 10 * 60 * 1000;
+
 const commands = {
   init: runInit,
   connect: runConnect,
@@ -1419,7 +1424,10 @@ Examples:
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
   const client = await connectOrStartDaemon();
   try {
-    const { data } = await client.call('remember', { facts, namespace });
+    // A save runs a chain of LLM calls; the 30s read default reported failure
+    // on writes the daemon went on to complete, and the user's retry then
+    // queued behind the still-running first attempt.
+    const { data } = await client.call('remember', { facts, namespace }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
     const parts = [];
     if (data.added)        parts.push(`${data.added} new`);
     if (data.updated)      parts.push(`${data.updated} updated`);
@@ -1656,7 +1664,7 @@ Examples:
             skipFacts,
             skipEntities,
             background: !wait,
-          });
+          }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
           if (data.queued) {
             results.queued.push(source.title);
             console.log('  Queued');

@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { daemonCall } from '../daemon-call.js';
 import { textResponse } from '../utils.js';
 
+// Writes legitimately outlast a read budget (classify → extract → AUDM → link).
+const WRITE_RPC_TIMEOUT_MS = 10 * 60 * 1000;
+
 function registerIngestTool(server) {
   server.tool(
     'ingest',
@@ -37,7 +40,9 @@ Use when: adding documents to the knowledge base, ingesting files, URLs, or raw 
         sourceType = sourceType || src.sourceType;
       }
 
-      const result = await daemonCall('ingestDoc', { ...payload, title, namespace, sourceType, cwd, skipFacts, skipEntities });
+      // Ingest runs the full LLM chain; the 30s read default would report failure
+      // on a write the daemon is still completing.
+      const result = await daemonCall('ingestDoc', { ...payload, title, namespace, sourceType, cwd, skipFacts, skipEntities }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
 
       const text = result.skipped
         ? `Document "${result.title}" already up to date — skipped.`
