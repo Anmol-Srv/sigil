@@ -6,19 +6,18 @@
  * Supports `params.background`: queue the ingest and return immediately. Graph-
  * building is LLM-heavy and can exceed the RPC timeout, so — like every graph-
  * memory system (Graphiti, GraphRAG, HippoRAG) — the write is made async and
- * the cleverness lives at read time. Background jobs run through a serial queue
- * so concurrent ingests don't race on entity create/rename (the same invariant
- * `remember` protects with sequential processing).
+ * the cleverness lives at read time. Both the background and foreground paths
+ * run under the daemon-wide write lock so concurrent ingests don't race on
+ * entity create/rename (the same invariant `remember` protects with sequential
+ * processing) and don't starve each other on PGlite's single connection.
  */
 
-// Serial queue: chain background ingests so only one runs at a time.
-let queueTail = Promise.resolve();
-function enqueue(job) {
-  const run = queueTail.then(job, job);
-  // Keep the chain alive even if a job throws, but don't accumulate rejections.
-  queueTail = run.catch(() => {});
-  return run;
-}
+// Serialization now lives in the shared daemon-wide write queue rather than a
+// queue private to this handler. The private one only ordered background
+// ingests against each OTHER — a foreground ingest, a `remember`, or a Stop
+// hook's `ingestTurn` could still land mid-transaction and starve on PGlite's
+// single connection. See src/daemon/write-queue.js.
+import { withWriteLock } from '../write-queue.js';
 
 /**
  * Which pods should this document attach to?
@@ -138,7 +137,7 @@ export function registerIngestDoc(registry) {
         title: params.title, sourceType: params.sourceType,
       }).catch(() => null);
 
-      enqueue(() => doIngest(params)).catch(async (err) => {
+      withWriteLock(() => doIngest(params)).catch(async (err) => {
         try {
           const { recordHookError } = await import('../../hooks/error-log.js');
           await recordHookError('ingestDoc', err, String(params.title || params.filePath || params.url || '').slice(0, 200));
@@ -148,6 +147,6 @@ export function registerIngestDoc(registry) {
       return { queued: true, title: params.title || source?.title || null };
     }
 
-    return doIngest(params);
+    return withWriteLock(() => doIngest(params));
   });
 }

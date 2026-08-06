@@ -6,6 +6,8 @@
  * break AUDM's pairwise dedup invariants.
  */
 
+import { withWriteLock } from '../write-queue.js';
+
 // A fact is a short, self-contained statement. Agents reach for `remember` for
 // everything because it is the tool they know, so whole markdown files and
 // session histories were landing in the fact store — shredded into fact rows,
@@ -52,6 +54,15 @@ export function registerRemember(registry) {
       throw err;
     }
 
+    // Serialize against every other writer. `remember` already ingests its own
+    // facts sequentially on purpose; the lock extends that across RPCs, so a
+    // save arriving during an ingest waits instead of starving on PGlite's
+    // single connection (which surfaced as "pool is probably full").
+    return withWriteLock(() => saveFacts(facts, params));
+  });
+}
+
+async function saveFacts(facts, params) {
     const { ingestDocument } = await import('../../ingestion/pipeline.js');
     const { default: config } = await import('../../config.js');
     const namespace = params.namespace || config.defaults.namespace;
@@ -99,5 +110,4 @@ export function registerRemember(registry) {
     }).catch(() => {});
 
     return { added, updated, alreadyKnown, namespace };
-  });
 }

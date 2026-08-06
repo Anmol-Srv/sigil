@@ -1,3 +1,5 @@
+import { writeQueueDepth } from '../write-queue.js';
+
 export function registerStatus(registry) {
   registry.register('status', async (params) => {
     const { getStats } = await import('../../memory/documents/store.js');
@@ -104,6 +106,9 @@ export function registerStatus(registry) {
     return {
       namespace,
       db: { healthy: true, error: null, schema: 'ready' },
+      // Writers queued behind the single-connection write lock. A non-zero
+      // depth is why a save is slow; it is the honest answer to "is it stuck?"
+      writeQueue: writeQueueDepth(),
       providers,
       claudeProcs,
       managedSession,
