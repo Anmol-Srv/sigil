@@ -25,4 +25,30 @@ function buildFactFilters({ minConfidence = 'medium', pointInTime, categories })
   return { minRank, temporalClause, categoryClause, filterParams: params };
 }
 
-export { CONFIDENCE_CASE, buildFactFilters };
+/**
+ * Pod-scope clause for CHUNK queries.
+ *
+ * Chunks aren't pod members — their DOCUMENT is (pod_membership.member_type =
+ * 'document'), so the filter goes through document_id. Without this, chunk
+ * retrieval ignored pod scope entirely: attaching a document to a project pod
+ * changed nothing at read time and one project's document text could surface
+ * while searching another. Facts have had this filter since hybrid-sql.js; this
+ * is the chunk-side equivalent, with the same three-state contract.
+ *
+ *   null  → unscoped (global)
+ *   []    → scope requested but nothing active → match nothing
+ *   [ids] → restrict to documents in those pods
+ */
+function buildChunkPodFilter(podIds) {
+  if (!Array.isArray(podIds)) return { clause: '', params: [] };
+  if (podIds.length === 0) return { clause: 'AND FALSE', params: [] };
+  return {
+    clause: `AND document_id = ANY(
+      SELECT member_id FROM pod_membership
+      WHERE member_type = 'document' AND pod_id = ANY(?::int[])
+    )`,
+    params: [podIds],
+  };
+}
+
+export { CONFIDENCE_CASE, buildFactFilters, buildChunkPodFilter };

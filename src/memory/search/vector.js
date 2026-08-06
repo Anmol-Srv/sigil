@@ -1,14 +1,15 @@
 import cortexDb from '../../db/cortex.js';
 import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import config from '../../config.js';
-import { CONFIDENCE_CASE, buildFactFilters } from './filters.js';
+import { CONFIDENCE_CASE, buildFactFilters, buildChunkPodFilter } from './filters.js';
 
 // Cosine search. The HNSW index is an expression index over embedding::halfvec(N),
 // so the query must use the same expression for Postgres to take the ANN path.
 
-async function searchChunks(embedding, { namespaces, limit = 20 }) {
+async function searchChunks(embedding, { namespaces, limit = 20, podIds = null }) {
   const vec = pgVector(embedding);
   const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
+  const pod = buildChunkPodFilter(podIds);
 
   const { rows } = await cortexDb.raw(`
     SELECT id, document_id AS "documentId", chunk_index AS "chunkIndex",
@@ -17,9 +18,10 @@ async function searchChunks(embedding, { namespaces, limit = 20 }) {
     FROM chunk
     WHERE namespace = ANY(?)
       AND embedding IS NOT NULL
+      ${pod.clause}
     ORDER BY ${embeddingDistance}
     LIMIT ?
-  `, [vec, namespaces, vec, limit]);
+  `, [vec, namespaces, ...pod.params, vec, limit]);
 
   return rows;
 }

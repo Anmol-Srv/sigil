@@ -116,11 +116,14 @@ async function ingestDocument({
     title: finalTitle,
     contentHash,
     namespace: ns,
+    // Keep the original text on the row so the document can be handed back
+    // whole later. Chunks alone can't do that: they overlap at every seam.
+    content,
   });
 
   if (!changed) {
     process.stderr.write('  Skipped — content unchanged.' + "\n");
-    return { documentId: doc.id, title: finalTitle, skipped: true };
+    return { documentId: doc.id, documentUid: doc.uid, title: finalTitle, skipped: true };
   }
 
   // Persist the metadata payload now that the document row exists.

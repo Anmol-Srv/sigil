@@ -48,10 +48,18 @@ export function registerSearch(registry) {
       ctx,
     });
 
+    const facts = (result.facts || []).map(serializeFact);
+    // Turn raw source-document IDs into something an agent can act on. A bare
+    // `sourceDocumentIds: [7]` tells a caller nothing; a title + uid tells it a
+    // whole document exists and exactly how to fetch it (getDocument). This is
+    // the pointer half of the on-demand contract — search stays cheap and
+    // discovery-only, and no document text moves until someone asks for it.
+    await attachSourceDocuments(facts);
+
     const response = {
       query,
       namespaces,
-      facts: (result.facts || []).map(serializeFact),
+      facts,
       chunks: (result.chunks || []).map(serializeChunk),
       synthesized: result.synthesized || null,
       matchedEntity: result.matchedEntity || null,
@@ -75,6 +83,39 @@ export function registerSearch(registry) {
 
     return response;
   });
+}
+
+// Resolve every referenced document once (not per fact) and hang
+// `{uid, title, sourceType}` off each fact as `sourceDocuments`. Best-effort:
+// a lookup failure must never fail the search that already succeeded.
+async function attachSourceDocuments(facts) {
+  const ids = [...new Set(facts.flatMap((f) => f.sourceDocumentIds || []))];
+  if (!ids.length) return;
+  try {
+    const { default: cortexDb } = await import('../../db/cortex.js');
+    const rows = await cortexDb('document').whereIn('id', ids).select('id', 'uid', 'title', 'sourceType');
+    mapSourceDocuments(facts, rows);
+  } catch { /* pointers are an enrichment, never a hard dependency */ }
+}
+
+/**
+ * Pure half of attachSourceDocuments — join facts to document rows.
+ *
+ * Split out to be testable without a database. Keys are compared as strings on
+ * purpose: `fact.source_document_ids` is an int[] that arrives as JS numbers,
+ * while `document.id` can come back as a string from some drivers (bigint
+ * handling differs), and a `===` mismatch there would silently drop every
+ * pointer while looking perfectly healthy.
+ */
+export function mapSourceDocuments(facts, rows) {
+  const byId = new Map(rows.map((d) => [String(d.id), d]));
+  for (const f of facts) {
+    f.sourceDocuments = (f.sourceDocumentIds || [])
+      .map((id) => byId.get(String(id)))
+      .filter(Boolean)
+      .map((d) => ({ uid: d.uid, title: d.title, sourceType: d.sourceType }));
+  }
+  return facts;
 }
 
 function serializeFact(f) {

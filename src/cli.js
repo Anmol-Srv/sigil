@@ -33,9 +33,10 @@ Commands:
   connect [--clients ...]  Re-pin launcher shims + re-sync AI client configs (fix stale paths)
   uninstall [--dry-run]    Remove Sigil's entries from selected AI clients
   doctor                   Diagnose Sigil setup (DB, LLM, embeddings, hooks)
-  remember "text"          Save a fact or note to memory
-  ingest <file|url|glob>   Ingest documents into the knowledge base
+  remember "text"          Save a short, self-contained fact to memory
+  ingest <file|url|glob>   Store whole documents (md, notes, specs, histories)
   search "query"           Search the knowledge base
+  docs [uid]               List this project's documents, or print one in full
   facts                    List stored facts with IDs
   forget <id>              Delete a specific fact by ID
   namespace <sub>          Manage namespaces (list | delete <ns>)
@@ -165,6 +166,7 @@ const commands = {
   preamble: runPreamble,
   status: runStatus,
   facts: runFacts,
+  docs: runDocs,
   forget: runForget,
   namespace: runNamespace,
   session: runSession,
@@ -1203,6 +1205,77 @@ function safeJsonParse(s) {
 
 // ─── Facts (list) ────────────────────────────────────────────────────────────
 
+// `sigil docs` with no argument lists this project's documents; with a uid it
+// prints one in full. Two behaviours, one command — the second is only ever
+// reached by pasting a uid the first one printed.
+async function runDocs(args) {
+  if (args.includes('--help')) {
+    console.log(`sigil docs — List stored documents, or print one in full
+
+Usage:
+  sigil docs                 List documents for the current project
+  sigil docs <uid>           Print that document's full text
+  sigil docs --all           List documents across every project
+
+Options:
+  --namespace=<ns>   Filter by namespace
+  --type=<t>         Filter by source type (file, raw, url, ...)
+  --limit=<n>        Max documents to list (default: 50)
+  --max-chars=<n>    Truncate printed text (default: no limit)
+
+Documents are stored whole by \`sigil ingest\` and attached to the project pod
+for the directory you ingested from. Facts extracted from them stay searchable;
+this is how you get the original text back.`);
+    process.exit(0);
+  }
+
+  const uid = args.find((a) => !a.startsWith('-'));
+  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1];
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+
+  try {
+    if (uid) {
+      const maxChars = Number(args.find((a) => a.startsWith('--max-chars='))?.split('=')[1]) || null;
+      const { data } = await client.call('getDocument', { uid, maxChars });
+      if (data.notFound) {
+        console.error(`No document with uid "${uid}". Run \`sigil docs\` to list them.`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`# ${data.title}`);
+      console.log(`${data.uid} · ${data.sourceType} · ${data.chunkCount} chunks, ${data.factCount} facts`);
+      if (data.pods?.length) console.log(`pods: ${data.pods.map((p) => p.name || p.uid).join(', ')}`);
+      if (!data.exact) console.log('note: reassembled from chunks (ingested before full text was stored) — re-ingest for exact text');
+      if (data.truncated) console.log(`note: truncated at ${data.content.length} of ${data.totalChars} chars`);
+      console.log('\n---\n');
+      console.log(data.content);
+      return;
+    }
+
+    const { data } = await client.call('listDocuments', {
+      namespace,
+      cwd: process.cwd(),
+      podScope: args.includes('--all') ? 'global' : 'auto',
+      sourceType: args.find((a) => a.startsWith('--type='))?.split('=')[1],
+      limit: Number(args.find((a) => a.startsWith('--limit='))?.split('=')[1] || 50),
+    });
+
+    if (!data.documents.length) {
+      console.log(data.scoped
+        ? 'No documents for this project yet. Add one with `sigil ingest <file>` (or `sigil docs --all`).'
+        : 'No documents stored yet. Add one with `sigil ingest <file>`.');
+      return;
+    }
+    for (const d of data.documents) {
+      console.log(`${d.uid}  ${d.title}  [${d.sourceType}] ${d.chunkCount} chunks, ${d.factCount} facts`);
+    }
+    console.log(`\n${data.documents.length} document${data.documents.length > 1 ? 's' : ''}${data.scoped ? ' in this project' : ''}. Read one with \`sigil docs <uid>\`.`);
+  } finally {
+    await client.close();
+  }
+}
+
 async function runFacts(args) {
   if (args.includes('--help')) {
     console.log(`sigil facts — List stored facts
@@ -1567,10 +1640,19 @@ Examples:
           const { data } = await client.call('ingestDoc', {
             content: source.content,
             title: source.title,
-            filePath: source.sourcePath,
+            // sourcePath, NOT filePath: we already read the content above, so
+            // the daemon must not re-read the file. It would resolve the path
+            // against ITS OWN cwd — which is whatever directory happened to
+            // auto-spawn it — and reject anything outside, so the first project
+            // you used Sigil in became the only one you could ingest from
+            // ("Path traversal denied"). sourcePath still keys the upsert.
+            sourcePath: source.sourcePath,
             sourceType: source.sourceType,
             namespace,
             metadata: source.metadata,
+            // Attach the document to this project's pod, so `sigil docs` here
+            // (and a scoped search) finds it later.
+            cwd: process.cwd(),
             skipFacts,
             skipEntities,
             background: !wait,

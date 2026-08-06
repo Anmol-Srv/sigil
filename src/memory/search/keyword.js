@@ -1,7 +1,8 @@
 import cortexDb from '../../db/cortex.js';
-import { CONFIDENCE_CASE, buildFactFilters } from './filters.js';
+import { CONFIDENCE_CASE, buildFactFilters, buildChunkPodFilter } from './filters.js';
 
-async function searchChunks(query, { namespaces, limit = 20 }) {
+async function searchChunks(query, { namespaces, limit = 20, podIds = null }) {
+  const pod = buildChunkPodFilter(podIds);
   const { rows } = await cortexDb.raw(`
     SELECT id, document_id AS "documentId", chunk_index AS "chunkIndex",
            content, section_heading AS "sectionHeading", namespace,
@@ -9,9 +10,10 @@ async function searchChunks(query, { namespaces, limit = 20 }) {
     FROM chunk
     WHERE namespace = ANY(?)
       AND search_vector @@ plainto_tsquery('english', ?)
+      ${pod.clause}
     ORDER BY rank DESC
     LIMIT ?
-  `, [query, namespaces, query, limit]);
+  `, [query, namespaces, query, ...pod.params, limit]);
 
   return rows;
 }
