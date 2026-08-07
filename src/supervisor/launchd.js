@@ -107,8 +107,23 @@ export function restart() {
 }
 
 export function start() {
-  const r = sh('launchctl', ['kickstart', serviceTarget()]);
-  return { ok: r.code === 0, manager: MANAGER };
+  // stop() boots the service OUT of the domain (so KeepAlive can't resurrect
+  // it), and `kickstart` only works on a service that is still LOADED. So a
+  // plain kickstart here failed with "No such process" after every stop —
+  // `sigil service stop` followed by `sigil service start` could never bring
+  // the daemon back, which is the exact sequence an upgrade or repair uses.
+  // Load it first when it isn't loaded; kickstart alone is right when it is.
+  if (!status().loaded) {
+    const path = plistPath();
+    if (!existsSync(path)) {
+      return { ok: false, manager: MANAGER, error: `service not installed (${path} missing) — run \`sigil service install\`` };
+    }
+    let r = sh('launchctl', ['bootstrap', domainTarget(), path]);
+    if (r.code !== 0) r = sh('launchctl', ['load', '-w', path]); // legacy macOS
+    if (r.code !== 0) return { ok: false, manager: MANAGER, error: r.err || 'launchctl bootstrap/load failed' };
+  }
+  const k = sh('launchctl', ['kickstart', serviceTarget()]);
+  return { ok: k.code === 0, manager: MANAGER };
 }
 
 export function stop() {

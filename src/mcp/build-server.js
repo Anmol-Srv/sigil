@@ -24,6 +24,7 @@ import { registerIngestTool } from './tools/ingest.js';
 import { registerRememberTool } from './tools/remember.js';
 import { registerListPodsTool } from './tools/list-pods.js';
 import { registerGetPodTool } from './tools/get-pod.js';
+import { registerDocumentTools } from './tools/documents.js';
 import { registerPrimeTool } from './tools/prime.js';
 
 export function createMcpServer() {
@@ -49,6 +50,8 @@ export function createMcpServer() {
 
   // Discovery
   registerListPodsTool(server);
+  // Whole documents, on demand — list to find one, get to read it in full.
+  registerDocumentTools(server);
 
   // Operations
   registerStatusTool(server);

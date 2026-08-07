@@ -5,7 +5,7 @@
 // time, which honours $HOME), so the real ~/.sigil and ~/.claude are untouched.
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -79,11 +79,17 @@ describe('claude-code install uses the stable shim, never a baked package path',
       .map((h) => h.command);
 
     expect(commands.length).toBe(4);
+    const binDir = join(SANDBOX, '.sigil', 'bin');
     for (const cmd of commands) {
-      expect(cmd).toContain('sigil-hook');
+      // Every hook runs one of the two stable shims under ~/.sigil/bin/
+      // (sigil-hook for the hook scripts, sigil for SessionStart's preamble).
+      expect(cmd).toContain(binDir);
       // The breaking pattern we are eliminating: a frozen `node /abs/.../*.js`.
       expect(cmd).not.toMatch(/node\s+\/.*hooks\/.*\.js/);
     }
+    // PostToolUse is a no-op hook; registering it would spawn a Node process per
+    // Edit/Write/Bash for nothing. It must NOT be registered.
+    expect(settings.hooks.PostToolUse).toBeUndefined();
 
     // The shared instructions reference the stable launcher, not `which sigil`
     // or dist/cli.js.
@@ -98,12 +104,31 @@ describe('claude-code install uses the stable shim, never a baked package path',
   it('re-running install does not duplicate hooks and preserves the user\'s own hooks', async () => {
     await claudeCode.install({});
     const settings = JSON.parse(readFileSync(join(SANDBOX, '.claude', 'settings.json'), 'utf8'));
-    // Exactly one sigil entry per event (UserPromptSubmit/PostToolUse/Stop/SessionEnd).
-    for (const event of ['UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd']) {
+    const binDir = join(SANDBOX, '.sigil', 'bin');
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) {
       const sigilEntries = settings.hooks[event].filter((e) =>
-        e.hooks.some((h) => h.command.includes('sigil-hook')));
+        e.hooks.some((h) => h.command.includes(binDir)));
       expect(sigilEntries.length).toBe(1);
     }
+  });
+
+  it('re-running install retires a PostToolUse hook left by an older version', async () => {
+    // An older Sigil registered a PostToolUse hook that is now a pure no-op.
+    // Re-running install must sweep it out, while leaving a foreign hook on the
+    // same event untouched.
+    const settingsPath = join(SANDBOX, '.claude', 'settings.json');
+    const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    settings.hooks.PostToolUse = [
+      { matcher: 'Edit|Write|Bash', hooks: [{ type: 'command', command: `'${join(SANDBOX, '.sigil', 'bin', 'sigil-hook')}' post-tool-use` }] },
+      { matcher: 'Edit', hooks: [{ type: 'command', command: 'my-own-linter' }] },
+    ];
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+
+    await claudeCode.install({});
+
+    const after = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    expect(after.hooks.PostToolUse).toHaveLength(1);
+    expect(after.hooks.PostToolUse[0].hooks[0].command).toBe('my-own-linter');
   });
 });
 

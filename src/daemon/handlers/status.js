@@ -1,3 +1,5 @@
+import { writeQueueDepth } from '../write-queue.js';
+
 export function registerStatus(registry) {
   registry.register('status', async (params) => {
     const { getStats } = await import('../../memory/documents/store.js');
@@ -67,17 +69,24 @@ export function registerStatus(registry) {
     } catch { /* holder unavailable outside daemon */ }
 
     if (!dbHealthy) {
+      // NULL, not 0. These are "we could not read the store", and rendering
+      // that as zero is indistinguishable from "your memory was wiped" — which
+      // is exactly what a user sees when the probe merely lost a race for the
+      // single embedded connection while an ingest held it. `unavailable` says
+      // so outright, and writeQueue names the usual reason (a write in flight).
       return {
         namespace,
         db: { healthy: false, error: dbError, schema: dbSchema },
+        unavailable: true,
+        writeQueue: writeQueueDepth(),
         providers,
         claudeProcs,
         managedSession,
-        documents: 0,
-        chunks: 0,
-        facts: 0,
-        entities: { documents: 0, people: 0, topics: 0 },
-        relations: 0,
+        documents: null,
+        chunks: null,
+        facts: null,
+        entities: { documents: null, people: null, topics: null },
+        relations: null,
         podsByType: {},
         hotFacts: [],
         hebbian: null,
@@ -104,6 +113,9 @@ export function registerStatus(registry) {
     return {
       namespace,
       db: { healthy: true, error: null, schema: 'ready' },
+      // Writers queued behind the single-connection write lock. A non-zero
+      // depth is why a save is slow; it is the honest answer to "is it stuck?"
+      writeQueue: writeQueueDepth(),
       providers,
       claudeProcs,
       managedSession,

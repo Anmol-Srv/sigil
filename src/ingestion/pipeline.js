@@ -9,7 +9,7 @@ import * as documentStore from '../memory/documents/store.js';
 import * as chunkStore from '../memory/chunks/store.js';
 import { extractFactsFromChunks } from '../memory/facts/extractor.js';
 import { saveFact, supersedeStaleDocFacts } from '../memory/facts/store.js';
-import { DEFAULT_CATEGORIES } from '../memory/facts/categories.js';
+import { DEFAULT_CATEGORIES, PERSONAL_CATEGORIES } from '../memory/facts/categories.js';
 import { classifyInput } from '../memory/cognitive/input-classifier.js';
 import { linkDocumentEntities } from '../memory/entities/linker.js';
 import * as podStore from '../memory/pods/store.js';
@@ -116,11 +116,14 @@ async function ingestDocument({
     title: finalTitle,
     contentHash,
     namespace: ns,
+    // Keep the original text on the row so the document can be handed back
+    // whole later. Chunks alone can't do that: they overlap at every seam.
+    content,
   });
 
   if (!changed) {
     process.stderr.write('  Skipped — content unchanged.' + "\n");
-    return { documentId: doc.id, title: finalTitle, skipped: true };
+    return { documentId: doc.id, documentUid: doc.uid, title: finalTitle, skipped: true };
   }
 
   // Persist the metadata payload now that the document row exists.
@@ -280,6 +283,7 @@ async function ingestDocument({
           metadata,
         }, factResult.results, ns, entities);
         process.stderr.write(`  ${entityResult.entityCount} entities, ${entityResult.relationCount} relations` + "\n");
+
       } catch (err) {
         process.stderr.write(`  [5/6] entity linking failed (facts preserved): ${err.message}` + "\n");
       }
@@ -394,6 +398,17 @@ async function attachFactsToPods(results, attachments, db) {
   for (const r of results) {
     const factId = r?.fact?.id ?? r?.existing?.id;
     if (!factId) continue;
+
+    // Personal facts are about the USER, not about wherever they happened to be
+    // sitting. "I prefer tabs over spaces" learned in project A is not a fact
+    // about project A, and filing it there hides it everywhere else. Leaving it
+    // unattached is what makes it global: scoped search matches "in my pods OR
+    // in no pod" (see hybrid-sql.js), so no pod means visible from everywhere.
+    // Subject routing still applies afterwards — a preference genuinely ABOUT a
+    // project can still reach that project's pod via its entities.
+    const category = r?.fact?.category ?? r?.existing?.category ?? null;
+    if (category && PERSONAL_CATEGORIES.includes(category)) continue;
+
     const role = r?.action === 'SKIP' ? 'mention' : 'primary';
     for (const { podId } of attachments) {
       await podMembership.attachFact(podId, factId, role, db);

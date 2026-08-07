@@ -75,7 +75,15 @@ export function openSocketClient({ path = SIGIL_DAEMON_SOCK, timeoutMs = 30_000 
 
     function makeApi() {
       return {
-        call(method, params) {
+        // `opts.timeoutMs` overrides the client default for THIS call. Reads and
+        // writes have very different honest budgets: a search answers in under a
+        // second, while a save runs a chain of LLM calls (classify → extract →
+        // AUDM decide → entity link) and routinely exceeds 30s. Judging both by
+        // the read budget is what made a save that the daemon went on to
+        // complete successfully report "rpc timeout after 30000ms" to the user,
+        // who then retried — and the retry queued behind the still-running first
+        // one. One timeout per call site, not one per connection.
+        call(method, params, { timeoutMs: callTimeoutMs = timeoutMs } = {}) {
           if (closed) {
             // Stamp a transport code so callers (e.g. the MCP daemon-call
             // reconnect path) can detect a stale-closed client and reconnect,
@@ -94,9 +102,9 @@ export function openSocketClient({ path = SIGIL_DAEMON_SOCK, timeoutMs = 30_000 
           return new Promise((res, rej) => {
             const timer = setTimeout(() => {
               if (pending.delete(id)) {
-                rej(new Error(`rpc timeout after ${timeoutMs}ms: ${method}`));
+                rej(new Error(`rpc timeout after ${callTimeoutMs}ms: ${method}`));
               }
-            }, timeoutMs);
+            }, callTimeoutMs);
             pending.set(id, { resolve: res, reject: rej, timer });
             sock.write(frame);
           });

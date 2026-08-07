@@ -33,9 +33,10 @@ Commands:
   connect [--clients ...]  Re-pin launcher shims + re-sync AI client configs (fix stale paths)
   uninstall [--dry-run]    Remove Sigil's entries from selected AI clients
   doctor                   Diagnose Sigil setup (DB, LLM, embeddings, hooks)
-  remember "text"          Save a fact or note to memory
-  ingest <file|url|glob>   Ingest documents into the knowledge base
+  remember "text"          Save a short, self-contained fact to memory
+  ingest <file|url|glob>   Store whole documents (md, notes, specs, histories)
   search "query"           Search the knowledge base
+  docs [uid]               List this project's documents, or print one in full
   facts                    List stored facts with IDs
   forget <id>              Delete a specific fact by ID
   namespace <sub>          Manage namespaces (list | delete <ns>)
@@ -152,6 +153,11 @@ async function launchAndOpenBrowser() {
   openBrowser(url);
 }
 
+// Writes run a chain of LLM calls (classify → extract → AUDM decide → entity
+// link) and legitimately outlast the 30s read budget. Bound generously rather
+// than reporting a failure the daemon is still completing.
+const WRITE_RPC_TIMEOUT_MS = 10 * 60 * 1000;
+
 const commands = {
   init: runInit,
   connect: runConnect,
@@ -165,6 +171,7 @@ const commands = {
   preamble: runPreamble,
   status: runStatus,
   facts: runFacts,
+  docs: runDocs,
   forget: runForget,
   namespace: runNamespace,
   session: runSession,
@@ -1203,6 +1210,77 @@ function safeJsonParse(s) {
 
 // ─── Facts (list) ────────────────────────────────────────────────────────────
 
+// `sigil docs` with no argument lists this project's documents; with a uid it
+// prints one in full. Two behaviours, one command — the second is only ever
+// reached by pasting a uid the first one printed.
+async function runDocs(args) {
+  if (args.includes('--help')) {
+    console.log(`sigil docs — List stored documents, or print one in full
+
+Usage:
+  sigil docs                 List documents for the current project
+  sigil docs <uid>           Print that document's full text
+  sigil docs --all           List documents across every project
+
+Options:
+  --namespace=<ns>   Filter by namespace
+  --type=<t>         Filter by source type (file, raw, url, ...)
+  --limit=<n>        Max documents to list (default: 50)
+  --max-chars=<n>    Truncate printed text (default: no limit)
+
+Documents are stored whole by \`sigil ingest\` and attached to the project pod
+for the directory you ingested from. Facts extracted from them stay searchable;
+this is how you get the original text back.`);
+    process.exit(0);
+  }
+
+  const uid = args.find((a) => !a.startsWith('-'));
+  const namespace = args.find((a) => a.startsWith('--namespace='))?.split('=')[1];
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+
+  try {
+    if (uid) {
+      const maxChars = Number(args.find((a) => a.startsWith('--max-chars='))?.split('=')[1]) || null;
+      const { data } = await client.call('getDocument', { uid, maxChars });
+      if (data.notFound) {
+        console.error(`No document with uid "${uid}". Run \`sigil docs\` to list them.`);
+        process.exitCode = 1;
+        return;
+      }
+      console.log(`# ${data.title}`);
+      console.log(`${data.uid} · ${data.sourceType} · ${data.chunkCount} chunks, ${data.factCount} facts`);
+      if (data.pods?.length) console.log(`pods: ${data.pods.map((p) => p.name || p.uid).join(', ')}`);
+      if (!data.exact) console.log('note: reassembled from chunks (ingested before full text was stored) — re-ingest for exact text');
+      if (data.truncated) console.log(`note: truncated at ${data.content.length} of ${data.totalChars} chars`);
+      console.log('\n---\n');
+      console.log(data.content);
+      return;
+    }
+
+    const { data } = await client.call('listDocuments', {
+      namespace,
+      cwd: process.cwd(),
+      podScope: args.includes('--all') ? 'global' : 'auto',
+      sourceType: args.find((a) => a.startsWith('--type='))?.split('=')[1],
+      limit: Number(args.find((a) => a.startsWith('--limit='))?.split('=')[1] || 50),
+    });
+
+    if (!data.documents.length) {
+      console.log(data.scoped
+        ? 'No documents for this project yet. Add one with `sigil ingest <file>` (or `sigil docs --all`).'
+        : 'No documents stored yet. Add one with `sigil ingest <file>`.');
+      return;
+    }
+    for (const d of data.documents) {
+      console.log(`${d.uid}  ${d.title}  [${d.sourceType}] ${d.chunkCount} chunks, ${d.factCount} facts`);
+    }
+    console.log(`\n${data.documents.length} document${data.documents.length > 1 ? 's' : ''}${data.scoped ? ' in this project' : ''}. Read one with \`sigil docs <uid>\`.`);
+  } finally {
+    await client.close();
+  }
+}
+
 async function runFacts(args) {
   if (args.includes('--help')) {
     console.log(`sigil facts — List stored facts
@@ -1286,7 +1364,12 @@ Usage:
 
 Options:
   --namespace=<ns>   Target namespace (default: from config / DEFAULT_NAMESPACE)
+  --pod=<name|uid>   Attach to this pod instead of the current project. Use when
+                     the fact is ABOUT something other than where you are.
   --bg               Save in background and return immediately
+
+Facts attach to the current project's pod automatically (from the working
+directory), so they surface when you come back to that project.
 
 Examples:
   sigil remember "I prefer tabs over spaces"
@@ -1304,6 +1387,7 @@ Examples:
   // persistent daemon already resolved its own DEFAULT_NAMESPACE at startup, so injecting
   // DEFAULT_NAMESPACE into this subprocess's env has no effect on the daemon.
   const namespace = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1] || undefined;
+  const podArg = flags.find((f) => f.startsWith('--pod='))?.split('=')[1] || undefined;
 
   // Collect facts: each positional arg is a separate fact
   let facts = textArgs.filter(Boolean);
@@ -1346,7 +1430,14 @@ Examples:
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
   const client = await connectOrStartDaemon();
   try {
-    const { data } = await client.call('remember', { facts, namespace });
+    // A save runs a chain of LLM calls; the 30s read default reported failure
+    // on writes the daemon went on to complete, and the user's retry then
+    // queued behind the still-running first attempt.
+    // cwd scopes the save to this project's pod; --pod overrides it when the
+    // fact is about something other than where you're standing.
+    const { data } = await client.call('remember', {
+      facts, namespace, cwd: process.cwd(), pod: podArg || null,
+    }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
     const parts = [];
     if (data.added)        parts.push(`${data.added} new`);
     if (data.updated)      parts.push(`${data.updated} updated`);
@@ -1567,14 +1658,23 @@ Examples:
           const { data } = await client.call('ingestDoc', {
             content: source.content,
             title: source.title,
-            filePath: source.sourcePath,
+            // sourcePath, NOT filePath: we already read the content above, so
+            // the daemon must not re-read the file. It would resolve the path
+            // against ITS OWN cwd — which is whatever directory happened to
+            // auto-spawn it — and reject anything outside, so the first project
+            // you used Sigil in became the only one you could ingest from
+            // ("Path traversal denied"). sourcePath still keys the upsert.
+            sourcePath: source.sourcePath,
             sourceType: source.sourceType,
             namespace,
             metadata: source.metadata,
+            // Attach the document to this project's pod, so `sigil docs` here
+            // (and a scoped search) finds it later.
+            cwd: process.cwd(),
             skipFacts,
             skipEntities,
             background: !wait,
-          });
+          }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
           if (data.queued) {
             results.queued.push(source.title);
             console.log('  Queued');
@@ -1828,6 +1928,13 @@ Usage:
       .join(', ') || '—';
 
     console.log(`Sigil Knowledge Base${data.namespace ? ` (${data.namespace})` : ''}`);
+    if (data.unavailable) {
+      // Counts are null, not zero — say we couldn't read the store rather than
+      // printing "0 facts", which reads as "your memory is gone".
+      console.log(`  Store unreadable: ${data.db?.error || 'database unavailable'}`);
+      if (data.writeQueue) console.log(`  (${data.writeQueue} write${data.writeQueue === 1 ? '' : 's'} in flight — the embedded engine has one connection; retry shortly)`);
+      return;
+    }
     console.log(`  Documents:  ${data.documents}`);
     console.log(`  Chunks:     ${data.chunks}`);
     console.log(`  Facts:      ${data.facts} active`);
@@ -1971,10 +2078,36 @@ async function runMaintain(args) {
 Usage:
   sigil maintain
 
+Options:
+  --route-pods   Re-file existing facts into the pods they are ABOUT, using
+                 entities already extracted (no LLM, no re-embedding). Run this
+                 once after upgrading; additive, never removes a membership.
+
 Promotes 'fresh' facts (older than 1h with importance=vital or any access) to 'stable',
 closes 'editing' windows older than 30 minutes back to 'stable', and consolidates
 co-retrieval edges. Safe to run as a cron — fully idempotent.`);
     process.exit(0);
+  }
+
+  if (args.includes('--route-pods')) {
+    // Routing writes membership rows, so it goes through the daemon (sole owner
+    // of the embedded DB) rather than opening the store here.
+    const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+    const client = await connectOrStartDaemon();
+    try {
+      const { data } = await client.call('pods.route', {}, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
+      if (data.bound) console.log(`Bound ${data.bound} pod${data.bound === 1 ? '' : 's'} to an entity.`);
+      console.log(`Routed ${data.scanned} fact${data.scanned === 1 ? '' : 's'} → +${data.attached} membership${data.attached === 1 ? '' : 's'} across ${data.pods.length} pod${data.pods.length === 1 ? '' : 's'}.`);
+      if (!data.attached && data.existing) {
+        console.log(`Already up to date — ${data.existing} subject membership${data.existing === 1 ? '' : 's'} already in place.`);
+      } else if (!data.attached) {
+        console.log('Nothing to route. A pod only collects facts mentioning the entity it is bound to —');
+        console.log('check `sigil pod list`; a project pod binds on first ingest from its directory.');
+      }
+    } finally {
+      await client.close();
+    }
+    return;
   }
 
   const cortexDb = (await import('./db/cortex.js')).default;

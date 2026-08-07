@@ -15,6 +15,8 @@ import { registerStatus } from './status.js';
 import { registerSearchEntity } from './search-entity.js';
 import { registerTraverseGraph } from './traverse-graph.js';
 import { registerGetFactContext } from './get-fact-context.js';
+import { registerGetDocument } from './get-document.js';
+import { registerRoutePods } from './route-pods.js';
 import { registerGetEntityContext } from './get-entity-context.js';
 import { registerGetPod } from './get-pod.js';
 import { registerListPods } from './list-pods.js';
@@ -50,6 +52,8 @@ export function registerAll(registry, { startedAt }) {
   registerTraverseGraph(registry);
   registerGetFactContext(registry);
   registerGetEntityContext(registry);
+  registerGetDocument(registry);
+  registerRoutePods(registry);
   registerGetPod(registry);
   registerListPods(registry);
   registerIngestDoc(registry);

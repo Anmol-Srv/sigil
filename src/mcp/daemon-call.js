@@ -57,18 +57,21 @@ function isTransportError(err) {
   return /^(daemon connection closed|client is closed)/i.test(err.message || '');
 }
 
-export async function daemonCall(method, params) {
+// `opts.timeoutMs` bounds THIS call only — the MCP server keeps one long-lived
+// connection for every tool, so a generous write budget must not also slow down
+// the detection of a hung read.
+export async function daemonCall(method, params, opts) {
   if (inProcessDispatch) return inProcessDispatch(method, params ?? {});
   const client = await getClient();
   try {
-    const { data } = await client.call(method, params ?? {});
+    const { data } = await client.call(method, params ?? {}, opts);
     return data;
   } catch (err) {
     if (isTransportError(err)) {
       cachedClient = null;
       clientPromise = null;
       const retryClient = await getClient();
-      const { data } = await retryClient.call(method, params ?? {});
+      const { data } = await retryClient.call(method, params ?? {}, opts);
       return data;
     }
     throw err;

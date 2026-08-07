@@ -29,6 +29,16 @@ import { readStdin } from './io.js';
 loadHookEnv();
 
 const MIN_QUERY_LENGTH = 8;
+// Prompts had a floor but no ceiling, so a pasted spec sailed straight into the
+// daemon — which rejects an oversized query outright, leaving recall empty and
+// the reason buried in .hook-errors.log. Bounded head+tail (see distillQuery)
+// because the ask sits at one end or the other; a plain head-truncate drops
+// "...so why does this fail?" off the end of a pasted log.
+const MAX_QUERY_CHARS = 4000;
+// Only prompts longer than this get distilled — a normal question is passed
+// through byte-for-byte, so the heuristics below can't hurt the common case.
+// Measured: dilution starts biting somewhere under 400 chars of pasted noise.
+const DISTILL_OVER_CHARS = 400;
 const MAX_FACTS = 20;
 const INJECTION_BUDGET_CHARS = 4800; // ~1200 tokens
 // Keep the whole connect+search comfortably under Claude's ~10s hook budget.
@@ -40,6 +50,54 @@ const CALL_TIMEOUT_MS = 8_000;
 const OVERALL_DEADLINE_MS = 9_000;
 
 const TIMEOUT = Symbol('timeout');
+
+// Lines that are PASTED MATERIAL rather than the user talking: fenced code,
+// stack frames, log lines, diffs, file:line refs, indented code. Deliberately
+// conservative — a false positive costs one line of query context, a false
+// negative costs the whole query's discriminative power.
+const PASTED_LINE = /^(\s{4,}|\t|[+-]{1,3}\s|@@|at\s+\S+[(:]|\S+:\d+:\d+|(ERROR|WARN|WARNING|DEBUG|TRACE|INFO|FATAL)\b)/i;
+
+/** Fraction of a line that is letters/spaces — code and logs score low. */
+function proseRatio(line) {
+  if (!line) return 0;
+  return (line.match(/[a-z\s]/gi) || []).length / line.length;
+}
+
+/**
+ * Reduce a prompt to the part the user actually WROTE, then bound it.
+ *
+ * Why this exists: the query is embedded as a single vector, and pasted
+ * material dominates it. Measured against a live store, prepending 400 chars of
+ * unrelated log noise collapsed the gap between an on-topic and an off-topic
+ * query from 0.214 to 0.018 cosine, and at 4000 chars to 0.000 — the vector
+ * stopped discriminating entirely, so the relevance floor (correctly) dropped
+ * everything and recall silently returned NOTHING. That is the whole "memory
+ * works sometimes" report: it worked on short prompts and died on any prompt
+ * with a paste in it. No LLM here on purpose — this hook fires on every prompt
+ * and must stay generation-free.
+ *
+ * ponytail: line-shape heuristics, not a parser. Only runs on long prompts, so
+ * a normal question is never touched; if it strips everything we keep the tail.
+ */
+export function distillQuery(prompt, max = MAX_QUERY_CHARS) {
+  let q = prompt;
+
+  if (q.length > DISTILL_OVER_CHARS) {
+    const prose = q
+      .replace(/```[\s\S]*?```/g, ' ')     // fenced blocks
+      .split('\n')
+      .filter((l) => l.trim() && !PASTED_LINE.test(l) && proseRatio(l) > 0.6)
+      .join('\n')
+      .trim();
+    // Keep the tail if distillation ate everything — the ask usually trails a
+    // paste ("<log>\n\nso why does this fail?").
+    q = prose.length >= MIN_QUERY_LENGTH ? prose : q.slice(-max).trim();
+  }
+
+  if (q.length <= max) return q;
+  const half = Math.floor(max / 2);
+  return `${q.slice(0, half)} … ${q.slice(-half)}`;
+}
 
 function withDeadline(ms, promise) {
   let timer;
@@ -55,7 +113,7 @@ async function searchViaDaemon(query, input) {
   try {
     client = await connectOrStartDaemon({ quiet: true, timeoutMs: CALL_TIMEOUT_MS });
     const { data } = await client.call('search', {
-      query,
+      query: distillQuery(query),
       limit: MAX_FACTS,
       useGraph: false,
       route: false,       // LLM-free auto-injection: no query-router generation
@@ -165,8 +223,12 @@ function respond(additionalContext) {
   process.stdout.write(JSON.stringify(output), () => process.exit(0));
 }
 
-main().catch((err) => {
-  // Last-resort guard: never block Claude. Best-effort log, empty response.
-  try { process.stderr.write(`[sigil:user-prompt-submit] fatal: ${maskSecrets(err?.message || String(err))}\n`); } catch { /* */ }
-  respond();
-});
+// Process entry only — the same guard worker-server.js uses, so a test can
+// import boundQuery without main() blocking on stdin.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((err) => {
+    // Last-resort guard: never block Claude. Best-effort log, empty response.
+    try { process.stderr.write(`[sigil:user-prompt-submit] fatal: ${maskSecrets(err?.message || String(err))}\n`); } catch { /* */ }
+    respond();
+  });
+}

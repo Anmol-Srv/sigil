@@ -22,7 +22,7 @@ import { safeWrite } from '../safe-write.js';
 import { detectInstalled } from './detect.js';
 import { writeSharedInstructions, SHARED_INSTRUCTIONS_PATH } from './instructions.js';
 import { writeSigilSkill, removeSigilSkill, SIGIL_SKILL_PATH } from './skill.js';
-import { HOOK_SHIM_PATH, writeLauncherShim } from './shim.js';
+import { HOOK_SHIM_PATH, LAUNCHER_SHIM_PATH, writeLauncherShim } from './shim.js';
 
 const CLAUDE_HOME = join(homedir(), '.claude');
 const CLAUDE_MD_PATH = join(CLAUDE_HOME, 'CLAUDE.md');
@@ -33,6 +33,44 @@ const meta = {
   label: 'Claude Code',
   hint: 'hooks + @import — full auto-injection',
 };
+
+// Recognise a hook command as ours, in any form we have ever written:
+//   - `'~/.sigil/bin/sigil-hook' stop`             the hook shim
+//   - `'~/.sigil/bin/sigil' preamble ...`          the CLI shim (SessionStart)
+//   - `node /abs/path/dist/hooks/stop.js`          legacy baked path
+// Matching on the stable ~/.sigil/bin/ prefix covers both shims; the filename
+// list keeps legacy installs recognisable across varying install paths.
+const SIGIL_HOOK_FILES = [
+  'user-prompt-submit.js',
+  'stop.js',
+  'post-tool-use.js',
+  'session-end.js',
+];
+function isSigilHook(cmd) {
+  return typeof cmd === 'string'
+    && (cmd.includes('.sigil/bin/')
+      || cmd.includes('sigil-hook')
+      || SIGIL_HOOK_FILES.some((fn) => cmd.endsWith(fn) || cmd.includes(`/${fn}`)));
+}
+
+/**
+ * Remove every Sigil hook entry from a settings.hooks map, in place, dropping
+ * events we emptied. Returns true if anything changed. Shared by mergeHooks
+ * (strip-then-readd) and uninstall so the two can never drift apart.
+ */
+function stripSigilHooks(hooks = {}) {
+  let touched = false;
+  for (const event of Object.keys(hooks)) {
+    const before = hooks[event];
+    if (!Array.isArray(before)) continue;
+    const after = before.filter((h) => !h.hooks?.some((inner) => isSigilHook(inner.command)));
+    if (after.length === before.length) continue;
+    touched = true;
+    if (after.length === 0) delete hooks[event];
+    else hooks[event] = after;
+  }
+  return touched;
+}
 
 async function detect() {
   return detectInstalled({ dirs: [CLAUDE_HOME], bins: ['claude'] });
@@ -102,6 +140,19 @@ async function mergeHooks({ dryRun = false } = {}) {
   const hook = (name) => `'${HOOK_SHIM_PATH}' ${name}`;
 
   const sigilHooks = {
+    // Runs the same engine as the `prime` MCP tool. Two jobs: it WARMS the
+    // daemon, the embedded DB and the embedding model before the first real
+    // prompt (a cold path was blowing the read hook's ~9s budget and injecting
+    // nothing), and it puts Sigil's health in the agent's context so a degraded
+    // brain reads as "SIGIL: degraded" instead of silently empty recall.
+    SessionStart: {
+      hooks: [{
+        type: 'command',
+        command: `'${LAUNCHER_SHIM_PATH}' preamble --format=lines`,
+        timeout: 10,
+        statusMessage: 'Priming memory...',
+      }],
+    },
     UserPromptSubmit: {
       hooks: [{
         type: 'command',
@@ -110,15 +161,11 @@ async function mergeHooks({ dryRun = false } = {}) {
         statusMessage: 'Searching memory...',
       }],
     },
-    PostToolUse: {
-      matcher: 'Edit|Write|Bash',
-      hooks: [{
-        type: 'command',
-        command: hook('post-tool-use'),
-        timeout: 10,
-        async: true,
-      }],
-    },
+    // NOTE: no PostToolUse entry. That hook has been a deliberate no-op since
+    // tool-activity facts were dropped (see post-tool-use.js) — registering it
+    // spawned a Node process on every Edit/Write/Bash purely to print `{}`, on
+    // the hottest path in the agent loop. Re-enabling the hook means re-adding
+    // an entry here. stripLegacyHooks() below removes it from existing installs.
     Stop: {
       hooks: [{
         type: 'command',
@@ -140,28 +187,13 @@ async function mergeHooks({ dryRun = false } = {}) {
   const existedBefore = existsSync(CLAUDE_SETTINGS_PATH);
   settings.hooks = settings.hooks || {};
 
-  // Recognise prior Sigil hooks so re-running init REPLACES them instead of
-  // appending a duplicate. Matches both forms:
-  //   - new: `'~/.sigil/bin/sigil-hook' stop`   (the stable shim)
-  //   - old: `node /abs/path/dist/hooks/stop.js` (legacy baked path)
-  // Filename matching is robust against varying install paths.
-  const SIGIL_HOOK_FILES = [
-    'user-prompt-submit.js',
-    'stop.js',
-    'post-tool-use.js',
-    'session-end.js',
-  ];
-  const isSigilHook = (cmd) =>
-    typeof cmd === 'string'
-    && (cmd.includes('sigil-hook')
-      || SIGIL_HOOK_FILES.some((fn) => cmd.endsWith(fn) || cmd.includes(`/${fn}`)));
-
+  // Strip EVERY Sigil hook from EVERY event first, then add back only what we
+  // register now. Sweeping all events (rather than just the ones we're about to
+  // write) is what lets a hook we've RETIRED — PostToolUse — actually disappear
+  // from an existing install instead of lingering forever.
+  stripSigilHooks(settings.hooks);
   for (const [event, entry] of Object.entries(sigilHooks)) {
-    const existing = settings.hooks[event] || [];
-    const filtered = existing.filter(
-      (h) => !h.hooks?.some((inner) => isSigilHook(inner.command)),
-    );
-    settings.hooks[event] = [...filtered, entry];
+    settings.hooks[event] = [...(settings.hooks[event] || []), entry];
   }
 
   if (!dryRun) await fs.mkdir(CLAUDE_HOME, { recursive: true });
@@ -171,7 +203,7 @@ async function mergeHooks({ dryRun = false } = {}) {
     action: result.action,
     path: CLAUDE_SETTINGS_PATH,
     detail: existedBefore
-      ? '+UserPromptSubmit, +PostToolUse, +Stop, +SessionEnd hooks (other settings preserved)'
+      ? `+${Object.keys(sigilHooks).join(', +')} hooks (other settings preserved)`
       : 'new settings.json with sigil hooks',
   };
 }
@@ -232,20 +264,17 @@ async function verify({ deep = false } = {}) {
     return { installed: false, reason: '~/.claude/settings.json is not valid JSON' };
   }
   const hooks = settings.hooks || {};
-  const HOOK_FILES = ['user-prompt-submit.js', 'post-tool-use.js', 'stop.js', 'session-end.js'];
-  const required = ['UserPromptSubmit', 'PostToolUse', 'Stop', 'SessionEnd'];
+  // PostToolUse is deliberately absent — it is no longer registered (see
+  // mergeHooks), so requiring it here would report every healthy install as
+  // drifted and send the user in a `sigil init` loop that never converges.
+  const required = ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd'];
 
-  // Find the command string registered for an event, if any. Recognises both
-  // the new shim form (`'~/.sigil/bin/sigil-hook' stop`) and the legacy
-  // `node /abs/.../stop.js` form.
+  // Find the command string registered for an event, if any. Recognises every
+  // form we've written (both shims + the legacy baked path) via isSigilHook.
   const findHookCommand = (event) => {
     for (const h of hooks[event] || []) {
       for (const inner of h.hooks || []) {
-        if (typeof inner.command === 'string'
-          && (inner.command.includes('sigil-hook')
-            || HOOK_FILES.some((fn) => inner.command.includes(fn)))) {
-          return inner.command;
-        }
+        if (isSigilHook(inner.command)) return inner.command;
       }
     }
     return null;
@@ -263,9 +292,14 @@ async function verify({ deep = false } = {}) {
   // safe at runtime). Legacy form: the .js script must exist.
   for (const event of required) {
     const cmd = findHookCommand(event);
-    if (cmd.includes('sigil-hook')) {
-      if (!existsSync(HOOK_SHIM_PATH)) {
-        return { installed: false, reason: `hook launcher missing: ${HOOK_SHIM_PATH} (run \`sigil init\`)` };
+    // Shim forms: the referenced shim must exist (it self-heals / fails safe at
+    // runtime). SessionStart runs the CLI shim, the rest run the hook shim.
+    const shim = cmd.includes('sigil-hook') ? HOOK_SHIM_PATH
+      : cmd.includes('.sigil/bin/') ? LAUNCHER_SHIM_PATH
+        : null;
+    if (shim) {
+      if (!existsSync(shim)) {
+        return { installed: false, reason: `hook launcher missing: ${shim} (run \`sigil init\`)` };
       }
       continue;
     }
@@ -326,23 +360,7 @@ async function uninstall({ dryRun = false } = {}) {
       actions.push({ action: 'skip', path: CLAUDE_SETTINGS_PATH, detail: 'invalid JSON — not touched' });
       return { actions };
     }
-    const SIGIL_HOOK_FILES = ['user-prompt-submit.js', 'stop.js', 'post-tool-use.js', 'session-end.js'];
-    const isSigilHook = (cmd) =>
-      typeof cmd === 'string'
-      && (cmd.includes('sigil-hook')
-        || SIGIL_HOOK_FILES.some((fn) => cmd.endsWith(fn) || cmd.includes(`/${fn}`)));
-
-    let touched = false;
-    for (const event of Object.keys(settings.hooks || {})) {
-      const before = settings.hooks[event];
-      const after = before.filter((h) => !h.hooks?.some((inner) => isSigilHook(inner.command)));
-      if (after.length !== before.length) {
-        touched = true;
-        if (after.length === 0) delete settings.hooks[event];
-        else settings.hooks[event] = after;
-      }
-    }
-    if (touched) {
+    if (stripSigilHooks(settings.hooks || {})) {
       const result = await safeWrite(CLAUDE_SETTINGS_PATH, JSON.stringify(settings, null, 2), { dryRun });
       actions.push({ action: result.action, path: CLAUDE_SETTINGS_PATH, detail: 'sigil hooks removed (other entries preserved)' });
     } else {

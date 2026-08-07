@@ -626,8 +626,10 @@ async function coreHybridSearch(query, { queryEmbedding: precomputed, namespaces
 
   const chunkPromises = includeChunks
     ? [
-        vectorSearch.searchChunks(queryEmbedding, { namespaces, limit }),
-        keywordSearch.searchChunks(query, { namespaces, limit }),
+        // podIds must reach chunk search too, or a scoped query would filter
+        // facts by pod while chunk text leaked in from every other project.
+        vectorSearch.searchChunks(queryEmbedding, { namespaces, limit, podIds }),
+        keywordSearch.searchChunks(query, { namespaces, limit, podIds }),
       ]
     : [];
 

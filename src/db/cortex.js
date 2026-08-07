@@ -33,7 +33,21 @@ function getPool() {
       // Don't hang forever when Postgres is down or saturated — fail fast so the
       // caller (hook/daemon) surfaces a clear error instead of blocking. tarn's
       // defaults are 30s; 10s is plenty for a local/cloud Postgres.
-      acquireTimeoutMillis: 10_000,
+      //
+      // Embedded is different, and 10s there was actively wrong. With max:1 the
+      // ingest pipeline holds the ONLY connection inside a transaction that
+      // spans LLM work (AUDM's decide-call), routinely for well over 10s. Every
+      // other consumer — llm_log, trace persist, the periodic checkpoint, pod
+      // resolution — then failed mid-ingest with "Knex: Timeout acquiring a
+      // connection. The pool is probably full", which reads like corruption but
+      // is just a queue that gave up too early. Waiting is the correct
+      // behaviour: contention here is structural and the holder always finishes.
+      // Server Postgres keeps the fast failure, where max:10 means a timeout
+      // really does signal trouble.
+      // ponytail: a longer wait, not a bigger pool — PGlite is one engine, so
+      // extra connections would serialize anyway. The durable fix is to hoist
+      // the LLM call out of the write transaction.
+      acquireTimeoutMillis: driver.kind === 'embedded' ? 120_000 : 10_000,
       createTimeoutMillis: 10_000,
       // Reap idle connections so a long-lived daemon doesn't pin backends.
       idleTimeoutMillis: 30_000,

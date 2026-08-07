@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { daemonCall } from '../daemon-call.js';
 import { textResponse } from '../utils.js';
 
+// Writes legitimately outlast a read budget (classify → extract → AUDM → link).
+const WRITE_RPC_TIMEOUT_MS = 10 * 60 * 1000;
+
 function registerIngestTool(server) {
   server.tool(
     'ingest',
@@ -16,17 +19,37 @@ Use when: adding documents to the knowledge base, ingesting files, URLs, or raw 
       title: z.string().optional().describe('Document title. Auto-detected if not provided.'),
       namespace: z.string().optional().describe('Namespace for the document. Defaults to config default.'),
       sourceType: z.string().optional().describe('Source type label (e.g., docs, code, notes). Auto-detected from format.'),
+      cwd: z.string().optional().describe('Working directory — attaches the document to that project\'s pod so it is findable from that project later. Pass the project you are working in.'),
       skipFacts: z.boolean().optional().default(false).describe('Skip fact extraction (faster, chunks only)'),
       skipEntities: z.boolean().optional().default(false).describe('Skip entity linking'),
     },
-    async ({ content, filePath, url, title, namespace, sourceType, skipFacts, skipEntities }) => {
-      const result = await daemonCall('ingestDoc', { content, filePath, url, title, namespace, sourceType, skipFacts, skipEntities });
+    async ({ content, filePath, url, title, namespace, sourceType, cwd, skipFacts, skipEntities }) => {
+      // Read the file HERE, not in the daemon. `ingestDoc` runs inside sigild,
+      // whose cwd is `/` — a relative path like ./NOTES.md resolved to /NOTES.md
+      // and failed, and the daemon's traversal guard (`startsWith(cwd)`) is
+      // vacuous when cwd is `/`. The MCP server runs in the client's context, so
+      // it is the right place to resolve a path the client gave us. Matches what
+      // `sigil ingest` already does CLI-side.
+      let payload = { content, filePath, url };
+      if (filePath) {
+        const { readSource } = await import('../../ingestion/sources/file.js');
+        const { resolve } = await import('node:path');
+        const src = await readSource(resolve(cwd || process.cwd(), filePath));
+        payload = { content: src.content, sourcePath: src.sourcePath };
+        title = title || src.title;
+        sourceType = sourceType || src.sourceType;
+      }
+
+      // Ingest runs the full LLM chain; the 30s read default would report failure
+      // on a write the daemon is still completing.
+      const result = await daemonCall('ingestDoc', { ...payload, title, namespace, sourceType, cwd, skipFacts, skipEntities }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
 
       const text = result.skipped
         ? `Document "${result.title}" already up to date — skipped.`
         : [
             `Document "${result.title}" ingested.`,
-            `- Document ID: ${result.documentId}`,
+            `- Document ID: ${result.documentUid || result.documentId} (read it back with get_document)`,
+            result.pods?.length ? `- Pods: ${result.pods.join(', ')}` : null,
             `- Chunks: ${result.chunkCount}`,
             result.facts ? `- Facts: ${result.facts.total} extracted (${result.facts.added} new, ${result.facts.skipped} skipped)` : '- Facts: skipped',
             result.entities ? `- Entities: ${result.entities.entityCount}, Relations: ${result.entities.relationCount}` : '- Entities: skipped',

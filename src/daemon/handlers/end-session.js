@@ -9,6 +9,8 @@
  * doesn't match the session that stopped, it's a no-op (the `sigil maintain`
  * staleness sweep closes any pod older than 6h as a backstop).
  */
+import { withWriteLock } from '../write-queue.js';
+
 const MIN_FACTS_TO_SYNTHESIZE = 3;
 const MAX_FACTS_IN_PROMPT = 40;
 
@@ -104,11 +106,13 @@ async function synthesizeSummary({ sessionPodUid, cwd, sessionId, transcriptPath
   const { ingestDocument } = await import('../../ingestion/pipeline.js');
   const { default: config } = await import('../../config.js');
 
-  await ingestDocument({
+  // Write lock: SessionEnd can land while the last turn's Stop-hook ingest is
+  // still running, and two writers on PGlite's single connection starve.
+  await withWriteLock(() => ingestDocument({
     content: summary,
     namespace: config.defaults.namespace,
     classify: false,
     podUids,
-  });
+  }));
   return true;
 }

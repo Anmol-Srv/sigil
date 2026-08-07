@@ -63,29 +63,50 @@ async function detect() {
 // one under `delegation:`) — so we lock onto the `memory:` block by
 // remembering when we saw the `memory:` header and stopping at the next
 // top-level key.
+// Returns { content, outcome } where outcome is one of:
+//   'unchanged' — a `provider:` line already holds the wanted value
+//   'replaced'  — an existing `provider:` line was rewritten
+//   'inserted'  — the memory: block had NO provider key, so we added one
+//   'no-block'  — there is no top-level `memory:` block to edit
+//
+// The 'inserted' case is why this reports an outcome instead of a boolean.
+// Hermes ships a `memory:` block with no `provider:` key at all, and the old
+// boolean collapsed "already correct" and "nothing to edit" into the same
+// false — so install cheerfully reported "memory.provider already 'sigil'"
+// while writing nothing, and verify() then failed forever on a config
+// `sigil init` would never repair.
 function setMemoryProviderInYaml(content, value) {
   const lines = content.split('\n');
-  let inMemoryBlock = false;
-  let changed = false;
+  let memoryHeader = -1;
+  let blockEnd = -1;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Top-level key (no leading whitespace, ends with `:`)
-    if (/^[A-Za-z_][\w-]*:\s*$/.test(line) || /^[A-Za-z_][\w-]*:\s/.test(line)) {
-      inMemoryBlock = /^memory:\s*$/.test(line);
+    const isTopLevel = /^[A-Za-z_][\w-]*:\s*$/.test(line) || /^[A-Za-z_][\w-]*:\s/.test(line);
+    if (memoryHeader === -1) {
+      if (isTopLevel && /^memory:\s*$/.test(line)) memoryHeader = i;
       continue;
     }
-    if (!inMemoryBlock) continue;
-    // Indented `provider:` line — replace just the value.
+    // Inside the memory: block until the next top-level key.
+    if (isTopLevel) { blockEnd = i; break; }
     const m = line.match(/^(\s+provider:\s*)(['"]?)([^'"\n]*)\2(\s*(#.*)?)$/);
     if (m) {
       const [, prefix, , currentValue, trailing] = m;
-      if (currentValue === value) return { content, changed: false };
+      if (currentValue === value) return { content, outcome: 'unchanged' };
       lines[i] = `${prefix}'${value}'${trailing}`;
-      changed = true;
-      break;
+      return { content: lines.join('\n'), outcome: 'replaced' };
     }
   }
-  return { content: lines.join('\n'), changed };
+  if (memoryHeader === -1) return { content, outcome: 'no-block' };
+
+  // No provider key in the block — insert one directly under the header, using
+  // the block's own indentation so the file keeps its existing style.
+  if (blockEnd === -1) blockEnd = lines.length;
+  const indent = lines
+    .slice(memoryHeader + 1, blockEnd)
+    .find((l) => /^\s+\S/.test(l))
+    ?.match(/^\s+/)?.[0] ?? '  ';
+  lines.splice(memoryHeader + 1, 0, `${indent}provider: '${value}'`);
+  return { content: lines.join('\n'), outcome: 'inserted' };
 }
 
 async function copyPluginTree({ dryRun }) {
@@ -115,14 +136,24 @@ async function writeConfigProvider({ dryRun, value }) {
     return { action: 'skip', detail: 'config.yaml not present — set memory.provider manually' };
   }
   const before = await fs.readFile(HERMES_CONFIG_PATH, 'utf8');
-  const { content: after, changed } = setMemoryProviderInYaml(before, value);
-  if (!changed) {
+  const { content: after, outcome } = setMemoryProviderInYaml(before, value);
+  if (outcome === 'unchanged') {
     return { action: 'skip', detail: `memory.provider already '${value}'` };
+  }
+  if (outcome === 'no-block') {
+    // Say what's actually wrong. Claiming success here is what let a broken
+    // install look healthy through every re-run of `sigil init`.
+    return { action: 'skip', detail: 'no top-level `memory:` block in config.yaml — add one, then re-run' };
   }
   // safeWrite drops a .sigil.bak before overwriting — the config.yaml is ~14KB
   // of the user's own settings, so a backup is non-negotiable.
   await safeWrite(HERMES_CONFIG_PATH, after, { dryRun });
-  return { action: 'modify', detail: `memory.provider → '${value}'` };
+  return {
+    action: 'modify',
+    detail: outcome === 'inserted'
+      ? `memory.provider: '${value}' added to the memory: block`
+      : `memory.provider → '${value}'`,
+  };
 }
 
 async function install({ dryRun = false } = {}) {
@@ -164,8 +195,8 @@ async function uninstall({ dryRun = false } = {}) {
     const memoryBlock = memoryMatch ? memoryMatch[1] : '';
     const currentProvider = memoryBlock.match(/^\s+provider:\s*['"]?([^'"\n]*)['"]?/m)?.[1];
     if (currentProvider === 'sigil') {
-      const { content: after, changed } = setMemoryProviderInYaml(before, '');
-      if (changed) await safeWrite(HERMES_CONFIG_PATH, after, { dryRun });
+      const { content: after, outcome } = setMemoryProviderInYaml(before, '');
+      if (outcome === 'replaced') await safeWrite(HERMES_CONFIG_PATH, after, { dryRun });
       actions.push({ action: 'modify', path: HERMES_CONFIG_PATH, detail: "memory.provider → '' (sigil cleared)" });
     } else {
       actions.push({
