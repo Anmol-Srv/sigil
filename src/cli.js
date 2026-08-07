@@ -2078,10 +2078,34 @@ async function runMaintain(args) {
 Usage:
   sigil maintain
 
+Options:
+  --route-pods   Re-file existing facts into the pods they are ABOUT, using
+                 entities already extracted (no LLM, no re-embedding). Run this
+                 once after upgrading; additive, never removes a membership.
+
 Promotes 'fresh' facts (older than 1h with importance=vital or any access) to 'stable',
 closes 'editing' windows older than 30 minutes back to 'stable', and consolidates
 co-retrieval edges. Safe to run as a cron — fully idempotent.`);
     process.exit(0);
+  }
+
+  if (args.includes('--route-pods')) {
+    // Routing writes membership rows, so it goes through the daemon (sole owner
+    // of the embedded DB) rather than opening the store here.
+    const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+    const client = await connectOrStartDaemon();
+    try {
+      const { data } = await client.call('pods.route', {}, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
+      if (data.bound) console.log(`Bound ${data.bound} pod${data.bound === 1 ? '' : 's'} to an entity.`);
+      console.log(`Routed ${data.scanned} fact${data.scanned === 1 ? '' : 's'} → +${data.attached} membership${data.attached === 1 ? '' : 's'} across ${data.pods.length} pod${data.pods.length === 1 ? '' : 's'}.`);
+      if (!data.attached) {
+        console.log('Nothing to route. Pods only collect facts whose entities they are bound to —');
+        console.log('check `sigil pod list`, and note a pod binds on first ingest from its directory.');
+      }
+    } finally {
+      await client.close();
+    }
+    return;
   }
 
   const cortexDb = (await import('./db/cortex.js')).default;

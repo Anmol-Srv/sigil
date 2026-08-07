@@ -121,3 +121,72 @@ export async function bindPodToEntity({ podId, name, namespace, entityType = 'to
   await db('pod').where({ id: podId }).update({ entityId: entity.id });
   return entity.id;
 }
+
+/**
+ * Re-run subject routing over facts already in the store.
+ *
+ * Needed because routing is new: everything written before it exists carries
+ * provenance membership at best, and often none at all. Because the routers use
+ * only data already on disk (fact_entity + pod.entity_id), this is a pure SQL
+ * pass — no LLM, no re-embedding, no re-ingest. Additive by design: it only
+ * ADDS `contextual` memberships, never removes an existing one, so a bad run
+ * cannot lose an attachment.
+ *
+ * Batched so a large store doesn't hold the single embedded connection for the
+ * whole sweep (see src/daemon/write-queue.js for why that matters).
+ */
+/**
+ * Bind existing pods to entities matching their name.
+ *
+ * Pods created before subject routing existed carry no entity_id, and routing
+ * only considers pods that declare one — so without this pass the backfill has
+ * nothing to route TO and reports a confusing "0 routed" on a store full of
+ * perfectly routable facts. Only binds when an entity of that name ALREADY
+ * exists: inventing anchors for every historical pod would create junk
+ * entities, whereas a name the graph has actually seen is real evidence.
+ */
+export async function backfillPodEntityBindings({ db = cortexDb } = {}) {
+  const pods = await db('pod')
+    .whereNull('entity_id')
+    .andWhere({ status: 'active' })
+    .whereIn('pod_type', ['project', 'person'])
+    .select('id', 'name', 'namespace');
+
+  let bound = 0;
+  const { findByName } = await import('../entities/store.js');
+  for (const pod of pods) {
+    if (!pod.name) continue;
+    const entity = await findByName(pod.name, pod.namespace).catch(() => null);
+    if (!entity) continue;
+    await db('pod').where({ id: pod.id }).update({ entityId: entity.id });
+    bound += 1;
+  }
+  return { candidates: pods.length, bound };
+}
+
+export async function backfillSubjectRouting({ batchSize = 200, db = cortexDb } = {}) {
+  let lastId = 0;
+  let scanned = 0;
+  let attached = 0;
+  const pods = new Set();
+
+  for (;;) {
+    const rows = await db('fact')
+      .where('id', '>', lastId)
+      .andWhere({ status: 'active' })
+      .orderBy('id')
+      .limit(batchSize)
+      .select('id');
+    if (!rows.length) break;
+
+    const ids = rows.map((r) => r.id);
+    lastId = ids[ids.length - 1];
+    scanned += ids.length;
+
+    const res = await routeFactsToSubjectPods(ids, { db });
+    attached += res.attached;
+    res.pods.forEach((p) => pods.add(p));
+  }
+
+  return { scanned, attached, pods: [...pods] };
+}
