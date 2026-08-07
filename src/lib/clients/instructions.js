@@ -28,7 +28,7 @@ const SHARED_INSTRUCTIONS_PATH = join(SIGIL_HOME, 'CLAUDE.md');
 // top of the generated block; writeSharedInstructions() compares against it so
 // upgrades actually land (the old `includes('## Memory (Sigil)')` guard locked
 // the file forever after the first write).
-const INSTRUCTIONS_VERSION = 7;
+const INSTRUCTIONS_VERSION = 8;
 const VERSION_MARKER = `<!-- sigil-instructions:v${INSTRUCTIONS_VERSION} -->`;
 const CONTEXT_MARKER = '<!-- sigil-context -->';
 
@@ -117,6 +117,28 @@ When you do save, batch facts into ONE call (separate quoted arguments), use \`-
 ! ${cmd} remember --bg "User prefers tabs over spaces" "Project uses Postgres 15"
 \`\`\`
 
+### Scope — facts land in the project you're in
+
+Saves attach to the current project automatically (Sigil derives it from the working
+directory), so what you learn here resurfaces here and doesn't leak into unrelated
+projects. Two cases need you to be explicit:
+
+- **The fact is about a DIFFERENT project than the one you're in:**
+
+\`\`\`
+! ${cmd} remember --pod=srver "F0 boots via direct kernel boot + virtio-blk"
+\`\`\`
+
+  Without \`--pod\`, a fact about srver typed while you're in another repo is filed
+  under that repo, and you won't find it when you return to srver.
+
+- **The fact is about the USER, not any project** — a preference, a convention, how
+  they like to work. Save it normally; Sigil keeps personal facts unscoped so they
+  follow the user everywhere. Don't force those into a pod.
+
+Sigil also files a fact into any project it clearly mentions, so naming the project
+inside the fact itself usually does the right thing without a flag.
+
 ### Facts vs documents — \`remember\` is not the tool for a file
 
 \`remember\` takes ONE SHORT SELF-CONTAINED STATEMENT. It is not a place to put a
@@ -182,6 +204,14 @@ Rationalizations that are wrong:
 - Call **\`search\`** for anything specific the prime block didn't surface — "what did we decide about X", "how does Y work", a person or topic.
 - Call **\`remember\`** to save a durable FACT — one short, self-contained statement (a decision, preference, constraint, correction). There is no automatic save: if it's worth remembering and you don't save it, it's gone.
 - Call **\`ingest\`** to store a whole DOCUMENT — a markdown file, spec, notes, or session history. Pass \`cwd\` so it attaches to this project.
+
+### Scope — pass cwd so facts land in the right project
+Sigil segregates memory by project. Pass \`cwd\` on \`remember\` and \`ingest\` so what you
+save attaches to the project you're working in and resurfaces there. When a fact is
+about a DIFFERENT project than your cwd, pass \`pod\` with that project's name instead —
+otherwise it is filed under the wrong one and missing when you go looking for it.
+Facts about the USER (preferences, conventions, how they work) are kept unscoped
+automatically; don't pin those to a pod.
 
 ### Facts vs documents
 \`remember\` takes one short statement; it REFUSES document-shaped input, because a
