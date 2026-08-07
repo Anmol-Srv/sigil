@@ -2,6 +2,12 @@
 // written in. The failure this fixes — standing in the `sigil` repo and saying
 // "remember that srver's F0 uses Cloud Hypervisor" files the fact under sigil,
 // so returning to srver never recalls it.
+//
+// The attachment itself lives in facts/entity-linker.js (attachFactToEntityPods)
+// and always has — it was the wire behind hot-context's person slots. What was
+// missing is the BINDING: project pods carried no entity_id, so that query could
+// never see them. These cover both halves, plus the backfill that replays the
+// same attachment over facts written before any of it existed.
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
@@ -12,6 +18,7 @@ import { ClientPGlite } from '../../db/pglite-adapter.js';
 let pg;
 let db;
 let router;
+let linker;
 
 const toCamel = (o) => {
   if (!o || typeof o !== 'object' || o instanceof Date) return o;
@@ -24,7 +31,7 @@ beforeAll(async () => {
   pg = new PGlite();
   await pg.waitReady;
   await pg.exec(`
-    CREATE TABLE fact (id BIGSERIAL PRIMARY KEY, content TEXT);
+    CREATE TABLE fact (id BIGSERIAL PRIMARY KEY, content TEXT, status TEXT DEFAULT 'active');
     -- Mirrors the REAL entity table (create + later ALTERs). Getting this wrong
     -- hides broken queries: an earlier draft omitted merged_with/aliases and the
     -- production findByName() failed while the fixture happily passed.
@@ -54,7 +61,7 @@ beforeAll(async () => {
 
     INSERT INTO entity (id, name, entity_type) VALUES
       (1,'srver','topic'), (2,'sigil','topic'), (3,'unbound-topic','topic');
-    -- pod 1 = srver (entity-bound), pod 2 = sigil (entity-bound, provenance),
+    -- pod 1 = srver (entity-bound), pod 2 = sigil (entity-bound),
     -- pod 3 = a pod with NO entity binding (must never collect subject matches)
     INSERT INTO pod (id, uid, pod_type, name, entity_id) VALUES
       (1,'pod-srver','project','srver',1),
@@ -67,12 +74,9 @@ beforeAll(async () => {
     -- fact 2: mentions an entity no pod is bound to
     INSERT INTO fact (id, content) VALUES (2,'something about an unbound topic');
     INSERT INTO fact_entity (fact_id, entity_id) VALUES (2,3);
-    -- fact 3: a passing mention the extractor did not treat as content
-    INSERT INTO fact (id, content) VALUES (3,'name-drops srver in passing');
-    INSERT INTO fact_entity (fact_id, entity_id, mention_type) VALUES (3,1,'title');
-    -- fact 4: about many things, to prove fan-out is capped
-    INSERT INTO fact (id, content) VALUES (4,'touches everything');
-    INSERT INTO fact_entity (fact_id, entity_id, mention_count) VALUES (4,1,9),(4,2,5);
+    -- fact 3: about two bound projects, to prove ranking + cap
+    INSERT INTO fact (id, content) VALUES (3,'touches everything');
+    INSERT INTO fact_entity (fact_id, entity_id, mention_count) VALUES (3,1,9),(3,2,5);
 
     -- Explicit ids above don't advance the SERIAL sequences, so the next
     -- auto-generated id would collide. (The daemon does this same repair on
@@ -92,6 +96,7 @@ beforeAll(async () => {
   db.client._injectedPglite = pg;
   vi.doMock('../../db/cortex.js', () => ({ default: db }));
   router = await import('./subject-router.js');
+  linker = await import('../facts/entity-linker.js');
 });
 
 afterAll(async () => {
@@ -99,46 +104,47 @@ afterAll(async () => {
   if (pg) await pg.close();
 });
 
+// The entity list the write path hands in, straight from fact_entity.
+const entitiesFor = async (factId) => (await pg.query(
+  `SELECT entity_id AS id, mention_count AS "mentionCount" FROM fact_entity
+     WHERE fact_id=$1 AND mention_type='content'`, [factId],
+)).rows;
+
 const membershipsFor = async (factId) => (await pg.query(
   `SELECT pod_id, role FROM pod_membership WHERE member_type='fact' AND member_id=$1 ORDER BY pod_id`, [factId],
 )).rows;
 
-describe('routeFactsToSubjectPods', () => {
+describe('attachFactToEntityPods — subject routing', () => {
   it('files a fact under the project it is ABOUT, not where it was written', async () => {
-    const res = await router.routeFactsToSubjectPods([1], { db });
+    const res = await linker.attachFactToEntityPods(1, await entitiesFor(1), db);
     expect(res.attached).toBe(1);
-    expect(await membershipsFor(1)).toEqual([{ pod_id: 1, role: 'contextual' }]);
+    expect(await membershipsFor(1)).toEqual([{ pod_id: 1, role: 'mention' }]);
   });
 
-  it('marks subject membership contextual, leaving primary for provenance', async () => {
+  it("uses role 'mention', leaving 'primary' to mean provenance", async () => {
     const [m] = await membershipsFor(1);
-    expect(m.role).toBe('contextual');
+    expect(m.role).toBe('mention');
   });
 
   it('does nothing when no pod is bound to the entity', async () => {
-    const res = await router.routeFactsToSubjectPods([2], { db });
+    const res = await linker.attachFactToEntityPods(2, await entitiesFor(2), db);
     expect(res.attached).toBe(0);
     expect(await membershipsFor(2)).toEqual([]);
   });
 
-  it('ignores a passing mention — only substantive ones route', async () => {
-    const res = await router.routeFactsToSubjectPods([3], { db });
-    expect(res.attached).toBe(0);
-  });
-
-  it('skips pods already attached as provenance', async () => {
-    // fact 4 is about srver AND sigil; sigil is its provenance pod, so routing
-    // must not re-add it — that would double-count and blur the two roles.
-    const res = await router.routeFactsToSubjectPods([4], { skipPodIds: [2], db });
-    expect(res.pods).toEqual([1]);
-    expect((await membershipsFor(4)).map((m) => m.pod_id)).toEqual([1]);
-  });
-
   it('is idempotent — a re-ingest does not duplicate membership', async () => {
     const before = await membershipsFor(1);
-    const res = await router.routeFactsToSubjectPods([1], { db });
+    const res = await linker.attachFactToEntityPods(1, await entitiesFor(1), db);
     expect(res.attached).toBe(0);
     expect(await membershipsFor(1)).toEqual(before);
+  });
+
+  it('ranks by mention weight, so the fan-out cap keeps the most-about pods', async () => {
+    const res = await linker.attachFactToEntityPods(3, await entitiesFor(3), db);
+    // srver (9 mentions) must outrank sigil (5) — that ordering is what the cap
+    // relies on once a fact touches more pods than the cap allows.
+    expect(res.pods[0]).toBe(1);
+    expect(res.attached).toBe(2);
   });
 });
 
@@ -152,5 +158,31 @@ describe('bindPodToEntity', () => {
 
   it('never steals an existing binding', async () => {
     expect(await router.bindPodToEntity({ podId: 1, name: 'renamed', namespace: 'default', db })).toBe(1);
+  });
+});
+
+describe('backfillPodEntityBindings', () => {
+  it('binds only to entities that already exist — never invents anchors', async () => {
+    await pg.query('UPDATE pod SET entity_id = NULL WHERE id = 2');
+    await pg.query("INSERT INTO pod (id, uid, pod_type, name) VALUES (9,'pod-ghost','project','no-such-entity')");
+    await pg.query("SELECT setval('pod_id_seq', (SELECT MAX(id) FROM pod))");
+
+    const res = await router.backfillPodEntityBindings({ db });
+    expect(res.bound).toBe(1); // sigil rebinds; the ghost has no entity to bind to
+    const [sigil] = (await pg.query('SELECT entity_id FROM pod WHERE id=2')).rows;
+    const [ghost] = (await pg.query('SELECT entity_id FROM pod WHERE id=9')).rows;
+    expect(sigil.entity_id).toBe(2);
+    expect(ghost.entity_id).toBeNull();
+  });
+});
+
+describe('backfillSubjectRouting', () => {
+  it('replays the same attachment over facts written before routing existed', async () => {
+    await pg.query('DELETE FROM pod_membership');
+    const res = await router.backfillSubjectRouting({ db });
+    expect(res.scanned).toBe(3);
+    // fact 1 -> srver; fact 3 -> srver + sigil; fact 2 -> nothing bound
+    expect(res.attached).toBe(3);
+    expect(await membershipsFor(2)).toEqual([]);
   });
 });

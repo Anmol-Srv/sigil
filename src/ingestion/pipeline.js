@@ -183,17 +183,6 @@ async function ingestDocument({
           ns,
           entities,
         );
-        // Subject routing on the thought path too — `remember` takes this
-        // route, and an explicitly-saved fact is exactly the one most likely to
-        // be about a project other than the one you're standing in.
-        const { routeFactsToSubjectPods } = await import('../memory/pods/subject-router.js');
-        const routed = await routeFactsToSubjectPods(
-          thoughtResult.results.map((r) => r.fact?.id ?? r.existing?.id).filter(Boolean),
-          { skipPodIds: podAttachments.map((a) => a.podId) },
-        );
-        if (routed.attached) {
-          process.stderr.write(`[thought] subject routing: +${routed.attached} membership(s)` + "\n");
-        }
       } catch (err) {
         process.stderr.write(`[thought] entity linking failed (facts preserved): ${err.message}` + "\n");
       }
@@ -295,22 +284,6 @@ async function ingestDocument({
         }, factResult.results, ns, entities);
         process.stderr.write(`  ${entityResult.entityCount} entities, ${entityResult.relationCount} relations` + "\n");
 
-        // Subject routing: now that facts are linked to entities, attach them
-        // to any pod bound to one of those entities. This is the "what it is
-        // about" axis — provenance above put them in the pod they were WRITTEN
-        // in; this puts them in the pod they're about. Runs after commit so a
-        // routing failure can't roll back facts, and outside the write
-        // transaction so it doesn't extend the single-connection hold.
-        const { routeFactsToSubjectPods } = await import('../memory/pods/subject-router.js');
-        const routedIds = factResult.results
-          .map((r) => r.fact?.id ?? r.existing?.id)
-          .filter(Boolean);
-        const routed = await routeFactsToSubjectPods(routedIds, {
-          skipPodIds: podAttachments.map((a) => a.podId),
-        });
-        if (routed.attached) {
-          process.stderr.write(`  subject routing: +${routed.attached} membership(s) across ${routed.pods.length} pod(s)` + "\n");
-        }
       } catch (err) {
         process.stderr.write(`  [5/6] entity linking failed (facts preserved): ${err.message}` + "\n");
       }

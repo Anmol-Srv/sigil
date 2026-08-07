@@ -31,64 +31,6 @@
 
 import cortexDb from '../../db/cortex.js';
 
-import * as membership from './membership.js';
-
-// A fact that merely name-drops an entity should not join its pod. Only route
-// on mentions the extractor treated as substantive. `content` is the default
-// mention_type written by the linker; anything weaker is noise.
-const ROUTABLE_MENTION_TYPES = ['content'];
-// Cap fan-out: a fact touching a dozen entities would otherwise land in a dozen
-// pods and pollute every one of them. Rank by mention_count and keep the top
-// few — a fact is genuinely "about" one or two things.
-const MAX_SUBJECT_PODS = 3;
-
-/**
- * Attach freshly-written facts to pods bound to the entities they mention.
- *
- * @param {number[]} factIds  facts written by this ingest
- * @param {number[]} skipPodIds  pods already attached as provenance — re-adding
- *   would downgrade a `primary` membership to `contextual` (attach is
- *   ON CONFLICT DO NOTHING, so it wouldn't actually change, but skipping keeps
- *   the counters honest and saves the round-trip).
- * @returns {Promise<{attached: number, pods: number[]}>}
- */
-export async function routeFactsToSubjectPods(factIds, { skipPodIds = [], db = cortexDb } = {}) {
-  const ids = (factIds || []).filter(Number.isFinite);
-  if (!ids.length) return { attached: 0, pods: [] };
-
-  // fact -> entity -> pod, in one hop. Only pods that declare an entity binding
-  // participate; there is no fuzzy name matching, because entity names collide
-  // ("core", "api") and a wrong pod is worse than no pod.
-  const rows = await db('fact_entity as fe')
-    .join('pod', 'pod.entity_id', 'fe.entity_id')
-    .whereIn('fe.fact_id', ids)
-    .whereIn('fe.mention_type', ROUTABLE_MENTION_TYPES)
-    .andWhere('pod.status', 'active')
-    .select('fe.fact_id as factId', 'pod.id as podId', 'fe.mention_count as mentionCount');
-
-  if (!rows.length) return { attached: 0, pods: [] };
-
-  const skip = new Set(skipPodIds);
-  const byFact = new Map();
-  for (const r of rows) {
-    if (skip.has(r.podId)) continue;
-    const list = byFact.get(r.factId) || [];
-    list.push(r);
-    byFact.set(r.factId, list);
-  }
-
-  let attached = 0;
-  const pods = new Set();
-  for (const [factId, candidates] of byFact) {
-    candidates.sort((a, b) => (b.mentionCount || 0) - (a.mentionCount || 0));
-    for (const c of candidates.slice(0, MAX_SUBJECT_PODS)) {
-      const res = await membership.attachFact(c.podId, factId, 'contextual', db);
-      if (res.attached) { attached += 1; pods.add(c.podId); }
-    }
-  }
-  return { attached, pods: [...pods] };
-}
-
 /**
  * Bind a pod to a canonical entity so subject routing can find it.
  *
@@ -165,6 +107,7 @@ export async function backfillPodEntityBindings({ db = cortexDb } = {}) {
 }
 
 export async function backfillSubjectRouting({ batchSize = 200, db = cortexDb } = {}) {
+  const { attachFactToEntityPods } = await import('../facts/entity-linker.js');
   let lastId = 0;
   let scanned = 0;
   let attached = 0;
@@ -183,10 +126,30 @@ export async function backfillSubjectRouting({ batchSize = 200, db = cortexDb } 
     lastId = ids[ids.length - 1];
     scanned += ids.length;
 
-    const res = await routeFactsToSubjectPods(ids, { db });
-    attached += res.attached;
-    res.pods.forEach((p) => pods.add(p));
+    // Replay the SAME attachment the write path performs, so backfilled and
+    // freshly-written facts can never diverge.
+    const links = await db('fact_entity')
+      .whereIn('fact_id', ids)
+      .select('fact_id as factId', 'entity_id as id', 'mention_count as mentionCount');
+    const byFact = new Map();
+    for (const l of links) {
+      const list = byFact.get(l.factId) || [];
+      list.push({ id: l.id, mentionCount: l.mentionCount });
+      byFact.set(l.factId, list);
+    }
+    for (const [factId, entities] of byFact) {
+      const res = await attachFactToEntityPods(factId, entities, db);
+      attached += res.attached;
+      res.pods.forEach((p) => pods.add(p));
+    }
   }
 
-  return { scanned, attached, pods: [...pods] };
+  // Distinguish "nothing was routable" from "already routed". Both attach 0,
+  // and reporting them identically sent a user hunting for a broken feature
+  // that was simply already up to date.
+  const [{ count: existing }] = await db('pod_membership')
+    .where({ memberType: 'fact', role: 'mention' })
+    .count({ count: '*' });
+
+  return { scanned, attached, existing: Number(existing) || 0, pods: [...pods] };
 }

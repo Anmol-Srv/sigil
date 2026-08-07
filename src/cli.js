@@ -2098,9 +2098,11 @@ co-retrieval edges. Safe to run as a cron — fully idempotent.`);
       const { data } = await client.call('pods.route', {}, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
       if (data.bound) console.log(`Bound ${data.bound} pod${data.bound === 1 ? '' : 's'} to an entity.`);
       console.log(`Routed ${data.scanned} fact${data.scanned === 1 ? '' : 's'} → +${data.attached} membership${data.attached === 1 ? '' : 's'} across ${data.pods.length} pod${data.pods.length === 1 ? '' : 's'}.`);
-      if (!data.attached) {
-        console.log('Nothing to route. Pods only collect facts whose entities they are bound to —');
-        console.log('check `sigil pod list`, and note a pod binds on first ingest from its directory.');
+      if (!data.attached && data.existing) {
+        console.log(`Already up to date — ${data.existing} subject membership${data.existing === 1 ? '' : 's'} already in place.`);
+      } else if (!data.attached) {
+        console.log('Nothing to route. A pod only collects facts mentioning the entity it is bound to —');
+        console.log('check `sigil pod list`; a project pod binds on first ingest from its directory.');
       }
     } finally {
       await client.close();
