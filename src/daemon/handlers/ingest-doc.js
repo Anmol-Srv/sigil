@@ -20,42 +20,35 @@
 import { withWriteLock } from '../write-queue.js';
 
 /**
- * Which pods should this document attach to?
+ * Which pod should this document attach to?
  *
- * Same scoping rule search uses (`podScope: 'auto'` over cwd + sessionId), so
- * "documents for this project" and "facts for this project" resolve to the same
- * pods — that is what makes a project's docs findable later. The project pod is
- * ENSURED rather than merely looked up: ingesting a doc from a repo is exactly
- * the moment that repo becomes worth remembering, and resolveActiveScope only
- * finds pre-existing pods. Explicit podUids win and skip resolution entirely.
+ * One owner, and the project wins — the same rule facts follow, via the shared
+ * dispatcher. Documents and the facts extracted from them must land in the SAME
+ * pod, or `sigil docs` in a project would list documents whose facts live
+ * somewhere else.
+ *
+ * This previously ensured the project pod and then unioned every active kind on
+ * top, so each ingest attached the document to the project AND the session pod —
+ * the duplication visible as a `claude_session …` pod mirroring the project's
+ * contents. Explicit podUids still win and skip resolution entirely.
  */
 async function resolveIngestPods({ podUids, cwd, sessionId, namespace }) {
   if (Array.isArray(podUids) && podUids.length) return podUids;
   if (!cwd && !sessionId) return [];
 
-  const uids = [];
-  if (cwd) {
-    try {
-      const { ensureProjectPod } = await import('../../memory/pods/kinds/project.js');
-      const pod = await ensureProjectPod({ cwd, namespace: namespace || null });
-      if (pod?.uid) uids.push(pod.uid);
-    } catch { /* no project pod (e.g. cwd outside any repo) — keep going */ }
-  }
-
   try {
-    // Side-effect import — activeKinds() over an unpopulated registry silently
-    // returns [], which would attach the document to nothing.
-    await import('../../memory/pods/kinds/index.js');
-    const { activeKinds } = await import('../../memory/pods/registry.js');
-    const active = await activeKinds({ cwd, sessionId, namespace: namespace || null });
-    for (const a of active) {
-      for (const uid of a.scope || []) {
-        if (typeof uid === 'string' && !uid.startsWith('__virtual:') && !uids.includes(uid)) uids.push(uid);
-      }
-    }
-  } catch { /* pod registry unavailable — attach to whatever we already have */ }
-
-  return uids;
+    const { ensureActivePodsForHook } = await import('../../memory/pods/hook-dispatcher.js');
+    const { podUids: resolved } = await ensureActivePodsForHook({
+      sessionId: sessionId || null,
+      cwd: cwd || null,
+      namespace: namespace || null,
+    });
+    return resolved || [];
+  } catch {
+    // Pod resolution is an enhancement: an unattached document is still stored
+    // and still readable (scoped search treats no-pod as globally visible).
+    return [];
+  }
 }
 
 async function doIngest(params) {

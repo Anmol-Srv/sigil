@@ -57,7 +57,26 @@ export async function ensureActivePodsForHook({
     }
   }
 
-  const podUids = [sessionPod, projectPod].filter(Boolean).map((p) => p.uid);
+  // ONE owner, and the project wins.
+  //
+  // This used to return [sessionPod, projectPod] — both, flat, same role — so
+  // every save attached the same fact and the same document to two pods. The
+  // visible result: a `claude_session …` pod per session mirroring the project's
+  // contents, with the pod list double-counting everything (one fact showing as
+  // 1 fact in `mycohort-api` AND 1 fact in `claude-session 2026-08-08 09:35`).
+  // It also made "which pod owns this fact" unanswerable.
+  //
+  // The project is the durable scope — it's what you come back to next week —
+  // so it owns the write. The session pod stays as a session RECORD (cwd, model,
+  // transcript, for `sigil session show`) and only receives facts when there is
+  // no project to own them: an agent invoked outside any repo, where the session
+  // is genuinely the only meaningful scope.
+  //
+  // Nothing is lost at read time: hot-context blends kinds with content-level
+  // dedup, so the duplicate session copy was already being discarded there, and
+  // podScope:'auto' still unions every active kind.
+  const owner = projectPod || sessionPod;
+  const podUids = owner ? [owner.uid] : [];
 
   return { sessionPod, projectPod, podUids };
 }

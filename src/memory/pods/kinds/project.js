@@ -75,6 +75,15 @@ export async function ensureProjectPod({ cwd, namespace = null }) {
   const isGitRoot = rootPath !== cwd ? false : detectGitRoot(cwd) === cwd;
   const gitRoot = isGitRoot ? rootPath : detectGitRoot(cwd);
 
+  // A directory is not a project. deriveProjectRoot() falls back to the cwd when
+  // there's no git root, so running an agent from /tmp or $HOME used to mint a
+  // "project" pod named `tmp` — observed in a real store. Combined with the
+  // project-owns-the-write rule in hook-dispatcher.js, that would file facts
+  // under a junk pod instead of the session. Require a repo; without one, return
+  // null and let the caller fall back to the session pod (or to no pod at all,
+  // which scoped search now treats as globally visible).
+  if (!gitRoot) return null;
+
   const projectName = basename(rootPath) || rootPath;
   const { pod } = await podStore.upsertPod({
     podType: POD_TYPE,
