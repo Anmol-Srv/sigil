@@ -160,6 +160,26 @@ async function updateEntityTypes(entityId, newType) {
   }
 }
 
+/**
+ * Promote the PRIMARY `entityType` column, not just the multi-type list.
+ *
+ * updateEntityTypes only appends to `entityTypes`, while every lookup —
+ * getEntityCount, searchByName, the GUI's type filters — reads the single
+ * `entityType` column. So an entity can carry "person" in its type list and
+ * still be invisible to every person query, which is how a knowledge base ends
+ * up reporting zero people while its owner sits in the graph.
+ *
+ * Narrow by design: only the owner path calls this. General entities keep the
+ * append-only behaviour, where being both a topic and a person is fine and the
+ * first-seen type stays primary.
+ */
+async function setPrimaryEntityType(entityId, entityType) {
+  const entity = await findById(entityId);
+  if (!entity || entity.entityType === entityType) return entity;
+  await cortexDb('entity').where({ id: entityId }).update({ entityType });
+  return { ...entity, entityType };
+}
+
 async function getCanonicalEntity(entityId) {
   let entity = await findById(entityId);
 
@@ -179,6 +199,7 @@ export {
   incrementMentionCount,
   updateDescription,
   updateEntityTypes,
+  setPrimaryEntityType,
   getCanonicalEntity,
   listByType,
   getEntityCount,

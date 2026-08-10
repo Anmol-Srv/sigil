@@ -6,6 +6,7 @@ import config from '../../config.js';
 import { PROMPTS_DIR } from '../../lib/paths.js';
 import { escapeRegex } from '../../lib/text.js';
 import { resolveEntity, resolveEntityList } from './resolver.js';
+import { isSelfReference, resolveSelfEntity } from './self.js';
 import { createRelation } from './relations.js';
 
 const GRAPH_PROMPT = path.join(PROMPTS_DIR, 'graph-extraction.md');
@@ -67,6 +68,11 @@ const RELATION_SYNONYMS = [
   [/^(integrates with|connects to|talks to|communicates with|interfaces with)$/, 'INTEGRATES_WITH'],
   [/^(related to|associated with|linked to|connected with)$/, 'RELATED_TO'],
   [/^(stores|stored in|persists to|saves to|writes to)$/, 'STORES_IN'],
+  // Preference edges — the owner's opinions are the most common relation in a
+  // personal KB, and without these they fragment into PREFER/PREFERS/FAVORS.
+  [/^(prefers|prefer|favors|favours|likes|wants|opts for)$/, 'PREFERS'],
+  [/^(dislikes|dislike|avoids|avoid|hates|does not want|rejects)$/, 'DISLIKES'],
+  [/^(named|name is|is named|goes by|called)$/, 'NAMED'],
 ];
 
 function canonicalizeRelationType(rawPredicate) {
@@ -201,8 +207,14 @@ async function extractAndResolveGraph(factObjects, { namespace, today }) {
 
   const episodeText = factObjects.map((f) => f.content).filter(Boolean).join('\n');
 
+  // Self-references never become topics. The prompt emits the owner as `user`,
+  // and resolving that literally would mint a topic node called "user" sitting
+  // beside the real person. Strip them here and let resolveEndpoint bind them to
+  // the owner's own entity instead.
+  const named = graph.entities.filter((e) => !isSelfReference(e.name));
+
   // Resolve the extracted entities (two-pass rename-aware) into canonical nodes.
-  const entities = await resolveEntityList(graph.entities, { namespace, episodeText });
+  const entities = await resolveEntityList(named, { namespace, episodeText });
 
   if (!config.ingest.extractRelations || !graph.relationships.length) {
     return { entities, relationCount: 0 };
@@ -220,9 +232,29 @@ async function extractAndResolveGraph(factObjects, { namespace, today }) {
     }
   }
 
+  // The owner is resolved at most once per document, and only if a relationship
+  // actually references them — an ingest of pure technical facts shouldn't touch
+  // the person node at all.
+  let selfEntity;
+  const getSelf = async () => {
+    if (selfEntity === undefined) {
+      selfEntity = await resolveSelfEntity({ namespace, episodeText, episodeEntityIds: cohortIds });
+      if (selfEntity?.id) {
+        cohortIds.push(selfEntity.id);
+        byName.set(selfEntity.name.toLowerCase(), selfEntity);
+      }
+    }
+    return selfEntity;
+  };
+
   // Cohort hit → reuse. Miss → create only if grounded in fact text. New nodes
   // join the cohort so later relationships in the same document reuse them.
   const resolveEndpoint = async (name) => {
+    // Owner first, and deliberately ahead of the grounding check below: "Anmol"
+    // does not appear in "User prefers concise responses", so requiring the name
+    // verbatim is exactly what orphaned every preference fact.
+    if (isSelfReference(name)) return getSelf();
+
     const key = name.toLowerCase();
     const hit = byName.get(key);
     if (hit) return hit;

@@ -166,4 +166,73 @@ export function registerRepair(registry) {
       spool,
     };
   });
+
+  // repair.identity — reconnect the knowledge-base owner to their own facts.
+  //
+  // Stores created before the owner was a first-class entity have the pattern
+  // this heals: the owner sitting in the graph as a `topic` with a single fact
+  // ("User's name is Anmol"), while every preference about them — communication
+  // style, conventions, tooling — is an orphan topic linked to nothing. The
+  // extractor was told to skip generic terms, so "User" was never a subject.
+  //
+  // Deterministic on purpose: no LLM, no re-extraction. Re-running the graph
+  // extractor over an existing corpus costs one slow model call per fact batch
+  // and would rewrite edges that are already correct. Matching owner-subject
+  // facts and linking them is idempotent (fact_entity upserts), cheap, and
+  // reversible.
+  registry.register('repair.identity', async (params = {}) => {
+    const dryRun = Boolean(params.dryRun);
+    const { selfName, isOwnerFact, resolveSelfEntity } = await import('../../memory/entities/self.js');
+    const { linkEntitiesToFact, getEntitiesForFact } = await import('../../memory/facts/entity-linker.js');
+
+    const owner = selfName();
+    if (!owner) {
+      const err = new Error('No owner name configured — run `sigil init` and set your name first.');
+      err.code = 'no_identity';
+      throw err;
+    }
+
+    const namespace = params.namespace || config.defaults.namespace;
+    const facts = await cortexDb('fact')
+      .where({ namespace, status: 'active' })
+      .select('id', 'content');
+
+    const owned = facts.filter((f) => isOwnerFact(f.content));
+
+    if (dryRun) {
+      return {
+        dryRun: true, owner, namespace,
+        scanned: facts.length,
+        ownerFacts: owned.length,
+        samples: owned.slice(0, 10).map((f) => f.content),
+      };
+    }
+
+    // Resolving with entityType 'person' retypes an owner already stored as a
+    // topic in place — findByName is case-insensitive, so no duplicate node.
+    const self = await resolveSelfEntity({ namespace, episodeText: owned.map((f) => f.content).join('\n') });
+    if (!self) {
+      const err = new Error(`Could not resolve an entity for "${owner}".`);
+      err.code = 'resolve_failed';
+      throw err;
+    }
+
+    let linked = 0;
+    let alreadyLinked = 0;
+    for (const f of owned) {
+      const existing = await getEntitiesForFact(f.id);
+      if (existing.some((e) => e.id === self.id)) { alreadyLinked++; continue; }
+      await linkEntitiesToFact(f.id, [{ id: self.id }]);
+      linked++;
+    }
+
+    return {
+      dryRun: false, owner, namespace,
+      entity: { id: self.id, name: self.name, entityType: self.entityType },
+      scanned: facts.length,
+      ownerFacts: owned.length,
+      linked,
+      alreadyLinked,
+    };
+  });
 }
