@@ -9,6 +9,7 @@ const PROVIDERS = {
   anthropic: () => import('./providers/anthropic.js'),
   openrouter: () => import('./providers/openrouter.js'),
   'claude-cli': () => import('./providers/claude-cli.js'),
+  codex: () => import('./providers/codex.js'),
   ollama: () => import('./providers/ollama.js'),
   // Internal routing provider — selected by llm.js (not the init picker) when
   // SIGIL_MANAGED_SESSION=true and the resolved provider is claude-cli. Excluded

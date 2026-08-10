@@ -91,6 +91,16 @@ const config = {
     // see ~/.local/bin or the nvm bin dir where `claude` lives.
     get cliPath() { return store().llm.cliPath ?? ''; },
 
+    // Codex CLI (uses your Codex subscription). codexModel is null by default
+    // ON PURPOSE: codex already has a model in ~/.codex/config.toml, and
+    // duplicating it here would create two sources of truth that silently
+    // disagree. Null means "let codex decide"; a value passes `-m`.
+    get codexModel() { return llmModel('codex') || null; },
+    get codexPath() { return store().llm.codexPath ?? ''; },
+    // Escape hatch for codex's per-exec MCP loading (~9.9k tokens of tool
+    // definitions on every call). e.g. ['-c', 'model_reasoning_effort="low"'].
+    get codexExtraArgs() { return store().llm.codexExtraArgs ?? []; },
+
     // Anthropic
     get apiKey() { return llmKey('anthropic'); },
 

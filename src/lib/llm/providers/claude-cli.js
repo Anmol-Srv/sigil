@@ -1,60 +1,27 @@
-import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import config from '../../../config.js';
 import { estimateTokens } from '../log.js';
 import { createSemaphore } from '../concurrency-gate.js';
 import { SIGIL_HOME } from '../../paths.js';
+import { resolveCliBin } from './cli-bin.js';
 
-/**
- * Resolve the `claude` binary to an absolute path.
- *
- * The daemon is usually spawned by launchd/systemd with a stripped PATH
- * (/usr/bin:/bin:/usr/sbin:/sbin), so a bare `spawn('claude')` fails with
- * ENOENT even though `claude` is on the user's interactive PATH. We probe
- * the places it actually installs — most reliably the same bin dir as the
- * node running us (nvm/volta/global-npm put `claude` next to `node`) — and
- * fall back to the bare name so a PATH that *does* contain it still works.
- */
+// Resolution of the binary itself lives in cli-bin.js — the codex provider needs
+// the identical stripped-PATH dance, and this copy had been hardened by field
+// reports ("claude CLI not found" from a supervised daemon).
 let resolvedClaudePath = null;
 export function resolveClaudeBin() {
   if (resolvedClaudePath) return resolvedClaudePath;
-  if (config.llm.cliPath) return (resolvedClaudePath = config.llm.cliPath);
-  const home = homedir();
-  const candidates = [
-    join(dirname(process.execPath), 'claude'), // next to the node that runs us (nvm/volta/npm)
-    join(home, '.local', 'bin', 'claude'),
-    join(home, '.claude', 'local', 'claude'),
-    '/opt/homebrew/bin/claude',
-    '/usr/local/bin/claude',
-    '/usr/bin/claude',
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) return (resolvedClaudePath = p);
-  }
-  // Last resort before trusting a stripped PATH: ask the user's LOGIN shell
-  // where `claude` is. A login shell sources the profile (nvm, asdf, custom
-  // PATH), so this finds installs the fixed candidate list above misses —
-  // the common cause of "claude CLI not found" from a launchd/systemd daemon.
-  const viaShell = whichViaLoginShell('claude');
-  if (viaShell) return (resolvedClaudePath = viaShell);
-  return (resolvedClaudePath = 'claude'); // give up: trust PATH
+  return (resolvedClaudePath = resolveCliBin('claude', config.llm.cliPath, [
+    join(homedir(), '.claude', 'local', 'claude'),
+  ]));
 }
 
-/** Resolve a command via the user's login shell (sources their profile/PATH). */
-function whichViaLoginShell(cmd) {
-  const shell = process.env.SHELL || '/bin/sh';
-  try {
-    const r = spawnSync(shell, ['-lic', `command -v ${cmd}`], { encoding: 'utf8', timeout: 5000 });
-    const out = (r.stdout || '').trim().split('\n').pop().trim();
-    return out && existsSync(out) ? out : null;
-  } catch {
-    return null;
-  }
-}
-
+// Full model ids map DOWN to the CLI's stable aliases. The aliases are what we
+// pass: the CLI resolves them to the current version, so a pinned id can never
+// go stale here.
 const CLI_MODEL_MAP = {
   'claude-haiku-4-5-20251001': 'haiku',
   'claude-sonnet-4-6': 'sonnet',

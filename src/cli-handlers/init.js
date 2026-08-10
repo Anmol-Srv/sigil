@@ -54,6 +54,20 @@ async function execStep(clack, runStep, id, input, { start, ok }) {
 async function collectFields(clack, guard, fields) {
   const out = {};
   for (const f of fields) {
+    // A field with a known set of valid values is a pick, not a typing exercise.
+    // The LLM step uses this for model choice (claude-cli aliases, the locally
+    // installed Ollama models, curated OpenAI/Anthropic ids) — before it, the
+    // only way to set a model was to type an id from memory, and claude-cli had
+    // no field at all so it silently used its default forever.
+    if (f.type === 'select' && f.options?.length) {
+      const v = guard(await clack.select({
+        message: f.label,
+        options: f.options.map((o) => ({ value: o.value, label: o.label || o.value, hint: o.hint })),
+        initialValue: f.default || f.options[0].value,
+      }));
+      if (v) out[f.name] = v;
+      continue;
+    }
     const ask = f.type === 'password' ? clack.password : clack.text;
     const v = guard(await ask({
       message: f.label + (f.optional ? ' (optional)' : ''),

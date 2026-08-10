@@ -112,8 +112,21 @@ function fieldInputs(fields, sharedNote) {
   return note + fields.map((f) => `
     <label class="field">
       <span class="label">${esc(f.label)}${f.optional ? ' <span class="muted text-xs">(optional)</span>' : ''}</span>
-      <input type="${esc(f.type)}" data-setup-field="${esc(f.name)}"${f.optional ? ' data-optional="1"' : ''} placeholder="${esc(f.placeholder || '')}" autocomplete="off">
+      ${f.type === 'select' && f.options?.length ? selectInput(f) : `<input type="${esc(f.type)}" data-setup-field="${esc(f.name)}"${f.optional ? ' data-optional="1"' : ''} placeholder="${esc(f.placeholder || '')}" autocomplete="off">`}
     </label>`).join('');
+}
+
+// A picker for fields with a known value set (model choice). Pre-selects the
+// field's default so the form is valid on arrival and the required-gate below
+// — which only counts non-empty [data-setup-field] values — passes without the
+// user having to touch a control whose default was already correct.
+function selectInput(f) {
+  const opts = f.options.map((o) => {
+    const sel = (f.default || f.options[0].value) === o.value ? ' selected' : '';
+    const label = o.label || o.value;
+    return `<option value="${esc(o.value)}"${sel}>${esc(label)}${o.hint ? ` — ${esc(o.hint)}` : ''}</option>`;
+  }).join('');
+  return `<select data-setup-field="${esc(f.name)}"${f.optional ? ' data-optional="1"' : ''}>${opts}</select>`;
 }
 
 // Enable Continue only when every non-optional field has a value (so e.g. an
