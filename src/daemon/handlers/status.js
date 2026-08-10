@@ -44,7 +44,9 @@ export function registerStatus(registry) {
     } catch { /* holder unavailable outside daemon */ }
 
     // Provider health from the boot probe (cached — no live provider call per
-    // status poll). null until the daemon's boot probe completes.
+    // status poll). null until the daemon's boot probe completes. The getter
+    // re-probes in the background if config.json changed since, so a provider
+    // configured after boot doesn't stay "not configured" until the next restart.
     let providers = null;
     try {
       const { getProviderHealth } = await import('../registry-holder.js');
