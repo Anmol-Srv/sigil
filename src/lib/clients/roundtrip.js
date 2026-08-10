@@ -87,6 +87,14 @@ export async function verifyClaudeHookRoundTrip(hookCmd, { timeoutMs = 12000 } =
     const timer = setTimeout(() => finish({ ok: false, reason: `timed out after ${timeoutMs}ms` }), timeoutMs);
     timer.unref?.();
     child.on('error', (e) => finish({ ok: false, reason: `spawn failed: ${e.message}` }));
+    // A broken hook exits before it ever reads stdin, and writing to a pipe with
+    // no reader raises EPIPE *asynchronously* — the try/catch around the write
+    // below only ever sees synchronous throws. With no listener here Node
+    // escalates it to an unhandled stream error, which took down the whole
+    // vitest run (0 failing tests, exit 1) and blocked the release. The close
+    // handler already diagnoses the broken hook from its exit code, so there is
+    // nothing to report from the write itself.
+    child.stdin.on('error', () => { /* child gone; `close` reports the real reason */ });
     child.stdout.on('data', (d) => { out += d.toString(); });
     child.stderr.on('data', (d) => { errOut += d.toString(); });
     child.on('close', (code) => {
