@@ -61,25 +61,32 @@
       <div class="brand-badge" id="brand-badge">local</div>
     </div>
 
+    <!-- ⌘K entry point. The bar is the product: search memory, jump anywhere,
+         remember a fact. Keyboard-first, but discoverable as a control too. -->
+    <button class="cmdk-trigger" id="cmdk-trigger" type="button" data-icon="search">
+      <span class="cmdk-trigger-label">Search memory…</span>
+      <kbd>⌘K</kbd>
+    </button>
+
     <div class="side-status"><span class="conn-status" id="conn">connecting…</span></div>
 
     <nav aria-label="Primary">
       <div class="navgroup">
         <div class="navgroup-label">Memory</div>
-        <a href="#health"   data-route="health" class="active">Home</a>
-        <a href="#kb"       data-route="kb">Knowledge Base</a>
-        <a href="#graph"    data-route="graph">Graph</a>
-        <a href="#activity" data-route="activity">Activity</a>
+        <a href="#health"   data-route="health" data-icon="home"     class="active">Home</a>
+        <a href="#kb"       data-route="kb"     data-icon="layers">Knowledge Base</a>
+        <a href="#graph"    data-route="graph"  data-icon="graph">Graph</a>
+        <a href="#activity" data-route="activity" data-icon="activity">Activity</a>
       </div>
       <div class="navgroup">
         <div class="navgroup-label">Connections</div>
-        <a href="#agents"   data-route="agents">Agents</a>
-        <a href="#devices"  data-route="devices">Devices</a>
+        <a href="#agents"   data-route="agents"  data-icon="terminal">Agents</a>
+        <a href="#devices"  data-route="devices" data-icon="monitor">Devices</a>
       </div>
       <div class="navgroup">
         <div class="navgroup-label">System</div>
-        <a href="#engine"   data-route="engine">Engine</a>
-        <a href="#settings" data-route="settings">Settings</a>
+        <a href="#engine"   data-route="engine"   data-icon="cpu">Engine</a>
+        <a href="#settings" data-route="settings" data-icon="sliders">Settings</a>
       </div>
     </nav>
 
@@ -91,6 +98,12 @@
          the visible title). Gives every view a proper h1 for screen readers. -->
     <h1 class="sr-only" id="route-title">Home</h1>
 
+    <!-- ── System banner ──────────────────────────────────────────
+         Loud, on every page, whenever the store or a provider is down.
+         Design principle 1: no soft failures — a dead Postgres used to render
+         as "—" everywhere, which is indistinguishable from an empty memory. -->
+    <div id="sys-banner" class="sysbanner" role="status" hidden></div>
+
     <!-- ── Home ─────────────────────────────────────────────────── -->
     <section id="view-health" class="view active">
       <div class="section-head">
@@ -98,7 +111,10 @@
           <h2>Home</h2>
           <p>Your agents' memory at a glance — everything they've learned, on this machine, in your control.</p>
         </div>
-        <div class="actions"><button class="btn" id="home-refresh">Refresh</button></div>
+        <div class="actions">
+          <button class="btn" id="home-remember" data-icon="plus">Remember a fact</button>
+          <button class="btn" id="home-refresh" data-icon="refresh">Refresh</button>
+        </div>
       </div>
 
       <!-- stat strip — memory as the hero (real counts; recall computed from traces) -->
@@ -108,6 +124,10 @@
         <div class="stat"><span class="lbl">Relations</span><span class="val" id="hm-relations">—</span><span class="sub">graph edges</span></div>
         <div class="stat"><span class="lbl"><span class="hm-dot" id="hm-recall-dot"></span>Recall hit-rate</span><span class="val" id="hm-recall">—</span><span class="sub" id="hm-recall-sub">recent searches</span></div>
       </div>
+
+      <!-- system readout — the four things that decide whether memory works at
+           all. Each row is a live probe result, not a config echo. -->
+      <div class="sysrow" id="hm-sysrow" aria-label="System health"></div>
 
       <div class="home-cols">
         <!-- recall health -->
@@ -129,6 +149,15 @@
         </div>
       </div>
 
+      <!-- Most recalled — what memory is actually being used for. The one list
+           that answers "is it storing the right things?" -->
+      <div class="panel panel-pad home-hot">
+        <h3 class="home-h"><span class="home-h-ic" data-icon="zap"></span>Most recalled
+          <a href="#kb" data-route="kb" class="home-link">Browse all →</a></h3>
+        <p class="muted text-sm" style="margin:2px 0 var(--s-3)">Facts your agents pull most often. Each recall reinforces a fact's ranking — so a wrong one here is the first one worth correcting.</p>
+        <ul class="hotlist" id="hm-hot"><li class="muted text-sm">loading…</li></ul>
+      </div>
+
       <!-- diagnostics — the daemon plumbing, demoted out of the headline -->
       <details class="panel home-diag">
         <summary>Diagnostics — daemon process &amp; identity</summary>
@@ -141,9 +170,12 @@
       <div class="section-head">
         <div class="title-block">
           <h2>Knowledge Base</h2>
-          <p>Browse the facts, entities, and pods Sigil has stored. Select any row to inspect its provenance, links, and relations.</p>
+          <p>Browse the facts, entities, documents, and pods Sigil has stored. Select any row to inspect its provenance, links, and relations.</p>
         </div>
-        <div class="actions"><button class="btn" id="kb-refresh">Refresh</button></div>
+        <div class="actions">
+          <button class="btn" id="kb-remember" data-icon="plus">Remember a fact</button>
+          <button class="btn" id="kb-refresh" data-icon="refresh">Refresh</button>
+        </div>
       </div>
 
       <!-- counts strip -->
@@ -151,9 +183,10 @@
 
       <!-- section sub-nav -->
       <div class="kb-subnav" role="tablist" aria-label="Knowledge base sections">
-        <button class="kb-tab active" type="button" role="tab" data-kbtab="facts" aria-selected="true">Facts</button>
-        <button class="kb-tab" type="button" role="tab" data-kbtab="entities" aria-selected="false">Entities</button>
-        <button class="kb-tab" type="button" role="tab" data-kbtab="pods" aria-selected="false">Pods</button>
+        <button class="kb-tab active" type="button" role="tab" data-kbtab="facts" aria-selected="true" data-icon="zap">Facts</button>
+        <button class="kb-tab" type="button" role="tab" data-kbtab="entities" aria-selected="false" data-icon="graph">Entities</button>
+        <button class="kb-tab" type="button" role="tab" data-kbtab="documents" aria-selected="false" data-icon="doc">Documents</button>
+        <button class="kb-tab" type="button" role="tab" data-kbtab="pods" aria-selected="false" data-icon="layers">Pods</button>
       </div>
 
       <!-- FACTS -->
@@ -186,6 +219,22 @@
         </div>
       </div>
 
+      <!-- DOCUMENTS — the whole-document store. Ingested files/URLs keep their
+           full text; facts and chunks are derived from them. Until now this
+           layer existed only in the CLI (`sigil docs`). -->
+      <div class="kb-panel" id="kb-tab-documents" role="tabpanel" hidden>
+        <div class="kb-browser">
+          <div class="kb-list-col">
+            <div class="kb-toolbar">
+              <input class="input kb-search" id="kb-doc-search" type="search" placeholder="Filter documents by title or path…" aria-label="Filter documents" autocomplete="off">
+              <span class="kb-count" id="kb-doc-count"></span>
+            </div>
+            <div class="kb-list" id="kb-doc-list" role="listbox" aria-label="Documents"></div>
+          </div>
+          <div class="kb-detail" id="kb-doc-detail" aria-live="polite"></div>
+        </div>
+      </div>
+
       <!-- PODS -->
       <div class="kb-panel" id="kb-tab-pods" role="tabpanel" hidden>
         <div class="kb-list kb-pod-list" id="kb-pod-list"></div>
@@ -201,8 +250,8 @@
         </div>
         <div class="actions">
           <span class="graph-meta" id="graph-meta"></span>
-          <button class="btn" id="graph-relayout" title="Re-run the layout">Re-run layout</button>
-          <button class="btn" id="graph-refresh">Refresh</button>
+          <button class="btn" id="graph-relayout" title="Re-run the layout" data-icon="pulse">Re-run layout</button>
+          <button class="btn" id="graph-refresh" data-icon="refresh">Refresh</button>
         </div>
       </div>
 
@@ -231,7 +280,7 @@
           <h2>Agents</h2>
           <p>One shared memory across every AI coding tool on this machine. Connect a tool and Sigil writes a small, reversible hook so it reads and writes the same brain.</p>
         </div>
-        <div class="actions"><button class="btn" id="agents-refresh">Refresh</button></div>
+        <div class="actions"><button class="btn" id="agents-refresh" data-icon="refresh">Refresh</button></div>
       </div>
 
       <div class="connector-grid" id="agents-connectors"><div class="muted">detecting installed tools…</div></div>
@@ -254,8 +303,8 @@
           <p>Other Sigil installs paired with this one. Identity is an Ed25519 NodeID — revoke locks a device out without losing the data it wrote.</p>
         </div>
         <div class="actions">
-          <button class="btn" id="dev-refresh">Refresh</button>
-          <button class="btn primary" id="dev-new">+ Add device</button>
+          <button class="btn" id="dev-refresh" data-icon="refresh">Refresh</button>
+          <button class="btn primary" id="dev-new" data-icon="plus">Add device</button>
         </div>
       </div>
 
@@ -295,8 +344,8 @@
           <p>Complete causal log. Every search records its routing decision, matched entity, and per-fact scores — cosine similarity, RRF fusion, ACT-R activation (recency + frequency decay), and final ranking. Every ingest records classification, per-fact AUDM verdicts with the similarity that drove them, and entity links. Persisted and replayable.</p>
         </div>
         <div class="actions">
-          <button class="btn" id="trace-refresh">Refresh</button>
-          <button class="btn danger" id="trace-clear">Clear log</button>
+          <button class="btn" id="trace-refresh" data-icon="refresh">Refresh</button>
+          <button class="btn danger" id="trace-clear" data-icon="trash">Clear log</button>
           <span class="conn-status" id="activity-status">disconnected</span>
         </div>
       </div>
@@ -331,7 +380,7 @@
           <p>The LLM core. When the managed-session engine is on, Sigil keeps warm <code>claude</code> workers alive in tmux (one <code>sigil-&lt;worker&gt;</code> session each) to amortize agentic cold-starts across ingest + expansion calls. When off, every call uses the one-shot <code>claude -p</code> path. Live worker state below; per-task dispatch/result/fallback events stream into Activity (filter: Engine).</p>
         </div>
         <div class="actions">
-          <button class="btn" id="engine-refresh">Refresh</button>
+          <button class="btn" id="engine-refresh" data-icon="refresh">Refresh</button>
           <span class="conn-status" id="engine-status">—</span>
         </div>
       </div>
@@ -445,6 +494,14 @@
         </div>
       </details>
 
+      <!-- Developer — the RPC catalog. An internal API surface, not a user
+           page: CLI, MCP and this dashboard all dispatch through this registry. -->
+      <details class="panel" style="padding: var(--s-5); margin-top: var(--s-4);">
+        <summary style="cursor:pointer;">Developer — RPC methods on this daemon</summary>
+        <p class="muted text-sm">The CLI, the MCP server, and this dashboard all dispatch through the same registry.</p>
+        <ul id="methods-list" class="methods-grid"></ul>
+      </details>
+
       <!-- ── Danger zone ──────────────────────────────────────────── -->
       <div class="section-head" style="margin-top: var(--s-6);">
         <div class="title-block">
@@ -460,21 +517,11 @@
         <div id="reset-result" class="result" style="display:none; margin-top: var(--s-3);"></div>
         <div class="flex-row" style="margin-top: var(--s-3);">
           <div id="reset-confirm"></div>
-          <button type="button" class="btn danger" id="cfg-reset">Reset Sigil…</button>
+          <button type="button" class="btn danger" id="cfg-reset" data-icon="alert">Reset Sigil…</button>
         </div>
       </div>
     </section>
 
-    <!-- ── RPC ──────────────────────────────────────────────────── -->
-    <section id="view-methods" class="view">
-      <div class="section-head">
-        <div class="title-block">
-          <h2>RPC methods</h2>
-          <p>All methods registered on this daemon. CLI, MCP server, and this GUI dispatch through the same registry.</p>
-        </div>
-      </div>
-      <ul id="methods-list" class="methods-grid"></ul>
-    </section>
   </main>
 
   <footer>
@@ -562,6 +609,26 @@
       </div>
     </div>
   </div>
+
+  <!-- ── ⌘K command bar ─────────────────────────────────────────
+       Native <dialog>: focus trap, backdrop and Escape come free. -->
+  <dialog id="cmdk" class="cmdk" aria-label="Command bar">
+    <div class="cmdk-panel">
+      <div class="cmdk-inputrow">
+        <span class="cmdk-inputic" data-icon="search"></span>
+        <input id="cmdk-input" type="text" autocomplete="off" spellcheck="false"
+               role="combobox" aria-expanded="true" aria-controls="cmdk-list"
+               placeholder="Search memory, jump to a page, or run a command…">
+        <kbd>esc</kbd>
+      </div>
+      <ul class="cmdk-list" id="cmdk-list" role="listbox" aria-label="Results"></ul>
+      <div class="cmdk-foot">
+        <span class="cmdk-keyhint"><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span class="cmdk-keyhint"><kbd>↵</kbd> open</span>
+        <span class="cmdk-status" id="cmdk-mode"></span>
+      </div>
+    </div>
+  </dialog>
 
   <!-- force-graph (vasturiano), vendored UMD — defines window.ForceGraph -->
   <script src="/static/vendor/force-graph.min.js"></script>

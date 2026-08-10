@@ -223,6 +223,34 @@ command bar embodies the product. Show the keyboard shortcut next to every actio
 - **Tables:** hairline row borders, `--surface-2` hover, mono for machine columns.
 - **Empty states:** one muted line with an inline `code` hint of the command that
   would populate it. No illustrations.
+- **Icons:** one 16px monoline family in `src/gui/web/icons.js` — geometric,
+  1.35px stroke, `currentColor`, no fills. Wayfinding only: sidebar nav, action
+  buttons, ⌘K group markers, KB tabs. Never inside body copy, never as an
+  empty-state illustration, never the only label on a control except where the
+  sidebar collapses. Static markup opts in with `data-icon="name"`; JS-rendered
+  markup calls `icon(name)`. Icon colour is `--fg-4`/`--fg-3` at rest and
+  `--brand` when the parent is the active/selected state.
+
+## System banner + readout (the "no soft failures" surface)
+`status` already carries every probe the daemon has (DB reachability + schema,
+the boot provider probe, write-queue depth). Both surfaces render from it.
+
+- **Banner** (`#sys-banner`, above every page): at most **one** at a time,
+  ordered by blast radius — unreadable store → dead embedder → dead LLM. Each
+  carries the real error string and the button that fixes it. Never render a
+  banner for a state the user can't act on. Logic lives in
+  `src/gui/web/health.js` (`systemAlert`) and is unit-tested.
+- **Readout** (Home, docked under the stat strip with `border-top: none` so the
+  two read as one instrument): Store · Embedding · LLM · Write queue. Each cell
+  is a 7px status square + a mono value + an optional sub-line.
+- **Never render a null count as `0`.** When `status.unavailable` is set, counts
+  render `—`. A wiped memory and an unreadable store must not look identical.
+
+## Most recalled (Home)
+The top facts by ACT-R access count. Answers "is memory storing the right
+things?" — the counts are what reinforce ranking, so a wrong fact at the top is
+the first one worth correcting. Rows are buttons; clicking opens the fact in the
+KB detail pane. No bars, no sparklines — text plus a mono count.
 
 ---
 
@@ -236,3 +264,9 @@ command bar embodies the product. Show the keyboard shortcut next to every actio
 | 2026-06-30 | Replace PID/uptime/node-id headline with a status pill + Diagnostics drawer | A PID is a once-a-year escape hatch, not a metric. Users care whether memory is working. |
 | 2026-06-30 | Stat cards are calm console readouts — no sparklines/arrows/gradients | Trading-desk/observability cues fight the restrained "color is rare and meaningful" aesthetic. |
 | 2026-06-30 | KB detail leads with provenance + activation + correctable actions | First-principles differentiator: memory is local and user-owned, so make it legible and editable — the thing opaque vector stores can't offer. |
+| 2026-08-10 | ⌘K built (navigate · act · live memory search) | Spec'd here since June but never implemented. Recall is the product, and the dashboard was the only Sigil surface that couldn't run a search. Native `<dialog>` — focus trap, backdrop and Escape come free. |
+| 2026-08-10 | System banner + Home readout render DB/provider/write-queue health | `status` already carried all of it and none reached the UI: a dead Postgres rendered as "—" everywhere, indistinguishable from an empty memory. Directly violated principle 1 ("no soft failures"). |
+| 2026-08-10 | Home gains "Most recalled"; diagnostics stay collapsed | Access counts are what reinforce ranking, so the most-recalled list is the highest-signal answer to "is memory storing the right things?" |
+| 2026-08-10 | Documents added as a fourth KB tab | `listDocuments`/`getDocument` existed but only the CLI could reach whole documents. The stored source text had no dashboard surface at all. |
+| 2026-08-10 | Icon system introduced (16px monoline, `currentColor`) | Nine sidebar entries and a growing action vocabulary were text-only, so scanning was slow. Icons are wayfinding, not decoration — one family, one weight, colour from the parent. |
+| 2026-08-10 | RPC methods moved behind a Developer disclosure in Settings | Finishes the June decision: the page was cut from nav but the route and view were left orphaned and unreachable. |

@@ -368,6 +368,10 @@ h3.section-sub {
   gap: var(--s-4);
   margin-top: var(--s-5);
 }
+/* Grid items default to min-width:auto, so one long unbreakable child inside a
+   panel blows the track past the viewport and the whole page scrolls sideways
+   on narrow screens. Both panels ellipsize internally already — let them. */
+.home-cols > * { min-width: 0; }
 .home-h {
   margin: 0;
   font-size: var(--t-md);
@@ -1683,4 +1687,250 @@ footer .footer-inner {
 
 @media (max-width: 920px) {
   .graph-stage { height: calc(100vh - var(--header-h) - 260px); }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   Icons — one 16px monoline family (icons.js). Wayfinding, never decoration:
+   sidebar, action buttons, ⌘K groups. Colour comes from the parent, so an
+   icon is always the same weight as the label beside it.
+   ════════════════════════════════════════════════════════════════════════ */
+.ic { width: 16px; height: 16px; flex: none; display: block; }
+
+nav a .ic { color: var(--fg-4); transition: color var(--dur-1) var(--ease); }
+nav a:hover .ic { color: var(--fg-2); }
+nav a.active .ic { color: var(--accent); }
+
+.btn .ic { color: var(--fg-3); transition: color var(--dur-1) var(--ease); }
+.btn:hover .ic { color: var(--fg-2); }
+.btn.primary .ic, .btn.danger .ic { color: currentColor; }
+.btn:disabled .ic { color: var(--fg-4); }
+
+kbd {
+  font: 500 var(--t-xs)/1 var(--font-mono);
+  color: var(--fg-3);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-1);
+  padding: 3px 5px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ⌘K trigger (sidebar) — the bar is the product, so it gets a permanent
+   control, not just a hidden shortcut.
+   ════════════════════════════════════════════════════════════════════════ */
+.cmdk-trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin: 0 var(--s-3) var(--s-3);
+  padding: 0 var(--s-2) 0 var(--s-3);
+  height: 32px;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-2);
+  color: var(--fg-3);
+  font: 500 var(--t-base) var(--font-ui);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.cmdk-trigger:hover { border-color: var(--border-strong); color: var(--fg-2); }
+.cmdk-trigger .ic { color: var(--fg-4); }
+.cmdk-trigger:hover .ic { color: var(--fg-2); }
+.cmdk-trigger-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   System banner — the loud channel. Only rendered for a state the user has
+   to act on; every banner carries the reason AND the button that fixes it.
+   ════════════════════════════════════════════════════════════════════════ */
+.sysbanner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-5);
+  border: 1px solid var(--border-2);
+  background: var(--bg-surface);
+  font-size: var(--t-base);
+}
+.sysbanner.err  { border-color: rgba(255, 90, 82, 0.35);  background: var(--err-bg); }
+.sysbanner.warn { border-color: rgba(245, 181, 68, 0.35); background: var(--warn-bg); }
+.sysbanner-ic { flex: none; margin-top: 2px; }
+.sysbanner.err  .sysbanner-ic { color: var(--err); }
+.sysbanner.warn .sysbanner-ic { color: var(--warn); }
+.sysbanner-text { flex: 1; min-width: 0; max-width: 88ch; color: var(--fg-2); line-height: 1.5; }
+.sysbanner-text strong { color: var(--fg-1); font-weight: 600; margin-right: 4px; }
+.sysbanner .btn { flex: none; margin-top: -2px; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   System readout — four live probes, docked under the stat strip so the
+   counts and the reason they might be wrong read as one instrument.
+   ════════════════════════════════════════════════════════════════════════ */
+.sysrow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-top: none;
+}
+.sysrow:empty { display: none; }
+.syscell {
+  background: var(--bg-surface);
+  padding: var(--s-3) var(--s-5);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.syscell-k { font-size: var(--t-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-3); font-weight: 500; }
+.syscell-v {
+  display: flex; align-items: center; gap: var(--s-2); min-width: 0;
+  font: 500 var(--t-md) var(--font-mono); color: var(--fg-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.syscell-v .sq { width: 7px; height: 7px; flex: none; background: var(--fg-4); }
+.syscell-v.ok   { color: var(--fg-1); } .syscell-v.ok   .sq { background: var(--ok); }
+.syscell-v.warn { color: var(--warn); } .syscell-v.warn .sq { background: var(--warn); }
+.syscell-v.err  { color: var(--err);  } .syscell-v.err  .sq { background: var(--err); }
+.syscell-sub { font-size: var(--t-xs); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Most recalled — the honest answer to "is memory storing the right things?"
+   ════════════════════════════════════════════════════════════════════════ */
+.home-hot { margin-top: var(--s-4); }
+.home-h-ic { display: inline-flex; vertical-align: -3px; margin-right: 6px; color: var(--fg-3); }
+.hotlist { list-style: none; margin: 0; padding: 0; }
+.hotrow { border-top: 1px solid var(--border); }
+.hotrow:first-child { border-top: none; }
+.hotrow-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  padding: var(--s-2) var(--s-2) var(--s-2) 0;
+  background: none;
+  border: none;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease);
+}
+.hotrow-btn:hover { background: var(--bg-surface-2); }
+.hotrow-btn:hover .hotrow-text { color: var(--fg-1); }
+.hotrow-text { flex: 1; min-width: 0; color: var(--fg-2); font-size: var(--t-base); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hotrow-n { flex: none; font: 500 var(--t-sm) var(--font-mono); color: var(--fg-3); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   ⌘K command bar — native <dialog>, so focus trap / backdrop / Escape are
+   the platform's job. Three implicit modes; see DESIGN.md › Global ⌘K.
+   ════════════════════════════════════════════════════════════════════════ */
+.cmdk {
+  padding: 0;
+  border: none;
+  background: none;
+  width: min(640px, calc(100vw - 2 * var(--s-4)));
+  max-width: none;
+  margin: 12vh auto auto;
+  color: var(--fg-1);
+}
+.cmdk::backdrop { background: rgba(8, 9, 11, 0.72); }
+.cmdk-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: 62vh;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-pop);
+}
+.cmdk[open] .cmdk-panel { animation: cmdk-in var(--dur-2) var(--ease); }
+@keyframes cmdk-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+.cmdk-inputrow {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--border);
+}
+.cmdk-inputic { display: flex; color: var(--fg-3); }
+.cmdk.composing .cmdk-inputic { color: var(--accent); }
+.cmdk-inputrow input {
+  flex: 1; min-width: 0; height: 28px;
+  background: none; border: none; outline: none; box-shadow: none;
+  color: var(--fg-1);
+  font: var(--t-lg) var(--font-ui);
+}
+.cmdk-inputrow input::placeholder { color: var(--fg-3); }
+.cmdk-inputrow input:focus { outline: none; box-shadow: none; }
+
+.cmdk-list { list-style: none; margin: 0; padding: var(--s-1) 0 var(--s-2); overflow-y: auto; flex: 1; }
+.cmdk-group {
+  padding: var(--s-3) var(--s-4) var(--s-1);
+  font: 600 var(--t-xs) var(--font-ui);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--fg-3);
+}
+.cmdk-row {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-2) var(--s-4);
+  color: var(--fg-2);
+  cursor: pointer;
+}
+.cmdk-row.on { background: var(--brand-tint); color: var(--fg-1); box-shadow: inset 2px 0 0 var(--accent); }
+.cmdk-ic { display: flex; flex: none; color: var(--fg-4); }
+.cmdk-row.on .cmdk-ic { color: var(--accent); }
+.cmdk-label { flex: 1; min-width: 0; font-size: var(--t-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk-hint { flex: none; max-width: 38%; font-size: var(--t-sm); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk-meta { flex: none; font: var(--t-xs) var(--font-mono); color: var(--fg-3); }
+.cmdk-note {
+  display: flex; align-items: flex-start; gap: var(--s-3);
+  padding: var(--s-4);
+  color: var(--fg-3); font-size: var(--t-base); line-height: 1.55;
+}
+.cmdk-note .ic { color: var(--fg-4); margin-top: 3px; }
+.cmdk-note > span { min-width: 0; }
+.cmdk-note strong { color: var(--fg-2); }
+.cmdk-foot {
+  display: flex; align-items: center; gap: var(--s-4);
+  padding: var(--s-2) var(--s-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface-2);
+  font-size: var(--t-xs); color: var(--fg-3);
+}
+.cmdk-foot kbd { margin-right: 3px; }
+.cmdk-status { margin-left: auto; font-family: var(--font-mono); text-align: right; }
+/* Composing a fact: ↑/↓/↵ mean something else, so don't advertise them. */
+.cmdk.composing .cmdk-keyhint { display: none; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Knowledge Base — documents tab + tab icons
+   ════════════════════════════════════════════════════════════════════════ */
+.kb-tab { display: inline-flex; align-items: center; gap: 6px; }
+.kb-tab .ic { color: var(--fg-4); transition: color var(--dur-1) var(--ease); }
+.kb-tab:hover .ic { color: var(--fg-3); }
+.kb-tab.active .ic { color: var(--accent); }
+.kb-entity-title .ic { color: var(--fg-3); }
+
+.kb-doc-body {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: var(--s-3);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  font: var(--t-sm)/1.6 var(--font-mono);
+  color: var(--fg-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── responsive ─────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Sidebar becomes a top bar: the trigger collapses to its icon. */
+  .cmdk-trigger { margin: 0; width: 34px; flex: none; justify-content: center; padding: 0; }
+  .cmdk-trigger .cmdk-trigger-label, .cmdk-trigger kbd { display: none; }
+  .cmdk { margin-top: var(--s-6); }
+  .cmdk-panel { max-height: 76vh; }
+  .cmdk-hint { display: none; }
+  .sysbanner { flex-wrap: wrap; }
+  .sysbanner .btn { margin-left: calc(16px + var(--s-3)); }
 }

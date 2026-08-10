@@ -2,6 +2,9 @@
 import { toast } from './toast.js';
 import { connectorCard } from './components.js';
 import { initSetup } from './setup.js';
+import { icon, hydrateIcons } from './icons.js';
+import { initCmdk } from './cmdk.js';
+import { systemAlert, systemCells } from './health.js';
 
 const $  = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => root.querySelectorAll(sel);
@@ -61,10 +64,10 @@ function renderKv(node, entries) {
   node.innerHTML = entries.map(([k, v]) => `<div class="row"><div class="k">${escape(k)}</div><div class="v">${escape(v)}</div></div>`).join('');
 }
 
-const validRoutes = ['health', 'kb', 'graph', 'agents', 'devices', 'activity', 'engine', 'setup', 'settings', 'methods'];
+const validRoutes = ['health', 'kb', 'graph', 'agents', 'devices', 'activity', 'engine', 'setup', 'settings'];
 const ROUTE_TITLES = {
   health: 'Home', kb: 'Knowledge Base', graph: 'Graph', agents: 'Agents', devices: 'Devices',
-  activity: 'Activity', engine: 'Engine', setup: 'Database', settings: 'Settings', methods: 'RPC methods',
+  activity: 'Activity', engine: 'Engine', setup: 'Database', settings: 'Settings',
 };
 function setRoute(name) {
   $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${name}`));
@@ -80,8 +83,7 @@ function setRoute(name) {
   if (name === 'health')   refreshHealth();
   if (name === 'kb')       refreshKb();
   if (name === 'graph')    initGraphView();
-  if (name === 'methods')  refreshMethods();
-  if (name === 'settings') refreshEnv();
+  if (name === 'settings') { refreshEnv(); refreshMethods(); }
   if (name === 'agents')   refreshAgents();
   if (name === 'devices')  refreshDevices();
   if (name === 'activity') { ensureActivityWs(); loadTraces(); }
@@ -106,11 +108,20 @@ async function refreshHealth() {
       rpc('ping'),
       rpc('nodeInfo').catch(() => ({ enabled: false })),
       rpc('mode').catch(() => ({})),
-      rpc('status', {}).catch(() => ({})),
+      // A failed `status` is itself a health signal — don't swallow it into an
+      // empty object, or the readout below cheerfully reports "connected".
+      rpc('status', { hotFactsLimit: 6 })
+        .catch((err) => ({ unavailable: true, db: { healthy: false, error: err.message } })),
     ]);
 
+    // The store being unreachable is NOT the same as memory being empty. When
+    // `status` says so, every count comes back null — render "unavailable",
+    // never a zero, and let the banner carry the reason.
+    renderSystem(status);
+
     // ── stat strip: memory as the hero (real counts from status) ──
-    const ents = (status.entities?.documents || 0) + (status.entities?.people || 0) + (status.entities?.topics || 0);
+    const ents = status.unavailable ? null
+      : (status.entities?.documents || 0) + (status.entities?.people || 0) + (status.entities?.topics || 0);
     $('#hm-facts').textContent = fmtNum(status.facts);
     $('#hm-entities').textContent = fmtNum(ents);
     $('#hm-relations').textContent = fmtNum(status.relations);
@@ -142,6 +153,61 @@ async function refreshHealth() {
   // load them in one fetch so one failing doesn't blank the other.
   loadHomeActivity();
 }
+
+// ── System health: banner + readout + most-recalled ──────────────────
+// `status` already carries every probe result the daemon has (DB reachability
+// and schema, the boot provider probe, the write-queue depth, the hottest
+// facts). None of it reached the dashboard before, so a dead Postgres or a
+// revoked API key rendered as an empty-looking memory — the exact soft failure
+// DESIGN.md forbids. One render pass turns all of it into a visible state.
+function renderSystem(status) {
+  const banner = $('#sys-banner');
+  const alert = systemAlert(status);
+
+  if (!alert) {
+    banner.hidden = true;
+    banner.innerHTML = '';
+  } else {
+    banner.hidden = false;
+    banner.className = `sysbanner ${alert.level}`;
+    banner.innerHTML = `
+      <span class="sysbanner-ic">${icon(alert.level === 'err' ? 'alert' : 'alert')}</span>
+      <span class="sysbanner-text"><strong>${escape(alert.title)}</strong> ${escape(alert.body)}</span>
+      <button class="btn small" type="button" data-banner-route="${alert.action.route}">${escape(alert.action.label)}</button>`;
+  }
+
+  // ── readout: four rows, each a live probe, never a config echo ──
+  const row = $('#hm-sysrow');
+  if (!row) return;
+  row.innerHTML = systemCells(status).map((c) => `
+    <div class="syscell">
+      <span class="syscell-k">${escape(c.k)}</span>
+      <span class="syscell-v ${c.s}"><i class="sq"></i>${escape(c.v)}</span>
+      ${c.sub ? `<span class="syscell-sub">${escape(c.sub)}</span>` : ''}
+    </div>`).join('');
+
+  // ── most recalled ──
+  const hot = $('#hm-hot');
+  if (!hot) return;
+  const facts = status.hotFacts || [];
+  hot.innerHTML = facts.length
+    ? facts.map((f) => `<li class="hotrow">
+        <button class="hotrow-btn" type="button"${f.id != null ? ` data-fact-id="${f.id}"` : ''}>
+          <span class="hotrow-text">${escape(f.content)}</span>
+          <span class="hotrow-n" title="times recalled">${escape(f.accessCount)}×</span>
+        </button>
+      </li>`).join('')
+    : `<li class="muted text-sm">Nothing recalled yet. Counts appear here once your agents start searching — try <code>⌘K</code> above.</li>`;
+}
+
+$('#sys-banner')?.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-banner-route]');
+  if (b) setRoute(b.dataset.bannerRoute);
+});
+$('#hm-hot')?.addEventListener('click', (e) => {
+  const r = e.target.closest('[data-fact-id]');
+  if (r) { setRoute('kb'); kbSetTab('facts'); kbSelectFactById(Number(r.dataset.factId)); }
+});
 
 // One trace.list call feeds both the recall metrics and the activity feed.
 // Recall hit-rate, avg results, and median latency are computed CLIENT-SIDE
@@ -202,6 +268,9 @@ const kb = {
   entitySearch: '',
   entities: [],
   selectedEntityId: null,
+  documents: null,     // null = not fetched yet
+  docSearch: '',
+  selectedDocUid: null,
   pods: null,
 };
 
@@ -250,11 +319,10 @@ function kbSetTab(name, { force = false } = {}) {
     t.classList.toggle('active', on);
     t.setAttribute('aria-selected', on ? 'true' : 'false');
   });
-  $('#kb-tab-facts').hidden = name !== 'facts';
-  $('#kb-tab-entities').hidden = name !== 'entities';
-  $('#kb-tab-pods').hidden = name !== 'pods';
+  $$('.kb-panel').forEach((p) => { p.hidden = p.id !== `kb-tab-${name}`; });
   if (name === 'facts') kbRenderFacts();
   if (name === 'entities' && !kb.entities.length && !kb.entitySearch) kbSearchEntities();
+  if (name === 'documents' && !kb.documents) kbLoadDocuments();
   if (name === 'pods' && !kb.pods) kbLoadPods();
 }
 
@@ -476,6 +544,99 @@ function kbRenderEntityDetail(ctx) {
   </div>`;
 }
 
+// ── Documents ────────────────────────────────────────────────────────
+// The whole-document layer: `sigil ingest` keeps the full source text, and
+// facts/chunks are derived from it. That store had no dashboard surface at all,
+// so "what did I ingest, and what did it produce?" was a CLI-only question.
+// podScope 'global' because the dashboard has no cwd to scope to.
+async function kbLoadDocuments() {
+  const list = $('#kb-doc-list');
+  list.innerHTML = kbSkeleton(6);
+  try {
+    const { documents } = await rpc('listDocuments', { limit: 100, podScope: 'global' });
+    kb.documents = documents || [];
+    kbRenderDocs();
+  } catch (err) {
+    kb.documents = [];
+    list.innerHTML = `<div class="empty">Couldn’t load documents: ${escape(err.message)}</div>`;
+  }
+}
+
+function kbRenderDocs() {
+  const list = $('#kb-doc-list');
+  const q = kb.docSearch.trim().toLowerCase();
+  const docs = (kb.documents || []).filter((d) =>
+    !q || `${d.title || ''} ${d.sourcePath || ''}`.toLowerCase().includes(q));
+  $('#kb-doc-count').textContent = `${docs.length} doc${docs.length === 1 ? '' : 's'}`;
+  if (!docs.length) {
+    list.innerHTML = kb.documents?.length
+      ? `<div class="empty">No document matches that filter.</div>`
+      : `<div class="empty">No documents ingested yet. Store a whole file, glob, or URL with <code>sigil ingest ./DESIGN.md</code> — the full text is kept and searchable facts are extracted from it.</div>`;
+    return;
+  }
+  list.innerHTML = docs.map((d) => {
+    const sel = d.uid === kb.selectedDocUid ? ' selected' : '';
+    return `<button class="kb-row${sel}" role="option" aria-selected="${sel ? 'true' : 'false'}" data-doc-uid="${escape(d.uid)}" type="button">
+      <span class="kb-row-main">
+        <span class="kb-row-text">${escape(d.title || d.sourcePath || d.uid)}</span>
+      </span>
+      <span class="kb-row-meta">
+        <span class="kb-tag">${escape(d.sourceType || 'doc')}</span>
+        <span class="kb-mentions" title="${d.factCount} facts · ${d.chunkCount} chunks">${escape(d.factCount)}f · ${escape(d.chunkCount)}c</span>
+      </span>
+    </button>`;
+  }).join('');
+}
+
+async function kbSelectDoc(uid) {
+  kb.selectedDocUid = uid;
+  $$('#kb-doc-list .kb-row').forEach((r) => {
+    const on = r.dataset.docUid === uid;
+    r.classList.toggle('selected', on);
+    r.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  const pane = $('#kb-doc-detail');
+  pane.classList.add('open');
+  pane.innerHTML = `<div class="kb-detail-pad">${kbSkeleton(4)}</div>`;
+  try {
+    const doc = await rpc('getDocument', { uid });
+    if (doc.notFound) { pane.innerHTML = `<div class="kb-detail-pad"><div class="empty">Document not found.</div></div>`; return; }
+    pane.innerHTML = kbRenderDocDetail(doc);
+  } catch (err) {
+    pane.innerHTML = `<div class="kb-detail-pad"><div class="empty">Couldn’t load document: ${escape(err.message)}</div></div>`;
+  }
+}
+
+function kbRenderDocDetail(d) {
+  const meta = [
+    ['source', d.sourcePath || d.sourceType || '—'],
+    ['ingested', d.lastIngestedAt ? formatTime(d.lastIngestedAt) : '—'],
+    ['derived', `${d.factCount ?? 0} facts · ${d.chunkCount ?? 0} chunks`],
+    ['uid', d.uid],
+  ];
+  const pods = (d.pods || []).length
+    ? `<div class="kb-block"><div class="trace-block-h">Pods</div><div class="kb-chip-wrap">${d.pods.map((p) =>
+        `<span class="kb-tag">${escape(p.name || p.uid)}</span>`).join('')}</div></div>`
+    : '';
+  const body = d.content || '';
+  return `<div class="kb-detail-pad">
+    <div class="kb-detail-head">
+      <div>
+        <div class="kb-entity-title">${icon('doc')}${escape(d.title || d.sourcePath || 'Untitled')}</div>
+        <div class="kb-entity-sub">${escape(d.sourceType || 'document')}${d.truncated ? ` · first ${fmtNum(body.length)} of ${fmtNum(d.totalChars)} characters` : ''}</div>
+      </div>
+      ${body ? '<button class="btn small" type="button" data-copy="kb-doc-text">Copy text</button>' : ''}
+    </div>
+    <div class="kb-block"><div class="trace-block-h">Provenance</div>
+      <div class="kv kb-kv">${meta.map(([k, v]) =>
+        `<div class="row"><div class="k">${escape(k)}</div><div class="v">${escape(v)}</div></div>`).join('')}</div></div>
+    ${pods}
+    <div class="kb-block"><div class="trace-block-h">Source text</div>
+      ${body ? `<pre class="kb-doc-body" id="kb-doc-text">${escape(body)}</pre>`
+             : '<p class="muted text-sm">This document has no stored body.</p>'}</div>
+  </div>`;
+}
+
 // ── Pods ─────────────────────────────────────────────────────────────
 async function kbLoadPods() {
   const list = $('#kb-pod-list');
@@ -654,6 +815,11 @@ $('#kb-fact-detail')?.addEventListener('click', (e) => {
   const forget = e.target.closest('.kb-forget'); if (forget) { kbForgetFact(forget.dataset.uid); return; }
   const ent = e.target.closest('[data-entity-id]');
   if (ent) { kbSetTab('entities'); kbSelectEntity(ent.dataset.entityId); }
+});
+
+$('#kb-doc-search')?.addEventListener('input', (e) => { kb.docSearch = e.target.value; kbRenderDocs(); });
+$('#kb-doc-list')?.addEventListener('click', (e) => {
+  const row = e.target.closest('.kb-row'); if (row) kbSelectDoc(row.dataset.docUid);
 });
 
 let entitySearchTimer = null;
@@ -1877,6 +2043,18 @@ async function runLanding() {
   const MIN_MS = 1100;
   setTimeout(dismissLanding, Math.max(0, MIN_MS - (Date.now() - started)));
 }
+
+hydrateIcons();
+
+// ⌘K — navigate, act, and (the point) run a live memory search from anywhere.
+const cmdk = initCmdk({
+  rpc, setRoute, toast,
+  openFact: (uid) => { setRoute('kb'); kbSetTab('facts'); kbSelectFact(uid); },
+  // A fact saved from the bar should be visible immediately, not next poll.
+  onRemembered: () => { refreshHealth(); if (location.hash === '#kb') refreshKb(); },
+});
+$('#home-remember')?.addEventListener('click', () => cmdk.compose?.());
+$('#kb-remember')?.addEventListener('click', () => cmdk.compose?.());
 
 const initial = (window.location.hash || '#health').slice(1);
 setRoute(validRoutes.includes(initial) ? initial : 'health');
