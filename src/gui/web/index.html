@@ -459,9 +459,14 @@
 
       <!-- Current config + switch controls -->
       <div class="panel" style="padding: var(--s-5); margin-bottom: var(--s-4);">
-        <div class="row"><div class="k">Database</div><div class="v" id="cfg-db">…</div></div>
-        <div class="row"><div class="k">LLM provider</div><div class="v" id="cfg-llm">…</div></div>
-        <div class="row"><div class="k">Embedding</div><div class="v" id="cfg-emb">…</div></div>
+        <!-- `.kv` is load-bearing: the label/value grid is defined as `.kv .row`,
+             so these rows rendered as stacked lines (label above value, no
+             alignment) without it — the readout looked like an unstyled dump. -->
+        <div class="kv kv-flush">
+          <div class="row"><div class="k">Database</div><div class="v" id="cfg-db">…</div></div>
+          <div class="row"><div class="k">LLM provider</div><div class="v" id="cfg-llm">…</div></div>
+          <div class="row"><div class="k">Embedding</div><div class="v" id="cfg-emb">…</div></div>
+        </div>
         <div class="flex-row" style="margin-top: var(--s-4);">
           <button type="button" class="btn" id="cfg-change-llm">Change LLM</button>
           <button type="button" class="btn" id="cfg-change-emb">Change embedding</button>

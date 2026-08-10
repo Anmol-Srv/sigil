@@ -40,7 +40,7 @@ export function systemAlert(status = {}) {
     return {
       level: 'warn',
       title: 'Embedding provider is down.',
-      body: `${p.embedding.provider || 'No provider'} — ${p.embedding.error}. New facts can’t be embedded, so they won’t come back in search.`,
+      body: `${p.embedding.provider || 'No provider'} — ${condenseProviderError(p.embedding.error)}. New facts can’t be embedded, so they won’t come back in search.`,
       action: { label: 'Change embedding', route: 'settings' },
     };
   }
@@ -48,11 +48,31 @@ export function systemAlert(status = {}) {
     return {
       level: 'warn',
       title: 'LLM provider is down.',
-      body: `${p.llm.provider || 'No provider'} — ${p.llm.error}. Fact extraction and query routing fall back to the simple path.`,
+      body: `${p.llm.provider || 'No provider'} — ${condenseProviderError(p.llm.error)}. Fact extraction and query routing fall back to the simple path.`,
       action: { label: 'Change LLM', route: 'settings' },
     };
   }
   return null;
+}
+
+/**
+ * Reduce a provider error to one readable line.
+ *
+ * CLI providers hand back their whole transcript on failure — claude-cli's is a
+ * ~700-character JSON object (is_error, usage, cache_creation, modelUsage…),
+ * and interpolating it raw turned the health banner into eight lines of machine
+ * output with the actual cause, "claude CLI exited 1", buried at the front. The
+ * useful part is always the prose before the payload starts.
+ */
+export function condenseProviderError(err) {
+  const raw = String(err ?? '').trim();
+  if (!raw) return 'unavailable';
+  // Cut at the first JSON/array payload; that boundary is where prose ends.
+  const cut = raw.search(/[{[]/);
+  let msg = (cut > 0 ? raw.slice(0, cut) : raw).trim().replace(/[:\s-]+$/, '');
+  // A message that IS the payload (no prose at all) still beats showing nothing.
+  if (!msg) msg = raw;
+  return msg.length > 160 ? `${msg.slice(0, 157)}…` : msg;
 }
 
 /** One cell of the Home system readout: `{ s: state, v: value, sub?: detail }`. */

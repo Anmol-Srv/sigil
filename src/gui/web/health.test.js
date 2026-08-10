@@ -6,7 +6,7 @@
  * must never render as a store that is empty.
  */
 import { describe, it, expect } from 'vitest';
-import { systemAlert, systemCells } from './health.js';
+import { systemAlert, systemCells, condenseProviderError } from './health.js';
 import { fuzzy } from './cmdk.js';
 
 const HEALTHY = {
@@ -93,5 +93,40 @@ describe('fuzzy', () => {
 
   it('matches everything on an empty query', () => {
     expect(fuzzy('', 'Anything')).toBe(true);
+  });
+});
+
+describe('condenseProviderError', () => {
+  it('keeps the prose and drops the JSON payload', () => {
+    const real = 'claude CLI exited 1: {"is_error":true,"duration_api_ms":0,'
+      + '"num_turns":1,"stop_reason":"stop_sequence","session_id":"84613973-4885",'
+      + '"usage":{"input_tokens":0,"cache_creation_input_tokens":0}}';
+    expect(condenseProviderError(real)).toBe('claude CLI exited 1');
+  });
+
+  it('leaves an ordinary message alone', () => {
+    const msg = 'ECONNREFUSED connecting to localhost:11434';
+    expect(condenseProviderError(msg)).toBe(msg);
+  });
+
+  it('still says something when the error IS the payload', () => {
+    // No prose to keep — showing the raw blob beats showing nothing at all.
+    expect(condenseProviderError('{"is_error":true}')).toBe('{"is_error":true}');
+  });
+
+  it('caps a long single-line message', () => {
+    const out = condenseProviderError('x'.repeat(400));
+    expect(out.length).toBeLessThanOrEqual(160);
+    expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('degrades to "unavailable" for empty/missing input', () => {
+    expect(condenseProviderError('')).toBe('unavailable');
+    expect(condenseProviderError(undefined)).toBe('unavailable');
+    expect(condenseProviderError(null)).toBe('unavailable');
+  });
+
+  it('trims the trailing separator left behind by the cut', () => {
+    expect(condenseProviderError('failed to start: {"a":1}')).toBe('failed to start');
   });
 });

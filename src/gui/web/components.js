@@ -87,4 +87,35 @@ export function setFlowRow(container, id, { phase, detail } = {}) {
   if (detail != null) row.querySelector('.step-detail').textContent = detail;
 }
 
+/**
+ * One field control, shared by the onboarding wizard and Settings' provider
+ * switcher. It exists because they each had their own copy: both rendered
+ * `<input type="${f.type}">`, so when the LLM step gained `type: 'select'`
+ * model pickers, Settings silently rendered `<input type="select">` — which
+ * every browser treats as a plain text box. The result was an empty field where
+ * a list of models should be, with no error anywhere.
+ *
+ * `nameAttr` differs between the two surfaces (data-setup-field vs
+ * data-cfg-field), so it's a parameter rather than a second implementation.
+ */
+export function fieldControl(f, nameAttr) {
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+  const optional = f.optional ? ' data-optional="1"' : '';
+
+  if (f.type === 'select' && f.options?.length) {
+    const chosen = f.default || f.options[0].value;
+    const opts = f.options.map((o) => {
+      const label = o.label || o.value;
+      return `<option value="${esc(o.value)}"${o.value === chosen ? ' selected' : ''}>`
+        + `${esc(label)}${o.hint ? ` — ${esc(o.hint)}` : ''}</option>`;
+    }).join('');
+    return `<select ${nameAttr}="${esc(f.name)}"${optional}>${opts}</select>`;
+  }
+
+  return `<input type="${esc(f.type)}" ${nameAttr}="${esc(f.name)}"${optional}`
+    + ` placeholder="${esc(f.placeholder || '')}" autocomplete="off">`;
+}
+
 export { E };

@@ -1,6 +1,6 @@
 // Sigil GUI — vanilla JS. Onboarding wizard + dashboard.
 import { toast } from './toast.js';
-import { connectorCard } from './components.js';
+import { connectorCard , fieldControl } from './components.js';
 import { initSetup } from './setup.js';
 import { icon, hydrateIcons } from './icons.js';
 import { initCmdk } from './cmdk.js';
@@ -1377,8 +1377,8 @@ function selectSwitchProvider(id) {
   if (!p) return;
   const fields = cfgSwitchFields(p);
   $('#cfg-switch-fields').innerHTML = fields.length
-    ? fields.map((f) => `<label class="field"><span class="label">${escape(f.label)}</span>
-        <input type="${escape(f.type)}" data-cfg-field="${escape(f.name)}" placeholder="${escape(f.placeholder || '')}" autocomplete="off"></label>`).join('')
+    ? fields.map((f) => `<label class="field"><span class="label">${escape(f.label)}${f.optional ? ' <span class="muted text-xs">(optional)</span>' : ''}</span>
+        ${fieldControl(f, 'data-cfg-field')}</label>`).join('')
     : '<p class="muted text-sm">No additional configuration needed.</p>';
   $('#cfg-switch-conflict').innerHTML = '';
 }

@@ -8,6 +8,11 @@
    @import here would block parsing until this file is fully loaded first. */
 
 :root {
+  /* The dashboard is dark-only by design (DESIGN.md). Without this, natively
+     rendered UI — a <select>'s dropdown list, scrollbars, autofill — is drawn
+     by the OS in light mode and punches a white hole through the console. */
+  color-scheme: dark;
+
   /* ========================================================
      COLOR — cool-neutral dark ramp
      Surfaces are layered near-black; text is a desaturated

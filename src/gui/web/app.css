@@ -484,6 +484,11 @@ h3.section-sub {
   align-items: baseline;
 }
 .kv .row:last-child { border-bottom: none; }
+/* A .kv sitting INSIDE an already-bordered panel: drop the outer chrome so we
+   don't draw a box inside a box, and pull the padding back to the panel's own
+   gutter. Structure here is carried by the row hairlines alone. */
+.kv-flush { border: 0; background: none; }
+.kv-flush .row { padding-left: 0; padding-right: 0; }
 .kv .row .k { color: var(--fg-3); font-size: var(--t-sm); }
 .kv .row .v { font-family: var(--font-mono); font-size: var(--t-base); overflow-wrap: anywhere; }
 
@@ -562,6 +567,13 @@ form select,
 form textarea,
 .onboarding-content input:not([type="radio"]):not([type="checkbox"]),
 .onboarding-content select,
+/* `.field` is the wrapper both the wizard AND Settings' provider switcher use.
+   Styling was previously scoped to `form` / `.onboarding-content`, so the
+   switcher — which is neither — rendered browser-default controls: a white
+   select on a near-black panel. Keying off `.field` makes a control look the
+   same wherever it appears, which is the whole point of the class. */
+.field input:not([type="radio"]):not([type="checkbox"]),
+.field select,
 .input {
   width: 100%;
   height: 36px;
@@ -574,9 +586,11 @@ form textarea,
 }
 form textarea { padding: var(--s-2) var(--s-3); height: auto; min-height: 80px; resize: vertical; }
 form select,
+.field select,
 .onboarding-content select { padding-right: var(--s-5); }
 form input:focus, form select:focus, form textarea:focus,
 .onboarding-content input:focus, .onboarding-content select:focus,
+.field input:focus, .field select:focus,
 .input:focus { outline: none; border-color: var(--accent); }
 ::placeholder { color: var(--fg-3); opacity: 1; }
 
@@ -591,7 +605,11 @@ form .actions { display: flex; gap: var(--s-2); margin-top: var(--s-2); }
 .onboarding-content #ob-db-url,
 .onboarding-content #ob-db-fields,
 .onboarding-content #ob-llm-fields,
-.onboarding-content #ob-emb-fields { max-width: 560px; }
+.onboarding-content #ob-emb-fields,
+/* Settings' provider switcher obeys the same measure. A model picker stretched
+   across a 900px panel reads as a text field you're meant to fill in, not a
+   short list you pick from. */
+#cfg-switch-fields { max-width: 560px; }
 
 /* Shared box treatment for both pre (code output) and div (confirm prompts) */
 .result {
@@ -978,7 +996,11 @@ table.trace-table td.audm-cell { font-size: var(--t-xs); color: var(--fg-2); whi
 
 .provider-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  /* auto-fit, not auto-fill: with six providers on a wide panel, auto-fill left
+     a ragged 5 + 1 row with the last card stranded. auto-fit collapses the empty
+     tracks so the cards share the row evenly. */
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: stretch;
   gap: var(--s-3);
 }
 .provider-card {
