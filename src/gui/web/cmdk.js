@@ -39,7 +39,7 @@ export function fuzzy(needle, hay) {
   return false;
 }
 
-export function initCmdk({ rpc, setRoute, openFact, toast, onRemembered }) {
+export function initCmdk({ rpc, setRoute, openFact, toast, onRemembered, onIngest }) {
   const dlg   = document.getElementById('cmdk');
   const input = document.getElementById('cmdk-input');
   const list  = document.getElementById('cmdk-list');
@@ -56,6 +56,8 @@ export function initCmdk({ rpc, setRoute, openFact, toast, onRemembered }) {
   const ACTIONS = [
     { id: 'remember', label: 'Remember a fact…', icon: 'plus', hint: 'save a short statement to memory',
       run: () => enterCompose() },
+    { id: 'ingest', label: 'Ingest a document…', icon: 'doc', hint: 'store a file whole — spec, notes, transcript',
+      run: () => { close(); onIngest?.(); } },
     { id: 'device', label: 'Add a device', icon: 'monitor', hint: 'create a pairing code',
       run: () => { close(); setRoute('devices'); document.getElementById('dev-new')?.click(); } },
     { id: 'agents', label: 'Connect a coding tool', icon: 'terminal', hint: 'Claude Code · Codex · Cursor · Kiro',

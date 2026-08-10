@@ -96,5 +96,7 @@ export function systemCells(status = {}) {
 function providerCell(h) {
   if (!h) return { s: '', v: 'not probed', sub: 'daemon still starting' };
   if (h.ok) return { s: 'ok', v: h.provider, sub: h.model || undefined };
-  return { s: 'err', v: h.provider ? `${h.provider} failing` : 'not configured', sub: h.error || undefined };
+  // Same condensing as the banner: this sub-line is one row of a stat strip, so
+  // a raw CLI transcript here renders as a wall of truncated JSON.
+  return { s: 'err', v: h.provider ? `${h.provider} failing` : 'not configured', sub: h.error ? condenseProviderError(h.error) : undefined };
 }

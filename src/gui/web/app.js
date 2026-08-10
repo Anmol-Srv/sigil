@@ -2046,15 +2046,88 @@ async function runLanding() {
 
 hydrateIcons();
 
+/**
+ * Ingest one or more documents from the machine.
+ *
+ * A FILE PICKER, not a path box, and the browser reads the bytes. The daemon's
+ * cwd is `/`, so a path typed here would resolve against the wrong root — the
+ * exact failure that made `ingest` reject files from any project but the first
+ * one. Sending `content` + the real `sourcePath` sidesteps resolution entirely,
+ * and sourcePath still keys the upsert so re-ingesting a file updates it rather
+ * than duplicating it.
+ *
+ * No cwd is sent: the browser has no project context, so documents added here
+ * land unpodded — which scoped search treats as visible everywhere, the right
+ * default for something filed by hand.
+ */
+const INGEST_MAX_BYTES = 2 * 1024 * 1024;
+
+async function ingestDocumentsFromDisk(files) {
+  const picked = [...(files || [])];
+  if (!picked.length) return;
+
+  let ok = 0;
+  let skipped = 0;
+  const failed = [];
+
+  for (const file of picked) {
+    if (file.size > INGEST_MAX_BYTES) {
+      failed.push(`${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB — over the ${INGEST_MAX_BYTES / 1024 / 1024} MB limit)`);
+      continue;
+    }
+    try {
+      const content = await file.text();
+      if (!content.trim()) { failed.push(`${file.name} (empty)`); continue; }
+      const r = await rpc('ingestDoc', {
+        content,
+        title: file.name,
+        // webkitRelativePath is set when a folder was picked; it keeps the
+        // upsert key stable and distinguishes same-named files in subfolders.
+        sourcePath: file.webkitRelativePath || file.name,
+        sourceType: 'file',
+      });
+      if (r?.skipped) skipped += 1; else ok += 1;
+    } catch (err) {
+      failed.push(`${file.name} (${err.message})`);
+    }
+  }
+
+  const parts = [];
+  if (ok) parts.push(`${ok} ingested`);
+  if (skipped) parts.push(`${skipped} unchanged`);
+  if (failed.length) parts.push(`${failed.length} failed`);
+  toast({
+    variant: failed.length && !ok ? 'error' : ok ? 'success' : 'info',
+    message: parts.join(' · ') || 'Nothing to ingest.',
+    hint: failed.length ? failed.slice(0, 3).join('; ') : undefined,
+  });
+
+  if (ok) { refreshHealth(); if (location.hash === '#kb') refreshKb(); }
+}
+
+/** Open the OS file picker, then ingest whatever comes back. */
+function pickDocumentsToIngest() {
+  const el = $('#kb-ingest-file');
+  if (!el) return;
+  el.value = '';           // re-picking the same file must still fire `change`
+  el.click();
+}
+
+$('#kb-ingest-file')?.addEventListener('change', (e) => {
+  ingestDocumentsFromDisk(e.target.files);
+});
+
 // ⌘K — navigate, act, and (the point) run a live memory search from anywhere.
 const cmdk = initCmdk({
   rpc, setRoute, toast,
   openFact: (uid) => { setRoute('kb'); kbSetTab('facts'); kbSelectFact(uid); },
   // A fact saved from the bar should be visible immediately, not next poll.
   onRemembered: () => { refreshHealth(); if (location.hash === '#kb') refreshKb(); },
+  onIngest: pickDocumentsToIngest,
 });
 $('#home-remember')?.addEventListener('click', () => cmdk.compose?.());
 $('#kb-remember')?.addEventListener('click', () => cmdk.compose?.());
+$('#kb-ingest')?.addEventListener('click', pickDocumentsToIngest);
 
 const initial = (window.location.hash || '#health').slice(1);
 setRoute(validRoutes.includes(initial) ? initial : 'health');

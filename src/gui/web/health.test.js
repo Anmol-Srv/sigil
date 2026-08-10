@@ -73,6 +73,12 @@ describe('systemCells', () => {
     expect(c).toMatchObject({ s: 'err', v: 'openai failing', sub: '401' });
   });
 
+  it('condenses a CLI transcript in the sub-line too, not just the banner', () => {
+    // One row of a stat strip cannot carry 700 characters of JSON.
+    const c = cell({ ...HEALTHY, providers: { llm: { ok: false, provider: 'claude-cli', error: 'claude CLI exited 1: {"is_error":true,"usage":{}}' } } }, 'LLM');
+    expect(c.sub).toBe('claude CLI exited 1');
+  });
+
   it('distinguishes "not configured" from "not probed"', () => {
     expect(cell({ ...HEALTHY, providers: { llm: { ok: false, provider: null, error: 'not configured' } } }, 'LLM').v).toBe('not configured');
     expect(cell({ ...HEALTHY, providers: {} }, 'LLM').v).toBe('not probed');
