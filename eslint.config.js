@@ -71,6 +71,16 @@ export default [
     },
   },
 
+  // The graph island is JSX. Without this it matched no config block and was
+  // silently skipped — `npx eslint src/` reported clean on a file it never read.
+  {
+    files: ['src/gui/web/**/*.jsx'],
+    languageOptions: {
+      globals: { ...globals.browser },
+      parserOptions: { ecmaFeatures: { jsx: true } },
+    },
+  },
+
   // Tests: vitest functions are imported explicitly, so no extra globals are
   // needed — but allow the common test conveniences if any sneak in.
   {

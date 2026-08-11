@@ -18,6 +18,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import ForceGraph2D from 'react-force-graph-2d';
+// d3-force-3d is the exact force library force-graph runs internally, so these
+// compose with its simulation rather than fighting it. forceX/forceY are how
+// d3 does gravity — forceCenter only translates the centroid, it does not pull
+// anything inward, which is why the graph drifted apart without them.
+import { forceX, forceY, forceCollide } from 'd3-force-3d';
 
 /** Design tokens, read live so the graph can never drift from the stylesheet. */
 function readTokens() {
@@ -31,6 +36,7 @@ function readTokens() {
     brand: t('--brand', '#0084ff'),
     fg1: t('--fg-1', '#f4f5f6'),
     fg3: t('--fg-3', '#82858c'),
+    fg4: t('--fg-4', '#50535a'),
     bg: t('--bg-1', '#0b0c0e'),
     fontSans: t('--font-sans', "'Geist', ui-sans-serif, system-ui, sans-serif"),
   };
@@ -39,38 +45,12 @@ function readTokens() {
 const prefersReducedMotion = () =>
   Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 
-/**
- * Minimal collision force. force-graph bundles d3-force privately and doesn't
- * re-export forceCollide, so we register our own — same approach the previous
- * renderer used, kept because it is what stops hubs from overlapping.
- * O(n²) per tick, which is fine at a few hundred nodes.
- */
-function collideForce(radius, strength = 0.85) {
-  let nodes = [];
-  function force() {
-    for (let i = 0; i < nodes.length; i++) {
-      const a = nodes[i];
-      const ra = radius(a);
-      for (let j = i + 1; j < nodes.length; j++) {
-        const b = nodes[j];
-        let dx = (b.x + b.vx) - (a.x + a.vx);
-        let dy = (b.y + b.vy) - (a.y + a.vy);
-        let d2 = dx * dx + dy * dy;
-        const rmin = ra + radius(b);
-        if (d2 < rmin * rmin) {
-          if (d2 === 0) { dx = (i - j) * 0.5; dy = (j - i) * 0.5; d2 = dx * dx + dy * dy; }
-          const d = Math.sqrt(d2);
-          const push = ((rmin - d) / d) * strength * 0.5;
-          const ox = dx * push;
-          const oy = dy * push;
-          a.vx -= ox; a.vy -= oy;
-          b.vx += ox; b.vy += oy;
-        }
-      }
-    }
-  }
-  force.initialize = (n) => { nodes = n; };
-  return force;
+/** `#rrggbb` → `rgba(r,g,b,a)`, so link alpha can come off a design token. */
+function alpha(hex, a) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(String(hex).trim());
+  if (!m) return `rgba(130,133,140,${a})`;
+  const [r, g, b] = [1, 2, 3].map((i) => parseInt(m[i], 16));
+  return `rgba(${r},${g},${b},${a})`;
 }
 
 /** Entities scale gently with connectivity; facts stay small dots. */
@@ -174,12 +154,27 @@ function GraphView({ api }) {
     const deg = (node) => degrees.get(node.id ?? node) || 1;
 
     fg.d3Force('charge')
-      .strength(n > 400 ? -55 : n > 150 ? -110 : -160)
-      .distanceMax(n > 400 ? 400 : 600);
+      .strength(n > 400 ? -40 : n > 150 ? -75 : -110)
+      .distanceMax(n > 400 ? 300 : 420);
     fg.d3Force('link')
-      .distance((l) => 30 + Math.min(deg(l.source) + deg(l.target), 40) * 2.2)
+      .distance((l) => 26 + Math.min(deg(l.source) + deg(l.target), 40) * 1.6)
       .strength((l) => 1 / Math.max(1, Math.min(deg(l.source), deg(l.target))));
-    fg.d3Force('collide', collideForce((nd) => nd.r + 14, 0.9));
+
+    // Gravity. forceCenter (force-graph's default 'center') only re-centres the
+    // centroid — it exerts no inward pull, so with repulsion raised to break the
+    // hairball the components simply drifted apart and orphans flew to the
+    // margins. forceX/forceY toward the origin is d3's actual gravity: it pulls
+    // everything toward one mass without collapsing structure, because the
+    // charge/link forces still set local spacing. Scaled down as the graph grows
+    // so a big store doesn't get crushed into the middle.
+    const g = n > 400 ? 0.045 : n > 150 ? 0.07 : 0.09;
+    fg.d3Force('x', forceX(0).strength(g));
+    fg.d3Force('y', forceY(0).strength(g));
+
+    // d3's quadtree collide — O(n log n) against the previous hand-rolled
+    // O(n²) pass, and it is the implementation force-graph's own simulation
+    // expects. Radius leaves room for the label under each node.
+    fg.d3Force('collide', forceCollide().radius((nd) => nd.r + 10).strength(0.85));
   }, [graph, degrees]);
 
   const paintNode = useCallback((n, ctx, scale) => {
@@ -189,7 +184,16 @@ function GraphView({ api }) {
     ctx.beginPath();
     ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
     if (n.kind === 'entity') {
-      ctx.fillStyle = tokens[n.entityType] || tokens.topic;
+      // Colour by kind first: entity blue, with person kept as the one
+      // sub-distinction the legend already promises. Documents and facts are
+      // their own kinds below.
+      ctx.fillStyle = n.entityType === 'person' ? tokens.person
+        : n.entityType === 'document' ? tokens.document
+        : tokens.topic;
+      ctx.fill();
+      if (n.id === hover?.id) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = tokens.fg1; ctx.stroke(); }
+    } else if (n.kind === 'document') {
+      ctx.fillStyle = tokens.document;
       ctx.fill();
       if (n.id === hover?.id) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = tokens.fg1; ctx.stroke(); }
     } else {
@@ -247,16 +251,20 @@ function GraphView({ api }) {
 
   // Three tiers: incident-to-hover, idle, and faded-while-hovering-elsewhere,
   // so the focused subgraph reads clearly without hiding the rest.
+  // Links are grey, off --fg-4, in every state — colour on an edge competes
+  // with colour on a node, and the nodes are what carry meaning here. The
+  // mention/relation distinction moves to opacity and width instead, so the
+  // three hover tiers (incident / idle / faded) still read.
   const linkColor = useCallback((l) => {
     const sid = l.source?.id ?? l.source;
     const tid = l.target?.id ?? l.target;
     const incident = hover && (sid === hover.id || tid === hover.id);
     const faded = hover && !incident;
-    if (l.kind === 'relation') {
-      return incident ? 'rgba(0,132,255,0.7)' : faded ? 'rgba(0,132,255,0.06)' : 'rgba(0,132,255,0.3)';
-    }
-    return incident ? 'rgba(164,167,179,0.6)' : faded ? 'rgba(140,142,150,0.05)' : 'rgba(146,149,171,0.22)';
-  }, [hover]);
+    const strong = l.kind === 'relation';
+    if (incident) return alpha(tokens.fg3, strong ? 0.95 : 0.75);
+    if (faded) return alpha(tokens.fg4, 0.06);
+    return alpha(tokens.fg4, strong ? 0.55 : 0.32);
+  }, [hover, tokens]);
 
   const reduced = prefersReducedMotion();
 
