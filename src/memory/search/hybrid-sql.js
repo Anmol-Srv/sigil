@@ -29,10 +29,10 @@ const CONFIDENCE_HIGH_MULT = 1.0;
 const CONFIDENCE_MEDIUM_MULT = 0.85;
 const CONFIDENCE_LOW_MULT = 0.7;
 
-async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5, minConfidence = 'medium', pointInTime, categories, podIds = null }) {
+async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5, minConfidence = 'medium', pointInTime, categories, podIds = null, viewer = null }) {
   const vec = pgVector(queryEmbedding);
   const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
-  const { temporalClause, categoryClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories });
+  const { temporalClause, categoryClause, visibilityClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories, viewer });
   const overfetchLimit = limit * OVERFETCH;
 
   // Pod-scope filter — applied identically to both CTEs.
@@ -126,6 +126,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
         AND ${CONFIDENCE_CASE} >= ?
         ${temporalClause}
         ${categoryClause}
+        ${visibilityClause}
         ${podScopeClause}
       ORDER BY ${embeddingDistance}
       LIMIT ?
@@ -148,6 +149,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
         AND search_vector @@ plainto_tsquery('english', ?)
         ${temporalClause}
         ${categoryClause}
+        ${visibilityClause}
         ${podScopeClause}
       ORDER BY keyword_rank DESC
       LIMIT ?

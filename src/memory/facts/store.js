@@ -9,6 +9,7 @@ import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js'
 import { maskSecrets } from '../../hooks/secret-mask.js';
 import config from '../../config.js';
 import { PROMPTS_DIR } from '../../lib/paths.js';
+import { inferVisibility, normalizeVisibility, VISIBILITIES } from '../visibility.js';
 
 const AUDM_PROMPT_PATH = path.join(PROMPTS_DIR, 'audm-decision.md');
 
@@ -24,7 +25,7 @@ const SUPERSEDE_SCAN_LIMIT = config.memory.supersedeScanLimit;
  * AUDM pipeline: Add, Update, Delete (contradict), or Merge.
  * For each fact, checks similarity against existing facts and decides what to do.
  */
-async function saveFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding: precomputed }, db = cortexDb) {
+async function saveFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding: precomputed, visibility }, db = cortexDb) {
   // Defense-in-depth secret masking for any caller that reaches saveFact
   // without going through the ingest pipeline's choke point. Masking BEFORE
   // the embed fallback keeps secrets out of the embedding API on this path
@@ -42,7 +43,7 @@ async function saveFact({ content, category, confidence, importance, namespace, 
   const thresholds = { skip: SKIP_THRESHOLD, ambiguous: AMBIGUOUS_THRESHOLD, supersede: SUPERSEDE_THRESHOLD };
 
   if (!similar.length) {
-    const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding }, db);
+    const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding, visibility }, db);
     return { action: 'ADD', fact, audm: { topSimilarity: null, matchCount: 0, decision: 'no-match', thresholds } };
   }
 
@@ -70,14 +71,14 @@ async function saveFact({ content, category, confidence, importance, namespace, 
   const candidates = similar.filter((s) => s.similarity < SKIP_THRESHOLD);
 
   if (!candidates.length) {
-    const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding }, db);
+    const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding, visibility }, db);
     return { action: 'ADD', fact, audm: { ...audmBase, decision: 'below-ambiguous' } };
   }
 
   // Insert the new version once, then retire each invalidated neighbor against
   // it. Old facts become separate superseded/contradicted rows (full history
   // preserved) rather than being overwritten in place.
-  const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding }, db);
+  const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding, visibility }, db);
   const retired = [];
   for (const cand of candidates) {
     const decision = await audmDecide(content, cand.content);
@@ -127,8 +128,15 @@ async function audmDecide(newContent, existingContent) {
 
 // ── Core CRUD ───────────────────────────────────────────────────────────────
 
-async function insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding }, db = cortexDb) {
+async function insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding, visibility }, db = cortexDb) {
   const uid = `fact-${nanoid(16)}`;
+
+  // Visibility: an explicit value from the caller always wins (a `--visibility`
+  // flag or an RPC param is a deliberate act). Otherwise infer, which returns
+  // 'shared' for all but a narrow class of assistant-directed instructions.
+  const resolvedVisibility = visibility
+    ? normalizeVisibility(visibility)
+    : inferVisibility(content, { category });
 
   // Provenance + embedding-shape stamp. (PR review #5.)
   // - created_by_device_id comes from the authenticated RPC caller via
@@ -166,6 +174,7 @@ async function insertFact({ content, category, confidence, importance, namespace
       embeddingDim: Number(config.embedding.dimensions) || null,
       createdByDeviceId,
       createdByAgent,
+      visibility: resolvedVisibility,
     })
     .returning('*');
 
@@ -350,7 +359,12 @@ async function getHotFacts(namespace, { limit = 10, since } = {}) {
 async function listFacts({ namespace, limit = 50, offset = 0, category } = {}) {
   const query = cortexDb('fact')
     .where({ status: 'active' })
-    .select('id', 'uid', 'content', 'category', 'confidence', 'importance', 'createdAt', 'namespace')
+    // visibility is selected but NOT filtered on: the human browsing their own
+    // store must see every fact, and must be able to SEE that one is scoped to
+    // a single agent. Hiding the scoping from the owner is how a memory system
+    // becomes unpredictable — the surprise is never "why is this here", it is
+    // always "where did my fact go".
+    .select('id', 'uid', 'content', 'category', 'confidence', 'importance', 'createdAt', 'namespace', 'visibility')
     .orderBy('createdAt', 'desc')
     .limit(limit)
     .offset(offset);
@@ -358,6 +372,58 @@ async function listFacts({ namespace, limit = 50, offset = 0, category } = {}) {
   if (namespace) query.where({ namespace });
   if (category) query.where({ category });
   return query;
+}
+
+/**
+ * Change a stored fact's visibility.
+ *
+ * Every surveyed sync system specifies the initial decision well and the
+ * CHANGE badly — what happens to already-replicated copies when an item stops
+ * being syncable is left undefined almost everywhere. Sigil gets to answer it
+ * cleanly because a shared database has exactly one row: there is no other
+ * copy to chase, no tombstone to propagate, and the next read on every device
+ * sees the new value. Narrowing a fact takes effect everywhere immediately,
+ * and widening it brings the fact back rather than resurrecting a stale one.
+ *
+ * Accepts a numeric id, a full uid, or a uid prefix — same contract as
+ * forgetFact, because they get used in the same breath.
+ */
+async function setFactVisibility(idOrUid, visibility) {
+  const wanted = normalizeVisibility(visibility);
+  if (!VISIBILITIES.includes(visibility)) {
+    const err = new Error(`visibility must be one of: ${VISIBILITIES.join(', ')}`);
+    err.code = 'invalid_params';
+    throw err;
+  }
+
+  const arg = String(idOrUid ?? '').trim();
+  if (!arg) {
+    const err = new Error('setFactVisibility: id or uid required');
+    err.code = 'invalid_params';
+    throw err;
+  }
+
+  const [match] = /^\d+$/.test(arg)
+    ? await cortexDb('fact').where({ id: Number(arg) }).limit(1)
+    : await cortexDb('fact').where('uid', 'like', `${arg}%`).limit(1);
+  if (!match) return { notFound: true, query: arg };
+
+  const previous = match.visibility;
+  await cortexDb('fact').where({ id: match.id }).update({ visibility: wanted });
+
+  // Recorded in history for the same reason every other mutation is: a fact
+  // that silently stops appearing for one agent is indistinguishable from a
+  // retrieval bug unless something says when it changed and to what.
+  await recordHistory({
+    targetType: 'fact',
+    targetId: match.id,
+    event: 'VISIBILITY',
+    oldContent: previous,
+    newContent: wanted,
+    triggeredBy: 'manual',
+  });
+
+  return { uid: match.uid, content: match.content, from: previous, to: wanted };
 }
 
 async function getFactCount(namespace) {
@@ -429,6 +495,7 @@ export {
   getHotFacts,
   getFactCount,
   deleteFact,
+  setFactVisibility,
   listNamespaces,
   deleteNamespace,
 };

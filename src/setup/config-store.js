@@ -69,7 +69,12 @@ function defaults() {
     // so config.json is self-sufficient and no env file is consulted.
     http: { enabled: true, host: '127.0.0.1', port: 7777 },
     network: { mode: 'solo', enabled: false, masterNodeId: null },
-    defaults: { namespace: 'default' },
+    // namespace       — where THIS install writes. Always exactly one.
+    // searchNamespaces — where this install READS. Empty means "just my own".
+    //                    Set it (or use '*') when two installs share a
+    //                    database under different namespaces and should still
+    //                    see each other's memory.
+    defaults: { namespace: 'default', searchNamespaces: [] },
     memory: {
       skipThreshold: 0.88, ambiguousThreshold: 0.78, supersedeThreshold: 0.72,
       supersedeScanLimit: 8, minFactSimilarity: 0.45, injectionFloor: 0.6,

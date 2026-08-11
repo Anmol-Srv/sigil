@@ -116,6 +116,21 @@ export async function startDaemon({ foreground = false } = {}) {
     } catch { /* docker absent / unrelated DB — ignore */ }
     probeDbHealth(log);
 
+    // Register this install in the `device` table before anything can write a
+    // fact. Without it every local write stamps created_by_device_id = NULL,
+    // and in a shared-database deployment that makes two machines' memories
+    // indistinguishable — the exact question multi-device has to answer.
+    // Awaited deliberately (it is one indexed upsert) so no early ingest can
+    // race in and land un-attributed rows.
+    try {
+      const { ensureSelfDevice } = await import('../net/self-device.js');
+      const self = await ensureSelfDevice();
+      if (self) log(`device: this install is "${self.name}" (${self.nodeId.slice(0, 12)}…, id=${self.id})`);
+      else log('device: self-registration skipped (database unavailable) — writes will be unattributed');
+    } catch (err) {
+      log(`device: self-registration failed: ${err.message}`);
+    }
+
     // Live provider probe — a valid-looking-but-dead LLM/embedder (revoked key,
     // unreachable Ollama, wrong model) should be loud at boot, not silent until
     // the first ingest. Non-blocking; result is cached for `status`.
