@@ -13,13 +13,14 @@
     "test": "vitest",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
-    "build": "node build.js",
+    "build": "node scripts/build-gui.mjs && node build.js",
     "migrate": "knex migrate:latest",
     "migrate:rollback": "knex migrate:rollback",
     "migrate:make": "knex migrate:make",
     "test:reliability": "node test/reliability/run.js",
     "db:test:up": "docker compose up -d db",
-    "db:test:down": "docker compose down"
+    "db:test:down": "docker compose down",
+    "build:gui": "node scripts/build-gui.mjs"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -102,6 +103,9 @@
     "globals": "^17.7.0",
     "lodash-es": "^4.17.23",
     "nanoid": "^5.1.7",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-force-graph-2d": "^1.29.1",
     "vitest": "^4.0.18",
     "zod": "^3.24.0"
   }

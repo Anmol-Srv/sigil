@@ -16,7 +16,7 @@ export default [
       'web-redirect/**',
       'eval/**',
       'benchmarks/**',
-      'src/gui/web/vendor/**',  // vendored third-party UMD bundles (force-graph)
+      'src/gui/web/vendor/**',  // build output: the bundled React graph island
     ],
   },
 
@@ -63,11 +63,11 @@ export default [
   },
 
   // Browser-side GUI: different global environment (window, document, fetch…).
-  // ForceGraph is the vendored force-graph UMD global (loaded via <script>).
+  // The graph renderer is now an ES-module import, not a UMD global.
   {
     files: ['src/gui/web/**/*.js'],
     languageOptions: {
-      globals: { ...globals.browser, ForceGraph: 'readonly' },
+      globals: { ...globals.browser },
     },
   },
 

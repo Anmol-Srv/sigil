@@ -266,7 +266,7 @@
       </div>
 
       <div class="graph-stage" id="graph-stage">
-        <div id="graph-canvas"></div><!-- force-graph mounts its canvas here -->
+        <div id="graph-canvas"></div><!-- the React graph island mounts here -->
         <div class="graph-legend" id="graph-legend" aria-hidden="true">
           <span class="gl-item"><span class="gl-dot entity person"></span>Person</span>
           <span class="gl-item"><span class="gl-dot entity topic"></span>Topic</span>
@@ -278,7 +278,6 @@
           <button class="btn ghost small" id="graph-zoom-fit" aria-label="Fit to view">Fit</button>
           <button class="btn ghost small" id="graph-zoom-in" aria-label="Zoom in">+</button>
         </div>
-        <div class="graph-tooltip" id="graph-tooltip" hidden></div>
         <div class="graph-overlay" id="graph-overlay"></div>
       </div>
     </section>
@@ -645,8 +644,6 @@
     </div>
   </dialog>
 
-  <!-- force-graph (vasturiano), vendored UMD — defines window.ForceGraph -->
-  <script src="/static/vendor/force-graph.min.js"></script>
   <script type="module" src="/static/app.js"></script>
 </body>
 </html>

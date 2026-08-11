@@ -1661,8 +1661,12 @@ footer .footer-inner {
     var(--bg-canvas);
   overflow: hidden;
 }
-/* force-graph mounts its own <canvas> inside this container */
+/* The React island mounts here and renders its own <canvas>. The wrapper must
+   be positioned and filled: it measures itself with a ResizeObserver to size
+   the canvas, and a static auto-height div inside an absolutely-positioned
+   parent collapses to 0 — which renders a correctly-built graph invisibly. */
 #graph-canvas { position: absolute; inset: 0; }
+.graph-react-wrap { position: absolute; inset: 0; }
 #graph-canvas canvas { display: block; cursor: grab; touch-action: none; }
 #graph-canvas canvas:active { cursor: grabbing; }
 
