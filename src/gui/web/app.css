@@ -108,7 +108,10 @@ code, .mono { font-family: var(--font-mono); }
    Sidebar (left rail) — two-tier grouped nav. See DESIGN.md › Information
    Architecture. Fixed full-height; main/footer are offset by --sidebar.
    ════════════════════════════════════════════════════════════════════════ */
-header {
+/* Scoped to the top-level element on purpose: as a bare `header` selector this
+   claimed every <header> in the app, so a panel header inside a view inherited
+   `position: fixed` and flew to the top-left corner over the sidebar. */
+body > header {
   position: fixed;
   top: 0; left: 0; bottom: 0;
   width: var(--sidebar);
@@ -1265,7 +1268,7 @@ footer .footer-inner {
 @media (max-width: 768px) {
 
   /* Sidebar collapses back to a horizontal top bar; nav scrolls sideways */
-  header {
+  body > header {
     position: static;
     width: 100%;
     height: var(--header-h);
@@ -2042,29 +2045,30 @@ kbd {
 
 /* ════════════════════════════════════════════════════════════════════════
    Settings — rendered from the daemon's schema (settings.js)
-   Two levels: General/Advanced, then categories on the shared segmented
-   sub-nav. Rows are label-left / control-right, hairline separated — the
-   console density DESIGN.md asks for, not a grid of boxed fields.
+   A rail of categories beside a panel of rows. Nine categories outgrow
+   horizontal tabs; a vertical list has room for a label per row and keeps
+   working as the schema grows. Advanced is folded until asked for.
    ════════════════════════════════════════════════════════════════════════ */
-.set-toolbar {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: var(--s-4); flex-wrap: wrap; margin-bottom: var(--s-3);
+.set-shell {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1fr);
+  gap: var(--s-6);
+  align-items: start;
+  border-top: 1px solid var(--border);
+  padding-top: var(--s-5);
 }
 
-/* Tier switch — one decision, so a two-up segmented control rather than tabs. */
-.set-tiers { display: inline-flex; border: 1px solid var(--border-2); background: var(--bg-canvas); }
-.set-tier {
-  appearance: none; background: none; border: none;
-  padding: 0 var(--s-4); height: 30px;
-  color: var(--fg-3); font: 500 var(--t-base) var(--font-ui); cursor: pointer;
-  display: inline-flex; align-items: center; gap: var(--s-2);
-  transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+/* The rail sits inside a page that already has an app sidebar, so it stays
+   unfilled — a column of type, not a second slab of chrome competing with it. */
+.set-nav {
+  position: sticky;
+  top: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  min-width: 0;
 }
-.set-tier + .set-tier { border-left: 1px solid var(--border-2); }
-.set-tier:hover { color: var(--fg-2); }
-.set-tier.on { background: var(--brand-tint); color: var(--fg-1); }
-
-.set-search { position: relative; display: inline-flex; align-items: center; min-width: 240px; }
+.set-search { position: relative; display: flex; align-items: center; margin-bottom: var(--s-3); }
 .set-search .ic { position: absolute; left: var(--s-3); color: var(--fg-4); pointer-events: none; }
 .set-search input {
   width: 100%; height: 32px; padding: 0 var(--s-3) 0 calc(var(--s-3) + 22px);
@@ -2072,29 +2076,65 @@ kbd {
   font: var(--t-base) var(--font-ui);
 }
 .set-search input:focus { outline: none; border-color: var(--accent); }
-.subtab-count { font: 500 var(--t-xs) var(--font-mono); color: var(--fg-4); }
-.subtab.dim { opacity: 0.4; }
 
-.set-tier-help { margin: 0 0 var(--s-3); color: var(--fg-3); font-size: var(--t-sm); max-width: 78ch; line-height: 1.5; }
-.set-intro { margin: 0 0 var(--s-4); color: var(--fg-3); font-size: var(--t-sm); max-width: 78ch; line-height: 1.5; }
+.set-nav-section { display: flex; flex-direction: column; gap: 1px; margin-bottom: var(--s-3); }
+.set-nav-group {
+  display: flex; align-items: center; gap: 6px;
+  padding: var(--s-2) var(--s-2) var(--s-1);
+  font-size: var(--t-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.12em;
+  color: var(--fg-3);
+}
+.set-nav-group.toggle {
+  appearance: none; background: none; border: none; width: 100%;
+  cursor: pointer; text-align: left; font-family: var(--font-ui);
+  transition: color var(--dur-1) var(--ease);
+}
+.set-nav-group.toggle:hover { color: var(--fg-2); }
+.set-nav-group.toggle .ic {
+  width: 12px; height: 12px; color: var(--fg-4);
+  transition: transform var(--dur-2) var(--ease);
+}
+.set-nav-section.open > .set-nav-group.toggle .ic { transform: rotate(90deg); }
+
+.set-nav-item {
+  display: flex; align-items: center; gap: var(--s-2);
+  width: 100%; padding: var(--s-2);
+  background: none; border: none; border-left: 2px solid transparent;
+  color: var(--fg-2); font: 500 var(--t-base) var(--font-ui);
+  text-align: left; cursor: pointer;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.set-nav-item span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-nav-item .ic { color: var(--fg-4); flex: none; }
+.set-nav-item:hover { background: var(--bg-surface-2); color: var(--fg-1); }
+.set-nav-item.active { background: var(--brand-tint); border-left-color: var(--accent); color: var(--fg-1); }
+.set-nav-item.active .ic { color: var(--accent); }
+.set-nav-item.dim { opacity: 0.4; }
+.set-nav-count { flex: none; font: 500 var(--t-xs) var(--font-mono); color: var(--fg-4); }
+
+.set-panel { min-width: 0; }
+.set-panel-head { margin-bottom: var(--s-4); }
+.set-panel-head h3 { margin: 0; font-size: var(--t-xl); font-weight: 600; letter-spacing: -0.015em; color: var(--fg-1); }
+.set-panel-head p { margin: var(--s-2) 0 0; color: var(--fg-3); font-size: var(--t-sm); line-height: 1.55; max-width: 76ch; }
 .set-body { padding-bottom: var(--s-7); }
 
 /* A settings row: what it is on the left, the control on the right. */
 .set-row {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
-  gap: var(--s-5); align-items: start;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  gap: var(--s-5); align-items: center;
   padding: var(--s-4) 0; border-top: 1px solid var(--border);
 }
 .set-row:first-child { border-top: none; }
 .set-row.invalid { background: var(--err-bg); box-shadow: inset 2px 0 0 var(--err); }
+.set-row-text { min-width: 0; }
 .set-row-label { display: block; color: var(--fg-1); font-size: var(--t-md); font-weight: 500; }
-.set-row-help { margin: var(--s-2) 0 0; color: var(--fg-3); font-size: var(--t-sm); line-height: 1.55; max-width: 70ch; }
+.set-row-help { margin: var(--s-1) 0 0; color: var(--fg-3); font-size: var(--t-sm); line-height: 1.55; max-width: 70ch; }
 .set-row-error { color: var(--err); font-size: var(--t-sm); margin-top: var(--s-2); }
 .set-row-error:empty { display: none; }
 .set-row-control { display: flex; justify-content: flex-end; align-items: center; min-width: 0; }
 .set-row-control > * { width: 100%; }
 
-/* Boot-only settings are flagged before you commit, not after. */
 .set-restart {
   margin-left: var(--s-2);
   font: 500 var(--t-xs)/1 var(--font-mono);
@@ -2104,7 +2144,7 @@ kbd {
 }
 
 /* Switch — a state you flip. Sharp, like everything else here. */
-.set-switch { appearance: none; background: none; border: none; padding: 0; cursor: pointer; width: auto !important; align-self: center; }
+.set-switch { appearance: none; background: none; border: none; padding: 0; cursor: pointer; width: auto !important; }
 .set-switch-track {
   display: block; width: 38px; height: 20px; position: relative;
   background: var(--bg-surface-3); border: 1px solid var(--border-2);
@@ -2138,9 +2178,7 @@ kbd {
   flex: 1; min-width: 0; height: 20px; padding: 0; appearance: none;
   background: none; border: none; cursor: pointer;
 }
-.set-range input[type="range"]::-webkit-slider-runnable-track {
-  height: 3px; background: var(--bg-surface-3); border: none;
-}
+.set-range input[type="range"]::-webkit-slider-runnable-track { height: 3px; background: var(--bg-surface-3); border: none; }
 .set-range input[type="range"]::-webkit-slider-thumb {
   appearance: none; margin-top: -5px;
   width: 13px; height: 13px; background: var(--accent); border: none;
@@ -2174,13 +2212,21 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   .set-bar { transition: opacity 0.01ms; transform: none; }
-  .set-switch-thumb { transition: none; }
+  .set-switch-thumb, .set-nav-group.toggle .ic { transition: none; }
 }
 
+/* Below the split, the rail becomes a scrolling strip above the panel rather
+   than a second column squeezing the controls. */
+@media (max-width: 900px) {
+  .set-shell { grid-template-columns: 1fr; gap: var(--s-4); }
+  .set-nav { position: static; }
+  .set-nav-section { flex-direction: row; flex-wrap: wrap; align-items: center; gap: var(--s-1); margin-bottom: var(--s-2); }
+  .set-nav-group { padding: 0 var(--s-2) 0 0; }
+  .set-nav-item { width: auto; border-left: none; border-bottom: 2px solid transparent; }
+  .set-nav-item.active { border-left: none; border-bottom-color: var(--accent); }
+}
 @media (max-width: 720px) {
-  .set-row { grid-template-columns: 1fr; gap: var(--s-3); }
+  .set-row { grid-template-columns: 1fr; gap: var(--s-3); align-items: start; }
   .set-row-control { justify-content: flex-start; }
   .set-row-control > * { width: auto; min-width: 200px; }
-  .set-toolbar { align-items: stretch; }
-  .set-search { min-width: 0; width: 100%; }
 }

@@ -7,12 +7,12 @@
  *
  * The shape is deliberate. Forty-five controls in one scroll is the drift
  * DESIGN.md warns about — the rest of the dashboard reveals one section at a
- * time — so there are two levels: a General/Advanced tier, then categories as a
- * segmented sub-nav, the same control the Knowledge Base uses for
- * facts/entities/documents/pods. General is eight settings someone might
- * actually change; Advanced holds the thirty-seven that alter retrieval and
- * ranking. Search cuts across both, for when you know the name but not where
- * it lives.
+ * time. Navigation is a rail: search at the top, then categories grouped by
+ * tier, with Advanced collapsed by default. Nine categories outgrow horizontal
+ * tabs (they cramp and then wrap); a vertical list has room for a label per row
+ * and stays readable as the schema grows. General is eight settings someone
+ * might actually change; Advanced holds the thirty-seven that alter retrieval
+ * and ranking, so it stays folded until asked for. Search cuts across both.
  *
  * Controls are chosen by what the value IS, not by its JS type. A similarity
  * threshold is a position in a range, so it gets a slider you can feel plus a
@@ -100,9 +100,11 @@ export function initSettings({ rpc, toast, mount }) {
   if (!host) return { refresh: () => {} };
 
   let schema = null;
-  let tier = 'general';
   let active = null;
   let query = '';
+  // Advanced starts folded — it is thirty-seven ranking internals, not a
+  // destination you browse.
+  const open = new Set();
 
   const flat = () => schema.flat;
   const el = (sel) => host.querySelector(sel);
@@ -142,57 +144,69 @@ export function initSettings({ rpc, toast, mount }) {
   }
 
   function render() {
-    // Follow the hits. Searching while sitting on a category with no matches
-    // used to render "no setting matches" even though the term hit three rows
-    // one tab over — the search says something exists and the body denies it.
+    const grouped = schema.tiers.map((t) => ({
+      ...t,
+      sections: schema.sections.filter((sec) => (sec.tier || 'advanced') === t.id),
+    })).filter((g) => g.sections.length);
+
+    // Follow the hits. Searching from a category with no matches used to render
+    // "no setting matches" while the term hit rows in another group.
     if (query) {
-      const here = schema.sections.find((s) => s.id === active);
+      const here = schema.sections.find((sec) => sec.id === active);
       if (!here || !visibleCount(here)) {
-        const hit = schema.sections.find((s) => visibleCount(s) > 0);
-        if (hit) { tier = hit.tier || 'advanced'; active = hit.id; }
+        const hit = schema.sections.find((sec) => visibleCount(sec) > 0);
+        if (hit) { active = hit.id; if ((hit.tier || 'advanced') !== 'general') open.add(hit.tier || 'advanced'); }
       }
     }
+    if (!schema.sections.some((sec) => sec.id === active)) active = schema.sections[0]?.id ?? null;
 
-    const sections = schema.sections.filter((s) => (s.tier || 'advanced') === tier);
-    if (!sections.some((s) => s.id === active)) active = sections[0]?.id ?? null;
+    const railGroup = (g) => {
+      const collapsible = g.id !== 'general';
+      const expanded = !collapsible || open.has(g.id) || Boolean(query);
+      const hits = query ? g.sections.reduce((n, sec) => n + visibleCount(sec), 0) : 0;
+      const items = expanded ? g.sections.map((sec) => {
+        const n = visibleCount(sec);
+        return `<button class="set-nav-item${sec.id === active ? ' active' : ''}${query && !n ? ' dim' : ''}"
+          type="button" data-cat="${esc(sec.id)}" aria-current="${sec.id === active ? 'page' : 'false'}">
+          ${icon(CATEGORY_ICON[sec.id] || 'sliders')}<span>${esc(sec.title)}</span>
+          ${query ? `<span class="set-nav-count">${n}</span>` : ''}
+        </button>`;
+      }).join('') : '';
 
-    const tierNav = schema.tiers.map((t) => {
-      const hits = query
-        ? schema.sections.filter((s) => (s.tier || 'advanced') === t.id).reduce((n, s) => n + visibleCount(s), 0)
-        : 0;
-      return `<button class="set-tier${t.id === tier ? ' on' : ''}" type="button" data-tier="${esc(t.id)}"
-        aria-pressed="${t.id === tier}">${esc(t.label)}${query ? `<span class="subtab-count">${hits}</span>` : ''}</button>`;
-    }).join('');
+      const head = collapsible
+        ? `<button class="set-nav-group toggle" type="button" data-group="${esc(g.id)}" aria-expanded="${expanded}">
+             ${icon('chevron')}<span>${esc(g.label)}</span>
+             ${query && hits ? `<span class="set-nav-count">${hits}</span>` : ''}
+           </button>`
+        : `<div class="set-nav-group">${esc(g.label)}</div>`;
+      return `<div class="set-nav-section${expanded ? ' open' : ''}">${head}${items}</div>`;
+    };
 
-    const tabs = sections.map((s) => {
-      const n = visibleCount(s);
-      const dim = query && !n ? ' dim' : '';
-      return `<button class="subtab${s.id === active ? ' active' : ''}${dim}" type="button" role="tab"
-        aria-selected="${s.id === active}" data-cat="${esc(s.id)}">
-        ${icon(CATEGORY_ICON[s.id] || 'sliders')}<span>${esc(s.title)}</span>
-        ${query ? `<span class="subtab-count">${n}</span>` : ''}
-      </button>`;
-    }).join('');
-
-    const s = sections.find((x) => x.id === active) || sections[0];
-    const rows = s.settings
+    const sec = schema.sections.find((x) => x.id === active);
+    const rows = sec.settings
       .filter((d) => !query || (`${d.label} ${d.help || ''} ${d.path}`).toLowerCase().includes(query))
       .map(row).join('');
+    const tierOf = schema.tiers.find((t) => t.id === (sec.tier || 'advanced'));
 
-    const tierMeta = schema.tiers.find((t) => t.id === tier);
     host.innerHTML = `
-      <div class="set-toolbar">
-        <div class="set-tiers" role="group" aria-label="Settings level">${tierNav}</div>
-        <label class="set-search">
-          ${icon('search')}
-          <input type="search" placeholder="Search all settings…" aria-label="Search settings" value="${esc(query)}" autocomplete="off">
-        </label>
-      </div>
-      ${tierMeta?.help ? `<p class="set-tier-help">${esc(tierMeta.help)}</p>` : ''}
-      <div class="subnav" role="tablist" aria-label="Settings categories">${tabs}</div>
-      <div class="set-body">
-        ${s.help ? `<p class="set-intro">${esc(s.help)}</p>` : ''}
-        ${rows || `<div class="empty">No setting matches “${esc(query)}”. Try a different word, or clear the search.</div>`}
+      <div class="set-shell">
+        <nav class="set-nav" aria-label="Settings categories">
+          <label class="set-search">
+            ${icon('search')}
+            <input type="search" placeholder="Search settings…" aria-label="Search settings" value="${esc(query)}" autocomplete="off">
+          </label>
+          ${grouped.map(railGroup).join('')}
+        </nav>
+        <div class="set-panel">
+          <header class="set-panel-head">
+            <h3>${esc(sec.title)}</h3>
+            ${sec.help ? `<p>${esc(sec.help)}</p>`
+              : tierOf?.help ? `<p>${esc(tierOf.help)}</p>` : ''}
+          </header>
+          <div class="set-body">
+            ${rows || `<div class="empty">No setting matches “${esc(query)}”. Try a different word, or clear the search.</div>`}
+          </div>
+        </div>
       </div>
       <div class="set-bar" role="status">
         <span class="set-bar-count"></span>
@@ -213,7 +227,6 @@ export function initSettings({ rpc, toast, mount }) {
         tiers: tiers?.length ? tiers : [{ id: 'advanced', label: 'All settings', help: null }],
         flat: new Map(sections.flatMap((s) => s.settings.map((d) => [d.path, d]))),
       };
-      if (!schema.tiers.some((t) => t.id === tier)) tier = schema.tiers[0].id;
       if (!active || !sections.some((s) => s.id === active)) active = sections[0]?.id ?? null;
       render();
     } catch (err) {
@@ -223,11 +236,10 @@ export function initSettings({ rpc, toast, mount }) {
 
   // ── interaction ──────────────────────────────────────────────────────
   host.addEventListener('click', async (e) => {
-    const tierBtn = e.target.closest('[data-tier]');
-    if (tierBtn) {
-      if (Object.keys(dirty()).length && !window.confirm('Discard your unsaved changes?')) return;
-      tier = tierBtn.dataset.tier;
-      active = null;
+    const group = e.target.closest('[data-group]');
+    if (group) {
+      const id = group.dataset.group;
+      if (open.has(id)) open.delete(id); else open.add(id);
       render();
       return;
     }
