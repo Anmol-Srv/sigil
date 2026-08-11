@@ -70,6 +70,10 @@ function GraphView({ api }) {
   const tokens = useMemo(readTokens, []);
   const fitted = useRef(false);
   const labelRects = useRef([]);   // per-frame label occlusion buffer
+  // force-graph mutates the very node objects handed to the graphData PROP,
+  // adding x/y/vx/vy in place — so holding them here is how we reach live
+  // positions. The ref exposes no graphData() getter (see relayout).
+  const nodesRef = useRef([]);
 
   // Adjacency for hover highlight, rebuilt whenever data changes. Built from
   // the ORIGINAL ids: force-graph mutates each link's source/target from an id
@@ -93,7 +97,7 @@ function GraphView({ api }) {
     api.current = {
       setData: (data) => {
         fitted.current = false;
-        setGraph({
+        const seeded = {
           // Sorted by connectivity, descending. force-graph paints in array
           // order, and the label occlusion buffer is first-come-first-served —
           // so drawing hubs first is what makes the important labels win the
@@ -102,12 +106,39 @@ function GraphView({ api }) {
             .map((n) => ({ ...n, r: nodeRadius(n) }))
             .sort((a, b) => (b.degree || 0) - (a.degree || 0)),
           links: data.edges.map((e) => ({ ...e })),
-        });
+        };
+        nodesRef.current = seeded.nodes;
+        setGraph(seeded);
       },
       zoomBy: (f) => fgRef.current?.zoom(fgRef.current.zoom() * f, 200),
       fit: () => fgRef.current?.zoomToFit(400, 64),
+      // Reheating alone looked like a no-op: alpha went back to 1 but every
+      // node was already at its solution, so the forces just re-converged on the
+      // same picture. Re-seed positions first — unpin, scatter onto a ring sized
+      // to the node count, zero velocity — so the run genuinely explores a new
+      // layout, then re-fit when it settles.
+      // react-force-graph forwards only a fixed method list to the ref —
+      // emitParticle, d3Force, d3ReheatSimulation, stopAnimation,
+      // pauseAnimation, resumeAnimation, centerAt, zoom, zoomToFit,
+      // getGraphBbox, screen2GraphCoords, graph2ScreenCoords. graphData is a
+      // PROP, not a ref method, so `fgRef.current.graphData()` is undefined and
+      // optional-chaining it left `nodes` empty: the re-seed never ran and
+      // "Re-run layout" only reheated an already-converged simulation, which
+      // looks exactly like a dead button. Use the node objects we own instead.
       relayout: () => {
-        for (const n of fgRef.current?.graphData().nodes || []) { n.fx = undefined; n.fy = undefined; }
+        const nodes = nodesRef.current || [];
+        // Random seed, not a deterministic ring: seeding from the node index
+        // made every run start identically and converge on the same picture, so
+        // the second press looked as dead as the original bug.
+        const radius = Math.max(60, Math.sqrt(nodes.length) * 22);
+        nodes.forEach((n) => {
+          const a = Math.random() * Math.PI * 2;
+          const d = radius * (0.25 + Math.random() * 0.75);
+          n.fx = undefined; n.fy = undefined;
+          n.x = Math.cos(a) * d;
+          n.y = Math.sin(a) * d;
+          n.vx = 0; n.vy = 0;
+        });
         fitted.current = false;
         fgRef.current?.d3ReheatSimulation();
       },
@@ -293,7 +324,12 @@ function GraphView({ api }) {
           onRenderFramePre={() => { labelRects.current.length = 0; }}
           onNodeHover={setHover}
           onNodeClick={(n) => api.current?.onNodeClick?.(n)}
-          onNodeDragEnd={(n) => { n.fx = n.x; n.fy = n.y; }}
+          // Release the node instead of pinning it. Setting fx/fy on drop froze
+          // whatever you dragged, so gravity could never reclaim it and its
+          // neighbours stretched away from the mass trying to follow — which is
+          // exactly the "dragged clusters flow away" behaviour. Dropping it back
+          // into the simulation lets the layout re-absorb it.
+          onNodeDragEnd={(n) => { n.fx = undefined; n.fy = undefined; }}
           onBackgroundClick={() => setHover(null)}
           warmupTicks={reduced ? 200 : 0}
           cooldownTicks={reduced ? 0 : 200}

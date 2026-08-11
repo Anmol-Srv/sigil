@@ -1960,3 +1960,63 @@ kbd {
   .sysbanner { flex-wrap: wrap; }
   .sysbanner .btn { margin-left: calc(16px + var(--s-3)); }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Bounded lists + calmer detail panes
+   Long lists were growing the PAGE instead of scrolling themselves: Activity
+   reached 2614px inside a 950px viewport, so the header, filters and the
+   detail pane all scrolled away while you read. Each list now owns its own
+   scroll and the page stays put.
+   ════════════════════════════════════════════════════════════════════════ */
+.trace-list {
+  max-height: calc(100vh - 340px);
+  min-height: 240px;
+  overflow-y: auto;
+}
+
+/* Detail pane scrolls independently and tops out level with the list beside
+   it, so selecting a long fact can't push the layout around. */
+.kb-detail {
+  max-height: 560px;
+  overflow-y: auto;
+}
+
+/* The fact IS the page — it was rendering at the same weight as its own
+   metadata. Give it the room to read as the subject. */
+.kb-fact-body {
+  font-size: var(--t-lg);
+  line-height: 1.55;
+  color: var(--fg-1);
+  margin-bottom: var(--s-5);
+}
+
+/* A document title can be a 64-char content hash (`thought:<sha256>`), which
+   ran the full width and pushed the action button off the edge. Clamp it and
+   keep the full value in the Provenance block below. */
+.kb-entity-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-detail-head > div:first-child { min-width: 0; flex: 1; }
+.kb-detail-head .btn { flex: none; }
+
+/* Machine values (uids, hashes, paths) break anywhere rather than forcing the
+   column wider than the pane. */
+.kb-kv .row .v { overflow-wrap: anywhere; word-break: break-word; }
+
+/* Provenance is context, not the headline — quieter than the fact above it. */
+.kb-block .trace-block-h { color: var(--fg-3); }
+.kb-kv { background: transparent; }
+.kb-kv .row { padding: var(--s-2) var(--s-3); }
+
+/* Forget destroys a memory; it should read that way rather than as a link.
+   Needs to out-specify `.btn.ghost`, which sets the muted colour. */
+.btn.ghost.kb-forget { color: var(--err); }
+.btn.ghost.kb-forget:hover { background: var(--err-bg); border-color: rgba(255, 90, 82, 0.35); color: var(--err); }
+
+@media (max-width: 920px) {
+  .kb-detail { max-height: none; }
+  .trace-list { max-height: none; min-height: 0; }
+}
