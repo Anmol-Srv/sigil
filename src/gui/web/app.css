@@ -2077,7 +2077,10 @@ kbd {
 }
 .set-search input:focus { outline: none; border-color: var(--accent); }
 
-.set-nav-section { display: flex; flex-direction: column; gap: 1px; margin-bottom: var(--s-3); }
+/* Groups separate the two halves; nothing is folded away, so every category
+   stays one click from anywhere. */
+.set-nav-section { display: flex; flex-direction: column; gap: 1px; }
+.set-nav-section + .set-nav-section { margin-top: var(--s-4); }
 .set-nav-group {
   display: flex; align-items: center; gap: 6px;
   padding: var(--s-2) var(--s-2) var(--s-1);
@@ -2085,17 +2088,6 @@ kbd {
   text-transform: uppercase; letter-spacing: 0.12em;
   color: var(--fg-3);
 }
-.set-nav-group.toggle {
-  appearance: none; background: none; border: none; width: 100%;
-  cursor: pointer; text-align: left; font-family: var(--font-ui);
-  transition: color var(--dur-1) var(--ease);
-}
-.set-nav-group.toggle:hover { color: var(--fg-2); }
-.set-nav-group.toggle .ic {
-  width: 12px; height: 12px; color: var(--fg-4);
-  transition: transform var(--dur-2) var(--ease);
-}
-.set-nav-section.open > .set-nav-group.toggle .ic { transform: rotate(90deg); }
 
 .set-nav-item {
   display: flex; align-items: center; gap: var(--s-2);
@@ -2212,7 +2204,7 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   .set-bar { transition: opacity 0.01ms; transform: none; }
-  .set-switch-thumb, .set-nav-group.toggle .ic { transition: none; }
+  .set-switch-thumb { transition: none; }
 }
 
 /* Below the split, the rail becomes a scrolling strip above the panel rather
@@ -2220,7 +2212,8 @@ kbd {
 @media (max-width: 900px) {
   .set-shell { grid-template-columns: 1fr; gap: var(--s-4); }
   .set-nav { position: static; }
-  .set-nav-section { flex-direction: row; flex-wrap: wrap; align-items: center; gap: var(--s-1); margin-bottom: var(--s-2); }
+  .set-nav-section { flex-direction: row; flex-wrap: wrap; align-items: center; gap: var(--s-1); }
+  .set-nav-section + .set-nav-section { margin-top: var(--s-2); }
   .set-nav-group { padding: 0 var(--s-2) 0 0; }
   .set-nav-item { width: auto; border-left: none; border-bottom: 2px solid transparent; }
   .set-nav-item.active { border-left: none; border-bottom-color: var(--accent); }

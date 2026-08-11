@@ -12,7 +12,9 @@
  * tabs (they cramp and then wrap); a vertical list has room for a label per row
  * and stays readable as the schema grows. General is eight settings someone
  * might actually change; Advanced holds the thirty-seven that alter retrieval
- * and ranking, so it stays folded until asked for. Search cuts across both.
+ * and ranking. They are separated, not hidden — everything stays one click
+ * away, with the heading telling you which half you are in. Search cuts across
+ * both.
  *
  * Controls are chosen by what the value IS, not by its JS type. A similarity
  * threshold is a position in a range, so it gets a slider you can feel plus a
@@ -102,9 +104,6 @@ export function initSettings({ rpc, toast, mount }) {
   let schema = null;
   let active = null;
   let query = '';
-  // Advanced starts folded — it is thirty-seven ranking internals, not a
-  // destination you browse.
-  const open = new Set();
 
   const flat = () => schema.flat;
   const el = (sel) => host.querySelector(sel);
@@ -155,31 +154,23 @@ export function initSettings({ rpc, toast, mount }) {
       const here = schema.sections.find((sec) => sec.id === active);
       if (!here || !visibleCount(here)) {
         const hit = schema.sections.find((sec) => visibleCount(sec) > 0);
-        if (hit) { active = hit.id; if ((hit.tier || 'advanced') !== 'general') open.add(hit.tier || 'advanced'); }
+        if (hit) active = hit.id;
       }
     }
     if (!schema.sections.some((sec) => sec.id === active)) active = schema.sections[0]?.id ?? null;
 
     const railGroup = (g) => {
-      const collapsible = g.id !== 'general';
-      const expanded = !collapsible || open.has(g.id) || Boolean(query);
-      const hits = query ? g.sections.reduce((n, sec) => n + visibleCount(sec), 0) : 0;
-      const items = expanded ? g.sections.map((sec) => {
+      const items = g.sections.map((sec) => {
         const n = visibleCount(sec);
         return `<button class="set-nav-item${sec.id === active ? ' active' : ''}${query && !n ? ' dim' : ''}"
           type="button" data-cat="${esc(sec.id)}" aria-current="${sec.id === active ? 'page' : 'false'}">
           ${icon(CATEGORY_ICON[sec.id] || 'sliders')}<span>${esc(sec.title)}</span>
           ${query ? `<span class="set-nav-count">${n}</span>` : ''}
         </button>`;
-      }).join('') : '';
-
-      const head = collapsible
-        ? `<button class="set-nav-group toggle" type="button" data-group="${esc(g.id)}" aria-expanded="${expanded}">
-             ${icon('chevron')}<span>${esc(g.label)}</span>
-             ${query && hits ? `<span class="set-nav-count">${hits}</span>` : ''}
-           </button>`
-        : `<div class="set-nav-group">${esc(g.label)}</div>`;
-      return `<div class="set-nav-section${expanded ? ' open' : ''}">${head}${items}</div>`;
+      }).join('');
+      return `<div class="set-nav-section">
+        <div class="set-nav-group">${esc(g.label)}</div>${items}
+      </div>`;
     };
 
     const sec = schema.sections.find((x) => x.id === active);
@@ -236,14 +227,6 @@ export function initSettings({ rpc, toast, mount }) {
 
   // ── interaction ──────────────────────────────────────────────────────
   host.addEventListener('click', async (e) => {
-    const group = e.target.closest('[data-group]');
-    if (group) {
-      const id = group.dataset.group;
-      if (open.has(id)) open.delete(id); else open.add(id);
-      render();
-      return;
-    }
-
     const tab = e.target.closest('[data-cat]');
     if (tab) {
       // Switching category with unsaved edits would silently discard them.
