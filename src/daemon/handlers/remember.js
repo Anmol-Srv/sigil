@@ -83,7 +83,11 @@ async function saveFacts(facts, params) {
     const inputs = []; // per-input causal trace
 
     for (const text of facts) {
-      const result = await ingestDocument({ content: text, namespace, classify: true, podUids });
+      // `atomic`: documentShape() above already rejected anything that isn't a
+      // short self-contained statement, so this input never needs the knowledge
+      // route. Skips chunk → contextualize → extract, and stops the extractor
+      // rewording a fact the caller asked to store as written.
+      const result = await ingestDocument({ content: text, namespace, classify: true, atomic: true, podUids });
       if (result.skipped || result.route === 'noise') {
         alreadyKnown++;
         inputs.push({ input: String(text).slice(0, 240), route: result.route ?? null, skipped: true, verdicts: result.facts?.verdicts || [] });
