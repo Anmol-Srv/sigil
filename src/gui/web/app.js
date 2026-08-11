@@ -1618,9 +1618,25 @@ async function loadEngine() {
   // the pair.
   const running = !!s.running;
   const enabled = !!s.enabled;
+
+  // "Starting" has to be able to END. The pool is built once, at daemon boot,
+  // so enabling the flag on an already-running daemon leaves enabled=true with
+  // no pool and nothing that will ever change that — the page sat on "Starting"
+  // indefinitely while the real answer was "this daemon predates the change".
+  // Uptime tells the two apart: a worker takes ~13s to hand shake (measured
+  // 11-17s), and the pool boots serially, so budget per worker.
+  let bootBudgetMs = 45000;
+  let uptimeMs = null;
+  if (enabled && !running) {
+    try { uptimeMs = (await rpc('ping')).uptimeMs; } catch { /* leave unknown */ }
+    bootBudgetMs = 20000 + Math.max(1, Number(s.poolSize) || 1) * 25000;
+  }
+  const staleDaemon = enabled && !running && uptimeMs != null && uptimeMs > bootBudgetMs;
+
   const mode = enabled
     ? (running ? { label: 'Managed', sub: 'warm tmux workers', pill: 'ok', tag: 'managed' }
-               : { label: 'Starting', sub: 'enabled — pool not up yet', pill: 'warn', tag: 'starting' })
+       : staleDaemon ? { label: 'Restart needed', sub: 'enabled after this daemon started', pill: 'warn', tag: 'restart needed' }
+                     : { label: 'Starting', sub: 'enabled — pool booting', pill: 'warn', tag: 'starting' })
     : (running ? { label: 'Draining', sub: 'switched off — workers still alive', pill: 'warn', tag: 'draining' }
                : { label: 'One-shot', sub: 'claude -p per call', pill: '', tag: 'one-shot' });
   setStatus(mode.pill, mode.tag);
@@ -1640,8 +1656,11 @@ async function loadEngine() {
     if (!s.enabled) why = 'Managed-session engine is off. Every LLM call uses the proven one-shot <code>claude -p</code> path.';
     else if (!s.tmuxAvailable) why = '<code>SIGIL_MANAGED_SESSION=true</code> is set, but <code>tmux</code> was not found on PATH — staying on one-shot.';
     else if (s.provider && s.provider !== 'claude-cli') why = `LLM provider is <code>${escape(s.provider)}</code> (not <code>claude-cli</code>) — API providers don't need warm sessions.`;
-    else why = 'Engine enabled but no workers are running yet.';
-    const how = engineBlocker(s) || 'Use the button above — Sigil restarts the daemon and brings the pool up.';
+    else if (staleDaemon) why = 'Warm workers are enabled, but the pool is built once at daemon boot and this daemon started before the setting changed — so nothing is booting and nothing will.';
+    else why = `Engine enabled — the pool is booting. A worker takes about 13s to hand shake${(Number(s.poolSize) || 1) > 1 ? ', and they boot one after another' : ''}.`;
+    const how = engineBlocker(s)
+      || (staleDaemon ? 'Restart to bring it up: `sigil daemon restart` (or toggle it off and on again here).'
+                      : 'Use the button above — Sigil restarts the daemon and brings the pool up.');
     host.innerHTML = `<div class="empty">${why}<br><span class="muted">${escape(how)}</span></div>`;
   } else if (!s.workers || !s.workers.length) {
     host.innerHTML = `<div class="empty">No live workers — the pool is spinning up or has yielded to one-shot after repeated boot failures. Check <code>~/.sigil/sigild.log</code>.</div>`;
