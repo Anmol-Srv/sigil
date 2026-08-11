@@ -58,7 +58,6 @@
     <div class="brand">
       <img class="brand-mark" src="/static/design/sigil-mark.svg" alt="Sigil" width="22" height="22">
       <div class="brand-name">Sigil</div>
-      <div class="brand-badge" id="brand-badge">local</div>
     </div>
 
     <!-- ⌘K entry point. The bar is the product: search memory, jump anywhere,
@@ -260,7 +259,6 @@
         </div>
         <div class="actions">
           <span class="graph-meta" id="graph-meta"></span>
-          <button class="btn" id="graph-relayout" title="Re-run the layout" data-icon="pulse">Re-run layout</button>
           <button class="btn" id="graph-refresh" data-icon="refresh">Refresh</button>
         </div>
       </div>
@@ -639,7 +637,7 @@
         <span class="cmdk-inputic" data-icon="search"></span>
         <input id="cmdk-input" type="text" autocomplete="off" spellcheck="false"
                role="combobox" aria-expanded="true" aria-controls="cmdk-list"
-               placeholder="Search memory, jump to a page, or run a command…">
+               placeholder="Search memory or run a command…">
         <kbd>esc</kbd>
       </div>
       <ul class="cmdk-list" id="cmdk-list" role="listbox" aria-label="Results"></ul>

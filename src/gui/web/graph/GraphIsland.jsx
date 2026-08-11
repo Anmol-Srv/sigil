@@ -117,31 +117,6 @@ function GraphView({ api }) {
       // same picture. Re-seed positions first — unpin, scatter onto a ring sized
       // to the node count, zero velocity — so the run genuinely explores a new
       // layout, then re-fit when it settles.
-      // react-force-graph forwards only a fixed method list to the ref —
-      // emitParticle, d3Force, d3ReheatSimulation, stopAnimation,
-      // pauseAnimation, resumeAnimation, centerAt, zoom, zoomToFit,
-      // getGraphBbox, screen2GraphCoords, graph2ScreenCoords. graphData is a
-      // PROP, not a ref method, so `fgRef.current.graphData()` is undefined and
-      // optional-chaining it left `nodes` empty: the re-seed never ran and
-      // "Re-run layout" only reheated an already-converged simulation, which
-      // looks exactly like a dead button. Use the node objects we own instead.
-      relayout: () => {
-        const nodes = nodesRef.current || [];
-        // Random seed, not a deterministic ring: seeding from the node index
-        // made every run start identically and converge on the same picture, so
-        // the second press looked as dead as the original bug.
-        const radius = Math.max(60, Math.sqrt(nodes.length) * 22);
-        nodes.forEach((n) => {
-          const a = Math.random() * Math.PI * 2;
-          const d = radius * (0.25 + Math.random() * 0.75);
-          n.fx = undefined; n.fy = undefined;
-          n.x = Math.cos(a) * d;
-          n.y = Math.sin(a) * d;
-          n.vx = 0; n.vy = 0;
-        });
-        fitted.current = false;
-        fgRef.current?.d3ReheatSimulation();
-      },
       refit: () => { setHover(null); fgRef.current?.zoomToFit(400, 64); },
     };
   }, [api]);
@@ -390,7 +365,6 @@ export function mountGraph(container) {
     setData: (d) => { if (impl) impl.setData(d); else pending = d; },
     zoomBy: (f) => impl?.zoomBy(f),
     fit: () => impl?.fit(),
-    relayout: () => impl?.relayout(),
     refit: () => impl?.refit(),
     onNodeClick: null,
   };

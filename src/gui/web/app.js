@@ -174,7 +174,6 @@ async function refreshHealth() {
     $('#hm-facts').textContent = fmtNum(status.facts);
     $('#hm-entities').textContent = fmtNum(ents);
     $('#hm-relations').textContent = fmtNum(status.relations);
-    $('#brand-badge').textContent = mode.mode || 'solo';
 
     // ── diagnostics drawer: the daemon plumbing, demoted ──
     const rows = [
@@ -1010,7 +1009,6 @@ async function mapLimit(items, limit, fn) {
 $('#graph-zoom-in')?.addEventListener('click', () => graph.island?.zoomBy(1.25));
 $('#graph-zoom-out')?.addEventListener('click', () => graph.island?.zoomBy(1 / 1.25));
 $('#graph-zoom-fit')?.addEventListener('click', () => graph.island?.fit());
-$('#graph-relayout')?.addEventListener('click', () => graph.island?.relayout());
 $('#graph-refresh')?.addEventListener('click', (e) => withBusy(e.currentTarget, () => { graph.loaded = false; return loadGraph(); }));
 
 function openGraphNode(n) {

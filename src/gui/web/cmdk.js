@@ -1,10 +1,13 @@
 /**
  * ⌘K — the one bar that does everything. See DESIGN.md › Global ⌘K.
  *
- * Three implicit modes, no tabs:
- *   Navigate — jump to any page
- *   Act      — remember a fact, add a device, refresh, clear the log
- *   Recall   — anything typed also runs a live hybrid memory search
+ * Two implicit modes, no tabs:
+ *   Act    — remember a fact, add a device, connect a tool
+ *   Recall — anything typed also runs a live hybrid memory search
+ *
+ * Navigation deliberately lives in the sidebar only: it is always visible and
+ * one click away, so listing every page here just pushed the recall results —
+ * the thing the bar exists for — below the fold.
  *
  * The search half matters most: recall is the product, and until now the
  * dashboard was the only Sigil surface that couldn't run one. Results open the
@@ -18,19 +21,7 @@ import { icon } from './icons.js';
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const NAV = [
-  { route: 'health',   label: 'Home',           icon: 'home',     hint: 'memory at a glance' },
-  { route: 'kb',       label: 'Knowledge Base', icon: 'layers',   hint: 'facts · entities · documents · pods' },
-  { route: 'graph',    label: 'Graph',          icon: 'graph',    hint: 'the whole memory, linked' },
-  { route: 'activity', label: 'Activity',       icon: 'activity', hint: 'causal log of every search and write' },
-  { route: 'agents',   label: 'Agents',         icon: 'terminal', hint: 'connect coding tools' },
-  { route: 'devices',  label: 'Devices',        icon: 'monitor',  hint: 'paired Sigil installs' },
-  { route: 'engine',   label: 'Engine',         icon: 'cpu',      hint: 'LLM workers' },
-  { route: 'settings', label: 'Settings',       icon: 'sliders',  hint: 'providers, config, reset' },
-  { route: 'setup',    label: 'Database',       icon: 'database', hint: 'connection, pgvector, migrations' },
-];
-
-// Simple subsequence match — "kb" hits "Knowledge Base", "act" hits "Activity".
+// Simple subsequence match — "rem" hits "Remember a fact", "dev" hits "Add a device".
 export function fuzzy(needle, hay) {
   const n = needle.toLowerCase(), h = hay.toLowerCase();
   if (!n) return true;
@@ -83,8 +74,6 @@ export function initCmdk({ rpc, setRoute, openFact, toast, onRemembered, onInges
       return;
     }
     const q = input.value.trim();
-    const nav = NAV.filter((n) => fuzzy(q, n.label))
-      .map((n) => ({ ...n, run: () => { close(); setRoute(n.route); } }));
     const acts = ACTIONS.filter((a) => fuzzy(q, a.label));
     const mem = hits.map((f) => ({
       label: f.content, icon: 'zap',
@@ -95,7 +84,7 @@ export function initCmdk({ rpc, setRoute, openFact, toast, onRemembered, onInges
       run: () => { close(); openFact(f.uid); },
     }));
 
-    items = [...nav, ...acts, ...mem];
+    items = [...acts, ...mem];
     if (cursor >= items.length) cursor = Math.max(0, items.length - 1);
 
     let html = '';
@@ -105,14 +94,13 @@ export function initCmdk({ rpc, setRoute, openFact, toast, onRemembered, onInges
       html += `<li class="cmdk-group" role="presentation">${esc(title)}</li>`;
       for (const it of arr) html += row(it, i++);
     };
-    group('Go to', nav);
     group('Actions', acts);
     group(q ? `Memory · “${q}”` : 'Memory', mem);
 
     if (!items.length) {
       html = q
-        ? `<li class="cmdk-note">No page, action, or stored fact matches <strong>${esc(q)}</strong>.</li>`
-        : `<li class="cmdk-note">Type to search memory, jump to a page, or run a command.</li>`;
+        ? `<li class="cmdk-note">No action or stored fact matches <strong>${esc(q)}</strong>.</li>`
+        : `<li class="cmdk-note">Type to search memory, or run a command.</li>`;
     }
     list.innerHTML = html;
     input.setAttribute('aria-activedescendant', items.length ? `cmdk-o${cursor}` : '');
@@ -154,7 +142,7 @@ export function initCmdk({ rpc, setRoute, openFact, toast, onRemembered, onInges
     mode = 'command';
     dlg.classList.remove('composing');
     input.value = '';
-    input.placeholder = 'Search memory, jump to a page, or run a command…';
+    input.placeholder = 'Search memory or run a command…';
     setFoot('');
     render();
   }
