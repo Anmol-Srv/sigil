@@ -222,3 +222,34 @@ export async function nameCandidates(candidates, { promptJson, batchSize = 8, ca
   }
   return out;
 }
+
+/**
+ * Persist named candidates as relations, tagged with where they came from.
+ *
+ * Idempotent through createRelation's ON CONFLICT: re-running maintenance
+ * bumps mention_count rather than duplicating, and an edge later asserted from
+ * real text upgrades its own provenance to 'llm-extract'.
+ */
+export async function applyDerived(named, { canonicalize, createRelation, validAt = null } = {}) {
+  let written = 0;
+  let skipped = 0;
+  for (const r of named) {
+    const relationType = canonicalize(r.relationship);
+    if (!relationType || r.sourceId === r.targetId) { skipped++; continue; }
+    try {
+      await createRelation({
+        sourceId: r.sourceId,
+        targetId: r.targetId,
+        relationType,
+        validAt,
+        derivedBy: 'co-occurrence',
+        confidence: r.confidence || 'medium',
+        weight: Number.isFinite(r.pmi) ? r.pmi : null,
+      });
+      written++;
+    } catch {
+      skipped++;   // one bad edge must not abort an unattended maintenance run
+    }
+  }
+  return { written, skipped };
+}

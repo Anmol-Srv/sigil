@@ -1,15 +1,24 @@
 import cortexDb from '../../db/cortex.js';
 
-async function createRelation({ sourceId, targetId, relationType, sourceFactId, validAt }) {
+async function createRelation({
+  sourceId, targetId, relationType, sourceFactId, validAt,
+  derivedBy = 'llm-extract', confidence = null, weight = null,
+}) {
   const { rows: [relation] } = await cortexDb.raw(`
-    INSERT INTO relation (source_id, target_id, relation_type, source_fact_id, mention_count, valid_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 1, ?, NOW(), NOW())
+    INSERT INTO relation (source_id, target_id, relation_type, source_fact_id, mention_count, valid_at, derived_by, confidence, weight, created_at, updated_at)
+    VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, NOW(), NOW())
     ON CONFLICT (source_id, target_id, relation_type) DO UPDATE SET
       mention_count = relation.mention_count + 1,
       source_fact_id = COALESCE(EXCLUDED.source_fact_id, relation.source_fact_id),
+      -- An asserted edge outranks a derived one: if graph-extractor later reads
+      -- this same relation off a sentence, that is stronger evidence than the
+      -- co-occurrence that first proposed it, so let it win the provenance.
+      derived_by = CASE WHEN EXCLUDED.derived_by = 'llm-extract' THEN 'llm-extract' ELSE relation.derived_by END,
+      confidence = COALESCE(EXCLUDED.confidence, relation.confidence),
+      weight = COALESCE(EXCLUDED.weight, relation.weight),
       updated_at = NOW()
     RETURNING *
-  `, [sourceId, targetId, relationType, sourceFactId || null, validAt || null]);
+  `, [sourceId, targetId, relationType, sourceFactId || null, validAt || null, derivedBy, confidence, weight]);
 
   return relation;
 }

@@ -2,11 +2,14 @@
  * relations.derive — the algorithmic half of edge building, exposed for
  * inspection before it is trusted to write anything.
  *
- * Read-only by design at this stage. Writing derived edges into `relation`
- * needs a provenance column first: the table records mention_count but nothing
- * separating "a model asserted this from prose" from "co-occurrence implies
- * this", and without that distinction derived edges can never be trust-weighted,
- * re-derived, or safely removed.
+ * Three levels, each opt-in, because each costs more than the last:
+ *   default        candidates only — pure SQL, ~7ms
+ *   { name }       + predicates from a batched LLM pass, ~84s for 31 pairs
+ *   { apply }      + writes them, tagged derived_by='co-occurrence'
+ *
+ * Nothing here belongs on the write path. Discovery is free enough to run
+ * anywhere; naming is a maintenance job, which is the whole point of splitting
+ * them — ingest stops paying for relation extraction it no longer needs to do.
  */
 export function registerRelations(registry) {
   registry.register('relations.derive', async (params = {}) => {
@@ -31,8 +34,22 @@ export function registerRelations(registry) {
       promptJson,
       batchSize: Number.isFinite(params.batchSize) ? params.batchSize : 8,
     });
+
+    let applied = null;
+    if (params.apply) {
+      const { applyDerived } = await import('../../memory/entities/derive-relations.js');
+      const { canonicalizeRelationType } = await import('../../memory/entities/graph-extractor.js');
+      const { createRelation } = await import('../../memory/entities/relations.js');
+      applied = await applyDerived(relations, {
+        canonicalize: canonicalizeRelationType,
+        createRelation,
+        validAt: new Date(),
+      });
+    }
+
     return {
       named: true,
+      applied,
       totalPairs,
       alreadyRelated,
       unresolved,

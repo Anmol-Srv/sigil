@@ -2082,11 +2082,41 @@ Options:
   --route-pods   Re-file existing facts into the pods they are ABOUT, using
                  entities already extracted (no LLM, no re-embedding). Run this
                  once after upgrading; additive, never removes a membership.
+  --derive-relations
+                 Find entity pairs that share a fact but have no edge between
+                 them, then name the real relationships in a batched LLM pass.
+                 Discovery is SQL and sees the WHOLE store, so it catches edges
+                 ingest cannot: extraction only ever sees one batch of facts.
+                 Minutes, not seconds — a maintenance job, never a write path.
 
 Promotes 'fresh' facts (older than 1h with importance=vital or any access) to 'stable',
 closes 'editing' windows older than 30 minutes back to 'stable', and consolidates
 co-retrieval edges. Safe to run as a cron — fully idempotent.`);
     process.exit(0);
+  }
+
+  if (args.includes('--derive-relations')) {
+    const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+    const client = await connectOrStartDaemon();
+    try {
+      const dry = args.includes('--dry-run');
+      console.log(dry ? 'Deriving candidates (dry run — nothing will be written)…'
+                      : 'Deriving and naming relations… this runs an LLM pass and takes minutes.');
+      const { data } = await client.call(
+        'relations.derive',
+        { name: true, apply: !dry, limit: 200 },
+        { timeoutMs: 15 * 60 * 1000 },
+      );
+      console.log(`${data.totalPairs} co-occurring pair(s); ${data.alreadyRelated} already had an edge, ${data.unresolved} did not.`);
+      console.log(`Judged ${data.judged}: ${data.accepted} named, ${data.rejected} rejected as incidental co-mention.`);
+      if (data.applied) console.log(`Wrote ${data.applied.written} relation(s)${data.applied.skipped ? `, skipped ${data.applied.skipped}` : ''}.`);
+      for (const r of (data.relations || []).slice(0, 15)) {
+        console.log(`  ${r.sourceName} —${r.relationship}→ ${r.targetName}  (${r.confidence})`);
+      }
+    } finally {
+      await client.close();
+    }
+    return;
   }
 
   if (args.includes('--route-pods')) {
