@@ -2035,3 +2035,46 @@ kbd {
   .btn.is-busy { opacity: 0.55; }
   .btn.is-busy .ic { animation: none; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Settings — rendered from the daemon's schema (settings.js)
+   Generic controls, so a new knob inherits this styling automatically.
+   ════════════════════════════════════════════════════════════════════════ */
+.set-section { padding: var(--s-5); margin-bottom: var(--s-4); }
+.set-head h3 { margin: 0 0 var(--s-1); font-size: var(--t-md); font-weight: 600; color: var(--fg-1); }
+.set-section-help { margin: 0 0 var(--s-4); color: var(--fg-3); font-size: var(--t-sm); max-width: 78ch; line-height: 1.5; }
+
+/* Two columns where there's room; a threshold and its explanation stay together. */
+.set-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--s-4); }
+.set-row { min-width: 0; }
+.set-row .field, .set-field { display: block; margin: 0; }
+.set-field > .label { display: block; color: var(--fg-2); font-size: var(--t-sm); font-weight: 500; margin-bottom: var(--s-2); }
+.set-field input, .set-field select { width: 100%; }
+
+.set-toggle { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; font-size: var(--t-base); color: var(--fg-1); }
+.set-toggle input { width: auto; height: auto; accent-color: var(--accent); }
+
+.set-help { margin: var(--s-2) 0 0; color: var(--fg-3); font-size: var(--t-sm); line-height: 1.5; max-width: 62ch; }
+.set-error { color: var(--err); font-size: var(--t-sm); margin-top: var(--s-1); }
+.set-error:empty { display: none; }
+
+/* A setting the daemon only reads at boot — marked before you commit to it,
+   not announced afterwards. */
+.set-row.needs-restart > .set-field > .label::after,
+.set-row.needs-restart > .set-toggle > span::after {
+  content: 'restart';
+  margin-left: var(--s-2);
+  font: 500 var(--t-xs)/1 var(--font-mono);
+  color: var(--warn);
+  border: 1px solid rgba(245, 181, 68, 0.35);
+  background: var(--warn-bg);
+  padding: 2px 5px;
+  vertical-align: middle;
+}
+
+.set-actions {
+  display: flex; align-items: center; gap: var(--s-2);
+  margin-top: var(--s-5); padding-top: var(--s-4);
+  border-top: 1px solid var(--border);
+}
+.set-status { margin-right: auto; font-size: var(--t-sm); color: var(--fg-3); }

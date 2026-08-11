@@ -5,6 +5,7 @@ import { initSetup } from './setup.js';
 import { icon, hydrateIcons } from './icons.js';
 import { initCmdk } from './cmdk.js';
 import { systemAlert, systemCells, engineBlocker } from './health.js';
+import { initSettings } from './settings.js';
 import { mountGraph } from './vendor/graph-island.js';
 
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -132,7 +133,7 @@ function setRoute(name) {
   if (name === 'health')   refreshHealth();
   if (name === 'kb')       refreshKb();
   if (name === 'graph')    initGraphView();
-  if (name === 'settings') { refreshEnv(); refreshMethods(); }
+  if (name === 'settings') { refreshEnv(); refreshMethods(); settingsPanel?.refresh(); }
   if (name === 'agents')   refreshAgents();
   if (name === 'devices')  refreshDevices();
   if (name === 'activity') { ensureActivityWs(); loadTraces(); }
@@ -1943,6 +1944,7 @@ async function runLanding() {
 }
 
 hydrateIcons();
+const settingsPanel = initSettings({ rpc, toast, mount: '#settings-host' });
 
 /**
  * Ingest one or more documents from the machine.
