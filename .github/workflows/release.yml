@@ -48,8 +48,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # dist/ is tracked but may be stale on master — commit the freshly-built
-          # bundle on top of this commit so the release tip always carries it.
-          git add -f dist
-          git commit -m "build: dist for release ${GITHUB_SHA::7} [skip ci]" || echo "dist unchanged — releasing master HEAD as-is"
+          # dist/ and the GUI island bundle are both tracked but may be stale on
+          # master — commit the freshly-built ones on top of this commit so the
+          # release tip always carries them. The GUI bundle matters as much as
+          # dist: the dashboard is served straight from src/gui/web, so a
+          # committed bundle that lags its JSX ships to users verbatim.
+          git add -f dist src/gui/web/vendor/graph-island.js
+          git commit -m "build: dist for release ${GITHUB_SHA::7} [skip ci]" || echo "build output unchanged — releasing master HEAD as-is"
           git push --force origin HEAD:release
