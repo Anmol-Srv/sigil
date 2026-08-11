@@ -1068,7 +1068,9 @@ footer .footer-inner {
   white-space: nowrap;
   border: 0;
 }
-.flex-row { display: flex; align-items: center; gap: var(--s-3); }
+/* Wraps: a row of three actions (Change LLM / embedding / database) pushed
+   past the viewport on a phone and scrolled the whole page sideways. */
+.flex-row { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
 .text-sm { font-size: var(--t-sm); }
 .text-xs { font-size: var(--t-xs); }
 
@@ -1437,8 +1439,10 @@ footer .footer-inner {
 .kb-stat-err { padding: var(--s-3) var(--s-4); color: var(--warn); background: var(--bg-surface); font-size: var(--t-sm); }
 
 /* sub-nav (segmented) */
-.kb-subnav { display: flex; gap: var(--s-1); border-bottom: 1px solid var(--border); margin-bottom: var(--s-4); }
-.kb-tab {
+/* Segmented sub-nav — Knowledge Base sections and Settings categories are the
+   same control, so they are one rule set under a neutral name. */
+.kb-subnav, .subnav { display: flex; gap: var(--s-1); border-bottom: 1px solid var(--border); margin-bottom: var(--s-4); flex-wrap: wrap; }
+.kb-tab, .subtab {
   appearance: none;
   background: none;
   border: none;
@@ -1450,8 +1454,8 @@ footer .footer-inner {
   cursor: pointer;
   transition: color var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
 }
-.kb-tab:hover { color: var(--fg-2); }
-.kb-tab.active { color: var(--fg-1); border-bottom-color: var(--accent); }
+.kb-tab:hover, .subtab:hover { color: var(--fg-2); }
+.kb-tab.active, .subtab.active { color: var(--fg-1); border-bottom-color: var(--accent); }
 
 /* master-detail layout */
 .kb-browser {
@@ -1930,10 +1934,10 @@ kbd {
 /* ════════════════════════════════════════════════════════════════════════
    Knowledge Base — documents tab + tab icons
    ════════════════════════════════════════════════════════════════════════ */
-.kb-tab { display: inline-flex; align-items: center; gap: 6px; }
-.kb-tab .ic { color: var(--fg-4); transition: color var(--dur-1) var(--ease); }
-.kb-tab:hover .ic { color: var(--fg-3); }
-.kb-tab.active .ic { color: var(--accent); }
+.kb-tab, .subtab { display: inline-flex; align-items: center; gap: 6px; }
+.kb-tab .ic, .subtab .ic { color: var(--fg-4); transition: color var(--dur-1) var(--ease); }
+.kb-tab:hover .ic, .subtab:hover .ic { color: var(--fg-3); }
+.kb-tab.active .ic, .subtab.active .ic { color: var(--accent); }
 .kb-entity-title .ic { color: var(--fg-3); }
 
 .kb-doc-body {
@@ -2038,43 +2042,145 @@ kbd {
 
 /* ════════════════════════════════════════════════════════════════════════
    Settings — rendered from the daemon's schema (settings.js)
-   Generic controls, so a new knob inherits this styling automatically.
+   Two levels: General/Advanced, then categories on the shared segmented
+   sub-nav. Rows are label-left / control-right, hairline separated — the
+   console density DESIGN.md asks for, not a grid of boxed fields.
    ════════════════════════════════════════════════════════════════════════ */
-.set-section { padding: var(--s-5); margin-bottom: var(--s-4); }
-.set-head h3 { margin: 0 0 var(--s-1); font-size: var(--t-md); font-weight: 600; color: var(--fg-1); }
-.set-section-help { margin: 0 0 var(--s-4); color: var(--fg-3); font-size: var(--t-sm); max-width: 78ch; line-height: 1.5; }
+.set-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s-4); flex-wrap: wrap; margin-bottom: var(--s-3);
+}
 
-/* Two columns where there's room; a threshold and its explanation stay together. */
-.set-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--s-4); }
-.set-row { min-width: 0; }
-.set-row .field, .set-field { display: block; margin: 0; }
-.set-field > .label { display: block; color: var(--fg-2); font-size: var(--t-sm); font-weight: 500; margin-bottom: var(--s-2); }
-.set-field input, .set-field select { width: 100%; }
+/* Tier switch — one decision, so a two-up segmented control rather than tabs. */
+.set-tiers { display: inline-flex; border: 1px solid var(--border-2); background: var(--bg-canvas); }
+.set-tier {
+  appearance: none; background: none; border: none;
+  padding: 0 var(--s-4); height: 30px;
+  color: var(--fg-3); font: 500 var(--t-base) var(--font-ui); cursor: pointer;
+  display: inline-flex; align-items: center; gap: var(--s-2);
+  transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+}
+.set-tier + .set-tier { border-left: 1px solid var(--border-2); }
+.set-tier:hover { color: var(--fg-2); }
+.set-tier.on { background: var(--brand-tint); color: var(--fg-1); }
 
-.set-toggle { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; font-size: var(--t-base); color: var(--fg-1); }
-.set-toggle input { width: auto; height: auto; accent-color: var(--accent); }
+.set-search { position: relative; display: inline-flex; align-items: center; min-width: 240px; }
+.set-search .ic { position: absolute; left: var(--s-3); color: var(--fg-4); pointer-events: none; }
+.set-search input {
+  width: 100%; height: 32px; padding: 0 var(--s-3) 0 calc(var(--s-3) + 22px);
+  background: var(--bg-canvas); border: 1px solid var(--border-2); color: var(--fg-1);
+  font: var(--t-base) var(--font-ui);
+}
+.set-search input:focus { outline: none; border-color: var(--accent); }
+.subtab-count { font: 500 var(--t-xs) var(--font-mono); color: var(--fg-4); }
+.subtab.dim { opacity: 0.4; }
 
-.set-help { margin: var(--s-2) 0 0; color: var(--fg-3); font-size: var(--t-sm); line-height: 1.5; max-width: 62ch; }
-.set-error { color: var(--err); font-size: var(--t-sm); margin-top: var(--s-1); }
-.set-error:empty { display: none; }
+.set-tier-help { margin: 0 0 var(--s-3); color: var(--fg-3); font-size: var(--t-sm); max-width: 78ch; line-height: 1.5; }
+.set-intro { margin: 0 0 var(--s-4); color: var(--fg-3); font-size: var(--t-sm); max-width: 78ch; line-height: 1.5; }
+.set-body { padding-bottom: var(--s-7); }
 
-/* A setting the daemon only reads at boot — marked before you commit to it,
-   not announced afterwards. */
-.set-row.needs-restart > .set-field > .label::after,
-.set-row.needs-restart > .set-toggle > span::after {
-  content: 'restart';
+/* A settings row: what it is on the left, the control on the right. */
+.set-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+  gap: var(--s-5); align-items: start;
+  padding: var(--s-4) 0; border-top: 1px solid var(--border);
+}
+.set-row:first-child { border-top: none; }
+.set-row.invalid { background: var(--err-bg); box-shadow: inset 2px 0 0 var(--err); }
+.set-row-label { display: block; color: var(--fg-1); font-size: var(--t-md); font-weight: 500; }
+.set-row-help { margin: var(--s-2) 0 0; color: var(--fg-3); font-size: var(--t-sm); line-height: 1.55; max-width: 70ch; }
+.set-row-error { color: var(--err); font-size: var(--t-sm); margin-top: var(--s-2); }
+.set-row-error:empty { display: none; }
+.set-row-control { display: flex; justify-content: flex-end; align-items: center; min-width: 0; }
+.set-row-control > * { width: 100%; }
+
+/* Boot-only settings are flagged before you commit, not after. */
+.set-restart {
   margin-left: var(--s-2);
   font: 500 var(--t-xs)/1 var(--font-mono);
-  color: var(--warn);
+  color: var(--warn); background: var(--warn-bg);
   border: 1px solid rgba(245, 181, 68, 0.35);
-  background: var(--warn-bg);
-  padding: 2px 5px;
-  vertical-align: middle;
+  padding: 2px 5px; vertical-align: middle;
 }
 
-.set-actions {
-  display: flex; align-items: center; gap: var(--s-2);
-  margin-top: var(--s-5); padding-top: var(--s-4);
-  border-top: 1px solid var(--border);
+/* Switch — a state you flip. Sharp, like everything else here. */
+.set-switch { appearance: none; background: none; border: none; padding: 0; cursor: pointer; width: auto !important; align-self: center; }
+.set-switch-track {
+  display: block; width: 38px; height: 20px; position: relative;
+  background: var(--bg-surface-3); border: 1px solid var(--border-2);
+  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
 }
-.set-status { margin-right: auto; font-size: var(--t-sm); color: var(--fg-3); }
+.set-switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+  background: var(--fg-3);
+  transition: transform var(--dur-2) var(--ease), background var(--dur-1) var(--ease);
+}
+.set-switch[aria-checked="true"] .set-switch-track { background: var(--brand-tint); border-color: var(--accent); }
+.set-switch[aria-checked="true"] .set-switch-thumb { transform: translateX(18px); background: var(--accent); }
+.set-switch:focus-visible { outline: none; }
+.set-switch:focus-visible .set-switch-track { box-shadow: var(--focus-ring); }
+
+/* Segmented enum — the options are visible without opening anything. */
+.set-segmented { display: inline-flex; border: 1px solid var(--border-2); background: var(--bg-canvas); width: auto !important; }
+.set-seg {
+  appearance: none; background: none; border: none; cursor: pointer;
+  padding: 0 var(--s-3); height: 30px;
+  color: var(--fg-3); font: 500 var(--t-sm) var(--font-ui);
+  transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+}
+.set-seg + .set-seg { border-left: 1px solid var(--border-2); }
+.set-seg:hover { color: var(--fg-2); }
+.set-seg.on { background: var(--brand-tint); color: var(--fg-1); }
+
+/* Range — a threshold is a position, so show where it sits AND its value. */
+.set-range { display: flex; align-items: center; gap: var(--s-3); }
+.set-range input[type="range"] {
+  flex: 1; min-width: 0; height: 20px; padding: 0; appearance: none;
+  background: none; border: none; cursor: pointer;
+}
+.set-range input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px; background: var(--bg-surface-3); border: none;
+}
+.set-range input[type="range"]::-webkit-slider-thumb {
+  appearance: none; margin-top: -5px;
+  width: 13px; height: 13px; background: var(--accent); border: none;
+  transition: transform var(--dur-1) var(--ease);
+}
+.set-range input[type="range"]:hover::-webkit-slider-thumb { transform: scale(1.15); }
+.set-range input[type="range"]::-moz-range-track { height: 3px; background: var(--bg-surface-3); border: none; }
+.set-range input[type="range"]::-moz-range-thumb { width: 13px; height: 13px; background: var(--accent); border: none; border-radius: 0; }
+.set-range input[type="range"]:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.set-range-out {
+  flex: none; min-width: 52px; text-align: right;
+  font: 500 var(--t-sm) var(--font-mono); color: var(--fg-1);
+  font-feature-settings: 'zero' on;
+}
+
+.set-input { text-align: right; font-family: var(--font-mono); }
+
+/* Save bar — one, and only once there is something to save. */
+.set-bar {
+  position: sticky; bottom: 0; z-index: 5;
+  display: flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  background: var(--bg-surface); border: 1px solid var(--border-2);
+  box-shadow: var(--shadow-2);
+  transform: translateY(calc(100% + var(--s-5)));
+  opacity: 0; pointer-events: none;
+  transition: transform var(--dur-2) var(--ease), opacity var(--dur-2) var(--ease);
+}
+.set-bar.on { transform: translateY(0); opacity: 1; pointer-events: auto; }
+.set-bar-count { margin-right: auto; font-size: var(--t-sm); color: var(--fg-2); }
+
+@media (prefers-reduced-motion: reduce) {
+  .set-bar { transition: opacity 0.01ms; transform: none; }
+  .set-switch-thumb { transition: none; }
+}
+
+@media (max-width: 720px) {
+  .set-row { grid-template-columns: 1fr; gap: var(--s-3); }
+  .set-row-control { justify-content: flex-start; }
+  .set-row-control > * { width: auto; min-width: 200px; }
+  .set-toolbar { align-items: stretch; }
+  .set-search { min-width: 0; width: 100%; }
+}

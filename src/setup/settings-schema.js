@@ -18,11 +18,18 @@
  *
  * `restart: true` means the value is read once at daemon boot. Everything else
  * is read through config's live getters and takes effect on the next call.
+ *
+ * `tier` splits the surface in two. General is what someone changes because
+ * they decided something about how they work; Advanced changes how retrieval
+ * and ranking behave, where a wrong value degrades recall quietly rather than
+ * failing loudly. Forty-five controls in one list is a wall — this is the
+ * progressive disclosure the rest of the dashboard already practises.
  */
 
 export const SETTINGS_SECTIONS = [
   {
     id: 'identity',
+    tier: 'general',
     title: 'Identity',
     help: 'Who this knowledge base belongs to. The owner is a real entity in the graph — facts written as "User prefers…" attach to this name.',
     settings: [
@@ -34,6 +41,7 @@ export const SETTINGS_SECTIONS = [
   },
   {
     id: 'ingest',
+    tier: 'general',
     title: 'Ingestion',
     help: 'What happens when a fact or document is written.',
     settings: [
@@ -47,6 +55,7 @@ export const SETTINGS_SECTIONS = [
   },
   {
     id: 'memory',
+    tier: 'advanced',
     title: 'Memory & deduplication',
     help: 'AUDM decides whether an incoming fact is new, an update, or a duplicate. These are cosine-similarity cutoffs between 0 and 1.',
     settings: [
@@ -66,6 +75,7 @@ export const SETTINGS_SECTIONS = [
   },
   {
     id: 'search',
+    tier: 'general',
     title: 'Search',
     settings: [
       { path: 'search.synthesize', label: 'Synthesize an answer', type: 'boolean',
@@ -76,6 +86,7 @@ export const SETTINGS_SECTIONS = [
   },
   {
     id: 'engine',
+    tier: 'advanced',
     title: 'LLM engine',
     help: 'Warm workers keep `claude` alive in tmux so calls skip process startup. Pool changes need a daemon restart — the pool is built once at boot.',
     settings: [
@@ -105,6 +116,7 @@ export const SETTINGS_SECTIONS = [
   },
   {
     id: 'hebbian',
+    tier: 'advanced',
     title: 'Co-retrieval learning',
     help: 'Entities retrieved together get a link that strengthens with use and decays with time, so the graph learns what actually goes together.',
     settings: [
@@ -124,19 +136,29 @@ export const SETTINGS_SECTIONS = [
     ],
   },
   {
+    id: 'updates',
+    tier: 'general',
+    title: 'Updates',
+    settings: [
+      { path: 'preferences.noUpdateCheck', label: 'Skip update checks', type: 'boolean',
+        help: 'Sigil checks the release branch in the background and tells you when an update is available.' },
+    ],
+  },
+  {
     id: 'server',
+    tier: 'advanced',
     title: 'Server',
     help: 'The local HTTP surface this dashboard is served from. Changes need a daemon restart.',
     settings: [
       { path: 'http.enabled', label: 'HTTP server', type: 'boolean', restart: true },
       { path: 'http.host', label: 'Bind host', type: 'text', placeholder: '127.0.0.1', restart: true,
-        help: 'Loopback by default. Binding beyond it exposes your memory to the network.' },
+        help: 'Loopback by default. Binding beyond it exposes your memory to anything on the network.' },
       { path: 'http.port', label: 'Port', type: 'number', min: 1024, max: 65535, step: 1, restart: true },
-      { path: 'preferences.noUpdateCheck', label: 'Skip update checks', type: 'boolean' },
     ],
   },
   {
     id: 'output',
+    tier: 'advanced',
     title: 'Output',
     help: 'Where generated artifacts are written.',
     settings: [
@@ -151,6 +173,11 @@ export const SETTINGS_SECTIONS = [
 ];
 
 /** Flat path → definition, for validating a write. */
+export const SETTINGS_TIERS = [
+  { id: 'general', label: 'General', help: 'Everyday choices about how Sigil works for you.' },
+  { id: 'advanced', label: 'Advanced', help: 'Retrieval, ranking and engine internals. A wrong value here degrades recall quietly rather than failing loudly.' },
+];
+
 export const SETTINGS_BY_PATH = new Map(
   SETTINGS_SECTIONS.flatMap((s) => s.settings.map((d) => [d.path, { ...d, section: s.id }])),
 );

@@ -11,7 +11,7 @@
  */
 import { getConfig, patchConfig } from '../../setup/config-store.js';
 import {
-  SETTINGS_SECTIONS, SETTINGS_BY_PATH, readPath, coerce,
+  SETTINGS_SECTIONS, SETTINGS_TIERS, SETTINGS_BY_PATH, readPath, coerce,
 } from '../../setup/settings-schema.js';
 
 /** Set a dotted path on a plain object, creating containers as needed. */
@@ -32,8 +32,10 @@ export function registerSettings(registry) {
   registry.register('settings.schema', async () => {
     const cfg = getConfig();
     return {
+      tiers: SETTINGS_TIERS,
       sections: SETTINGS_SECTIONS.map((s) => ({
         id: s.id,
+        tier: s.tier || 'advanced',
         title: s.title,
         help: s.help || null,
         settings: s.settings.map((d) => ({ ...d, value: readPath(cfg, d.path) ?? null })),
