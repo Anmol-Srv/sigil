@@ -161,19 +161,39 @@ export function initCmdk({ rpc, setRoute, openFact, toast, onRemembered, onInges
   async function saveFact() {
     const text = input.value.trim();
     if (!text) return;
-    setFoot('saving…');
+
+    // Close FIRST. `remember` runs the whole ingest pipeline — classification,
+    // embedding, AUDM dedup — and on a local claude-cli provider that round
+    // trip is routinely a minute or more. Awaiting it before closing left the
+    // bar sitting on "saving…" long enough to look hung, over a write that had
+    // already been accepted. Your typing is done; the outcome arrives as a
+    // toast, which is how every other slow action in the dashboard reports.
+    close();
+    const dismiss = toast({
+      variant: 'info',
+      message: 'Saving fact…',
+      hint: 'Extraction runs in the background; this can take a moment.',
+      timeout: 0,
+    });
+
     try {
       const r = await rpc('remember', { facts: [text] });
+      dismiss();
       const n = r?.added ?? 0;
       toast({
         variant: n ? 'success' : 'info',
         message: n ? 'Fact remembered.' : 'Already known — nothing added.',
         hint: r?.updated ? `${r.updated} existing fact updated.` : undefined,
       });
-      close();
       onRemembered?.();
     } catch (err) {
-      setFoot(err.message || 'could not save');
+      dismiss();
+      toast({
+        variant: 'error',
+        message: `Couldn’t save that fact: ${err.message}`,
+        hint: err.hint,
+        code: err.code,
+      });
     }
   }
 
