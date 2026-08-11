@@ -4,7 +4,7 @@ import { connectorCard , fieldControl } from './components.js';
 import { initSetup } from './setup.js';
 import { icon, hydrateIcons } from './icons.js';
 import { initCmdk } from './cmdk.js';
-import { systemAlert, systemCells } from './health.js';
+import { systemAlert, systemCells, engineBlocker } from './health.js';
 import { mountGraph } from './vendor/graph-island.js';
 
 const $  = (sel, root = document) => root.querySelector(sel);
@@ -1576,7 +1576,8 @@ async function loadEngine() {
     else if (!s.tmuxAvailable) why = '<code>SIGIL_MANAGED_SESSION=true</code> is set, but <code>tmux</code> was not found on PATH — staying on one-shot.';
     else if (s.provider && s.provider !== 'claude-cli') why = `LLM provider is <code>${escape(s.provider)}</code> (not <code>claude-cli</code>) — API providers don't need warm sessions.`;
     else why = 'Engine enabled but no workers are running yet.';
-    host.innerHTML = `<div class="empty">${why}<br><span class="muted">Enable with <code>SIGIL_MANAGED_SESSION=true</code> on a host with <code>tmux</code> + the <code>claude</code> CLI, then restart the daemon.</span></div>`;
+    const how = engineBlocker(s) || 'Use the button above — Sigil restarts the daemon and brings the pool up.';
+    host.innerHTML = `<div class="empty">${why}<br><span class="muted">${escape(how)}</span></div>`;
   } else if (!s.workers || !s.workers.length) {
     host.innerHTML = `<div class="empty">No live workers — the pool is spinning up or has yielded to one-shot after repeated boot failures. Check <code>~/.sigil/sigild.log</code>.</div>`;
   } else {
@@ -1598,8 +1599,50 @@ async function loadEngine() {
   $('#engine-hint').innerHTML = running
     ? 'Inspect a worker pane directly: <code>tmux attach -t sigil-&lt;worker&gt;</code> (detach with <code>Ctrl-b d</code>) or <code>tmux capture-pane -t sigil-&lt;worker&gt; -p</code>. Per-task events stream into <a href="#activity" data-route="activity">Activity → Engine</a>.'
     : '';
+
+  renderEngineToggle(s);
 }
+
+/**
+ * The on/off control. A disabled button that says WHY it is disabled beats an
+ * enabled one that writes a flag the host can't honour — that is exactly how
+ * this feature spent its first life "enabled" and dead.
+ */
+function renderEngineToggle(s) {
+  const btn = $('#engine-toggle');
+  if (!btn) return;
+  const blocked = !s.enabled && engineBlocker(s);
+  btn.textContent = s.enabled ? 'Turn off warm workers' : 'Turn on warm workers';
+  btn.classList.toggle('primary', !s.enabled && !blocked);
+  btn.disabled = !!blocked;
+  btn.title = blocked || '';
+  btn.dataset.next = s.enabled ? 'off' : 'on';
+}
+
 $('#engine-refresh')?.addEventListener('click', loadEngine);
+
+$('#engine-toggle')?.addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const enabled = btn.dataset.next === 'on';
+  const out = $('#engine-toggle-result');
+  out.style.display = 'block'; out.className = 'result'; out.textContent = 'saving…';
+  btn.disabled = true;
+  try {
+    const res = await rpc('engine.setEnabled', { enabled });
+    if (!res.ok) { out.classList.add('err'); out.textContent = `✗ ${res.error}`; btn.disabled = false; return; }
+    out.classList.add('ok');
+    // The pool is built once at daemon boot, so the flag alone changes nothing.
+    out.textContent = `✓ warm workers ${enabled ? 'on' : 'off'}\nRestarting daemon…`;
+    try { await rpc('restartDaemon', {}); } catch { /* expected: the socket drops on exit */ }
+    // A cold `claude` needs ~10s to hand shake, so the first poll would still
+    // read "no workers" and look like a failure.
+    setTimeout(loadEngine, 3000);
+    setTimeout(loadEngine, 15000);
+  } catch (err) {
+    out.classList.add('err'); out.textContent = `✗ ${err.message}`;
+    btn.disabled = false;
+  }
+});
 
 // ── Setup tab (legacy DB form) ──────────────────────────────────────
 $('#db-mode')?.addEventListener('change', (e) => {

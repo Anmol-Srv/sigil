@@ -389,10 +389,17 @@
           <p>The LLM core. When the managed-session engine is on, Sigil keeps warm <code>claude</code> workers alive in tmux (one <code>sigil-&lt;worker&gt;</code> session each) to amortize agentic cold-starts across ingest + expansion calls. When off, every call uses the one-shot <code>claude -p</code> path. Live worker state below; per-task dispatch/result/fallback events stream into Activity (filter: Engine).</p>
         </div>
         <div class="actions">
+          <!-- The one control that decides which path every LLM call takes.
+               Lives here, next to the live worker state it governs, rather than
+               in Settings — turning it on without seeing the pool come up is
+               how it silently sat "enabled but dead" before. -->
+          <button class="btn" id="engine-toggle" disabled>—</button>
           <button class="btn" id="engine-refresh" data-icon="refresh">Refresh</button>
           <span class="conn-status" id="engine-status">—</span>
         </div>
       </div>
+
+      <pre id="engine-toggle-result" class="result" style="display:none"></pre>
 
       <div class="stat-grid">
         <div class="stat"><span class="lbl">Mode</span><span class="val" id="eng-mode">—</span><span class="sub" id="eng-mode-sub">—</span></div>
@@ -464,7 +471,7 @@
       </div>
 
       <!-- Coding agents now live on their own page (Connections › Agents). -->
-      <p class="muted text-sm" style="margin-bottom: var(--s-4);">Connect coding tools to this memory on the <a href="#agents" data-route="agents">Agents</a> page.</p>
+      <p class="muted text-sm" style="margin-bottom: var(--s-4);">Connect coding tools to this memory on the <a href="#agents" data-route="agents">Agents</a> page. Turn warm <code>claude</code> workers on or off on the <a href="#engine" data-route="engine">Engine</a> page.</p>
 
       <!-- Current config + switch controls -->
       <div class="panel" style="padding: var(--s-5); margin-bottom: var(--s-4);">
