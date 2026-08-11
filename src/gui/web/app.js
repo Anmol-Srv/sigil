@@ -1609,11 +1609,24 @@ async function loadEngine() {
   try { s = await rpc('engine.status'); }
   catch (err) { setStatus('err', 'error'); $('#engine-workers').innerHTML = `<div class="empty">could not load engine status: ${escape(err.message)}</div>`; return; }
 
+  // `enabled` is intent (the config flag) and `running` is reality (a live
+  // pool). They diverge legitimately — a pool keeps serving until it is torn
+  // down, and tmux sessions outlive a daemon restart — but the page used to
+  // render mode from `running` alone while the toggle rendered from `enabled`.
+  // Switch warm workers off with a worker still up and you got "Managed" next
+  // to a button offering to turn them on: two truths, no explanation. Report
+  // the pair.
   const running = !!s.running;
-  setStatus(running ? 'ok' : '', running ? 'managed' : 'one-shot');
+  const enabled = !!s.enabled;
+  const mode = enabled
+    ? (running ? { label: 'Managed', sub: 'warm tmux workers', pill: 'ok', tag: 'managed' }
+               : { label: 'Starting', sub: 'enabled — pool not up yet', pill: 'warn', tag: 'starting' })
+    : (running ? { label: 'Draining', sub: 'switched off — workers still alive', pill: 'warn', tag: 'draining' }
+               : { label: 'One-shot', sub: 'claude -p per call', pill: '', tag: 'one-shot' });
+  setStatus(mode.pill, mode.tag);
 
-  $('#eng-mode').textContent = running ? 'Managed' : 'One-shot';
-  $('#eng-mode-sub').textContent = running ? 'warm tmux workers' : 'claude -p per call';
+  $('#eng-mode').textContent = mode.label;
+  $('#eng-mode-sub').textContent = mode.sub;
   $('#eng-pool').textContent = sc(s.poolSize);
   $('#eng-budget').textContent = s.tokenBudget != null ? `${s.tokenBudget.toLocaleString()} tok budget` : '—';
   const queued = Object.values(s.queued || {}).reduce((a, b) => a + b, 0);
@@ -1633,6 +1646,11 @@ async function loadEngine() {
   } else if (!s.workers || !s.workers.length) {
     host.innerHTML = `<div class="empty">No live workers — the pool is spinning up or has yielded to one-shot after repeated boot failures. Check <code>~/.sigil/sigild.log</code>.</div>`;
   } else {
+    // Switched off while a pool is still serving: say so above the table, or
+    // the live workers below read as though the toggle did nothing.
+    const drainNote = !enabled
+      ? '<div class="empty" style="padding: var(--s-3) var(--s-4); text-align: left;">Warm workers are switched <strong>off</strong>, but this pool is still alive and serving — a <code>tmux</code> session outlives the daemon that started it. It stops when the session ends; <code>tmux kill-session -t sigil-&lt;worker&gt;</code> ends it now.</div>'
+      : '';
     const rows = s.workers.map((w) => {
       const session = `${escape(s.sessionPrefix || 'sigil-')}${escape(w.id)}`;
       const pct = s.tokenBudget ? Math.min(100, Math.round((w.tokensUsed / s.tokenBudget) * 100)) : null;
@@ -1643,7 +1661,7 @@ async function loadEngine() {
         <td class="num">${w.tokensUsed.toLocaleString()}${pct != null ? ` <span class="muted">(${pct}%)</span>` : ''}</td>
       </tr>`;
     }).join('');
-    host.innerHTML = `<div class="trace-table-wrap"><table class="trace-table">
+    host.innerHTML = drainNote + `<div class="trace-table-wrap"><table class="trace-table">
       <thead><tr><th>worker</th><th>tmux session</th><th>state</th><th>tokens used</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`;
   }
