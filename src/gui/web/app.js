@@ -53,6 +53,54 @@ async function copyToClipboard(text) {
   }
 }
 
+
+/**
+ * Resolve once the daemon answers again after a restart.
+ *
+ * Both restart paths used to guess a fixed delay — the provider switcher 1.5s,
+ * the engine toggle 3s — and neither checked. A boot that took longer left the
+ * UI stuck on "Restarting daemon…" with the first poll failing against a socket
+ * that wasn't listening yet. Warm workers make that routine: a cold `claude`
+ * handshake alone is ~10s. Returns false if it never comes back, so callers can
+ * say so instead of hanging.
+ */
+async function waitForDaemon({ timeoutMs = 45000, everyMs = 700 } = {}) {
+  // Let the process actually go down first, or the first ping hits the OUTGOING
+  // daemon and we conclude it never restarted.
+  await new Promise((r) => setTimeout(r, 500));
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try { await rpc('ping'); return true; }
+    catch { await new Promise((r) => setTimeout(r, everyMs)); }
+  }
+  return false;
+}
+
+/**
+ * Run an async action with the button showing it. Every Refresh button fired
+ * silently — on a fast reload nothing appeared to happen, and on a slow one
+ * there was no sign it was working, so people clicked again. MIN_BUSY keeps the
+ * state visible long enough to read on a fast response.
+ */
+const MIN_BUSY = 320;
+async function withBusy(btn, fn) {
+  if (!btn) return fn();
+  if (btn.dataset.busy) return undefined;   // already running — ignore re-clicks
+  btn.dataset.busy = '1';
+  btn.classList.add('is-busy');
+  btn.setAttribute('aria-busy', 'true');
+  const started = Date.now();
+  try {
+    return await fn();
+  } finally {
+    const left = MIN_BUSY - (Date.now() - started);
+    if (left > 0) await new Promise((r) => setTimeout(r, left));
+    delete btn.dataset.busy;
+    btn.classList.remove('is-busy');
+    btn.removeAttribute('aria-busy');
+  }
+}
+
 // ════════════════════════════════════════════════════════════════════
 // DASHBOARD (unchanged behavior)
 // ════════════════════════════════════════════════════════════════════
@@ -98,8 +146,8 @@ window.addEventListener('hashchange', () => setRoute(routeFromHash()));
 $$('nav a').forEach((a) => {
   a.addEventListener('click', (e) => { e.preventDefault(); setRoute(a.dataset.route); });
 });
-$('#home-refresh')?.addEventListener('click', refreshHealth);
-$('#agents-refresh')?.addEventListener('click', refreshAgents);
+$('#home-refresh')?.addEventListener('click', (e) => withBusy(e.currentTarget, refreshHealth));
+$('#agents-refresh')?.addEventListener('click', (e) => withBusy(e.currentTarget, refreshAgents));
 
 const fmtNum = (x) => (typeof x === 'number' ? x.toLocaleString() : '—');
 
@@ -797,7 +845,7 @@ function kbSkeleton(n) {
   return `<div class="kb-skel-wrap">${Array.from({ length: n }, () => '<div class="kb-skel"></div>').join('')}</div>`;
 }
 
-$('#kb-refresh')?.addEventListener('click', refreshKb);
+$('#kb-refresh')?.addEventListener('click', (e) => withBusy(e.currentTarget, refreshKb));
 $$('.kb-tab').forEach((t) => t.addEventListener('click', () => kbSetTab(t.dataset.kbtab)));
 
 $('#kb-fact-search')?.addEventListener('input', (e) => { kb.factSearch = e.target.value; kbRenderFacts(); });
@@ -963,7 +1011,7 @@ $('#graph-zoom-in')?.addEventListener('click', () => graph.island?.zoomBy(1.25))
 $('#graph-zoom-out')?.addEventListener('click', () => graph.island?.zoomBy(1 / 1.25));
 $('#graph-zoom-fit')?.addEventListener('click', () => graph.island?.fit());
 $('#graph-relayout')?.addEventListener('click', () => graph.island?.relayout());
-$('#graph-refresh')?.addEventListener('click', () => { graph.loaded = false; loadGraph(); });
+$('#graph-refresh')?.addEventListener('click', (e) => withBusy(e.currentTarget, () => { graph.loaded = false; return loadGraph(); }));
 
 function openGraphNode(n) {
   setRoute('kb');
@@ -1213,7 +1261,11 @@ $('#cfg-reset')?.addEventListener('click', () => {
 async function restartAndClose(out) {
   out.textContent += '\nApplying — restarting daemon…';
   try { await rpc('restartDaemon', {}); } catch { /* expected: connection drops on exit */ }
-  setTimeout(() => { $('#cfg-switch').style.display = 'none'; refreshEnv(); refreshHealth(); }, 1500);
+  const back = await waitForDaemon();
+  out.textContent += back ? '\n✓ daemon restarted' : '\n⚠ daemon is slow to come back — check `sigil daemon status`';
+  $('#cfg-switch').style.display = 'none';
+  refreshEnv();
+  refreshHealth();
 }
 
 // ── Activity / causal trace log ──────────────────────────────────────
@@ -1533,7 +1585,7 @@ $('#trace-agent-filters')?.addEventListener('click', (e) => {
   $$('#trace-agent-filters .chip').forEach((c) => c.classList.toggle('active', c === chip));
   loadTraces();
 });
-$('#trace-refresh')?.addEventListener('click', loadTraces);
+$('#trace-refresh')?.addEventListener('click', (e) => withBusy(e.currentTarget, loadTraces));
 $('#trace-clear')?.addEventListener('click', async () => {
   if (!confirm('Clear the entire trace log? This deletes persisted history.')) return;
   try { await rpc('trace.clear'); } catch {}
@@ -1619,7 +1671,7 @@ function renderEngineToggle(s) {
   btn.dataset.next = s.enabled ? 'off' : 'on';
 }
 
-$('#engine-refresh')?.addEventListener('click', loadEngine);
+$('#engine-refresh')?.addEventListener('click', (e) => withBusy(e.currentTarget, loadEngine));
 
 $('#engine-toggle')?.addEventListener('click', async (e) => {
   const btn = e.currentTarget;
@@ -1768,7 +1820,7 @@ async function refreshDevices() {
     }
   } catch (err) { $('#dev-codes tbody').innerHTML = `<tr><td colspan="6" class="empty">${escape(err.message)}</td></tr>`; }
 }
-$('#dev-refresh')?.addEventListener('click', refreshDevices);
+$('#dev-refresh')?.addEventListener('click', (e) => withBusy(e.currentTarget, refreshDevices));
 
 document.addEventListener('click', (e) => {
   const r = e.target.closest('[data-revoke]');

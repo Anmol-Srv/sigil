@@ -2020,3 +2020,18 @@ kbd {
   .kb-detail { max-height: none; }
   .trace-list { max-height: none; min-height: 0; }
 }
+
+/* ── Button busy state ────────────────────────────────────────────────────
+   Refresh fired silently: a fast reload looked like nothing happened and a
+   slow one gave no sign it was working, so people clicked again. Spin the
+   button's own icon rather than adding a separate spinner. */
+.btn.is-busy { pointer-events: none; color: var(--fg-3); }
+.btn.is-busy .ic { animation: btn-spin 700ms linear infinite; transform-origin: 50% 50%; }
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+
+/* Reduced motion still needs to SAY something — the global rule collapses the
+   animation to nothing, which would leave no feedback at all. */
+@media (prefers-reduced-motion: reduce) {
+  .btn.is-busy { opacity: 0.55; }
+  .btn.is-busy .ic { animation: none; }
+}
