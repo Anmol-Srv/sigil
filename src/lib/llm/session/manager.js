@@ -40,7 +40,12 @@ const DEFAULTS = {
   poolSize: 1,
   tokenBudget: 60_000,        // recycle a worker once it has processed ~this many tokens
   taskTimeoutMs: 120_000,     // dead-man timeout per task → fallback + recycle
-  firstTaskTimeoutMs: 10_000, // boot handshake window: re-nudge once, then recycle
+  // Boot handshake window: re-nudge once, then recycle. A cold `claude` needs
+  // ~10s just to render its TUI before the pane accepts keys, then a turn to
+  // call get_task — measured at 20-30s end to end. 10s recycled every worker
+  // before it could ever answer.
+  firstTaskTimeoutMs: 45_000,
+  bootNudgeIntervalMs: 5_000, // re-nudge cadence inside that window
   maxBootFailures: 3,         // consecutive boot failures before yielding to one-shot
 };
 
@@ -75,11 +80,17 @@ export class SessionManager {
     this.getDriver = deps.getDriver;
     this.fallback = deps.fallback || (async () => { throw new Error('no fallback configured'); });
     this.scratchDir = deps.scratchDir || '/tmp/sigil-sessions';
+    // Workspace each worker runs in. Must be a directory the user has trusted
+    // in Claude Code (see trust.js) and that holds no project code — otherwise
+    // the pane either wedges on the trust dialog or inherits a project's
+    // CLAUDE.md. Same isolation the one-shot claude-cli provider uses.
+    this.workerCwd = deps.workerCwd || null;
     this.workerServer = deps.workerServer || null; // { command, args } for the worker MCP server
     this.pools = { ...(deps.pools || {}) };
     this.tokenBudget = deps.tokenBudget ?? DEFAULTS.tokenBudget;
     this.taskTimeoutMs = deps.taskTimeoutMs ?? DEFAULTS.taskTimeoutMs;
     this.firstTaskTimeoutMs = deps.firstTaskTimeoutMs ?? DEFAULTS.firstTaskTimeoutMs;
+    this.bootNudgeIntervalMs = deps.bootNudgeIntervalMs ?? DEFAULTS.bootNudgeIntervalMs;
     this.maxBootFailures = deps.maxBootFailures ?? DEFAULTS.maxBootFailures;
     this.timers = deps.timers || {
       set: (ms, cb) => setTimeout(cb, ms),
@@ -200,7 +211,7 @@ export class SessionManager {
       this.bootFailures.set(w.sourceType, 0);
       this.log(`worker ${w.id} booted (get_task handshake) — ready`);
       this.emit({ type: 'worker-ready', workerId: w.id, sourceType: w.sourceType, session: this.sessionNameOf(w) });
-      this.dispatch(w.sourceType);
+      this.dispatch(w.sourceType, w.id); // no nudge: this worker is the caller
     }
     if (!w || !w.currentReqId) return { empty: true };
     const p = this.pending.get(w.currentReqId);
@@ -248,8 +259,17 @@ export class SessionManager {
     this.queues.get(task.sourceType).push(task);
   }
 
-  /** Assign queued tasks of a source type to any READY workers of that type. */
-  dispatch(sourceType) {
+  /**
+   * Assign queued tasks of a source type to any READY workers of that type.
+   *
+   * `awakeWorkerId` — a worker that is RIGHT NOW inside its own get_task call.
+   * It must not be nudged: the nudge sends `/clear` first, which wipes the very
+   * task get_task is about to hand back, and the worker then sits idle until its
+   * 120s dead-man timeout. That cost every freshly-booted worker its first real
+   * task, then recycled it — a permanent boot-timeout-recycle churn that made
+   * the first save after any boot take ~200s.
+   */
+  dispatch(sourceType, awakeWorkerId = null) {
     const queue = this.queues.get(sourceType);
     if (!queue || !queue.length) return;
 
@@ -270,6 +290,9 @@ export class SessionManager {
         type: 'dispatch', workerId: w.id, reqId: task.reqId, sourceType,
         caller: task.caller, session: this.sessionNameOf(w),
       });
+
+      // The awake worker is already mid-poll; get_task returns this task to it.
+      if (w.id === awakeWorkerId) continue;
 
       const driver = this.getDriver(sourceType);
       Promise.resolve(driver.nudge(this.tmux, driver.sessionName(w.id)))
@@ -363,7 +386,7 @@ export class SessionManager {
   async spawnWorker(sourceType) {
     const driver = this.getDriver(sourceType);
     const id = `${sourceType}-${this.seq++}`;
-    const worker = { id, sourceType, state: STATE.BOOTING, currentReqId: null, tokensUsed: 0, bootTimer: null, bootRetried: false };
+    const worker = { id, sourceType, state: STATE.BOOTING, currentReqId: null, tokensUsed: 0, bootTimer: null, bootNudgesLeft: 0 };
     this.workers.set(id, worker);
 
     const model = this.pools[`${sourceType}:model`] || undefined;
@@ -374,6 +397,7 @@ export class SessionManager {
       await this.writeFileFn(f.path, f.content, { mode: f.mode ?? 0o600 });
     }
     await this.tmux.newSession(driver.sessionName(id), argv, {
+      cwd: this.workerCwd,
       // Any Claude Code hook the worker fires (UserPromptSubmit / Stop) no-ops at
       // the shim level instead of re-entering Sigil's memory pipeline. This is
       // what lets the claude driver drop --bare (otherwise the only thing
@@ -383,37 +407,43 @@ export class SessionManager {
 
     // Boot handshake: nudge once so a cold `claude` boots and calls get_task,
     // and arm a short boot timer. We do NOT mark READY or dispatch here — the
-    // worker proves its pane is live by calling get_task (see getTask). If the
-    // boot nudge was swallowed by a still-booting pane, onBootDeadline re-nudges
-    // once before giving up, so a lost cold-boot keystroke costs ~one boot
-    // window, never a full dead-man timeout.
-    worker.bootTimer = this.timers.set(this.firstTaskTimeoutMs, () => this.onBootDeadline(id));
-    Promise.resolve(driver.nudge(this.tmux, driver.sessionName(id)))
+    // worker proves its pane is live by calling get_task (see getTask). The
+    // first keystroke usually lands before the TUI finishes rendering and is
+    // dropped, so onBootDeadline re-nudges on a short interval until the whole
+    // firstTaskTimeoutMs window is spent — a lost cold-boot keystroke costs one
+    // interval, not the whole window.
+    worker.bootNudgesLeft = Math.max(1, Math.floor(this.firstTaskTimeoutMs / this.bootNudgeIntervalMs) - 1);
+    worker.bootTimer = this.timers.set(this.bootNudgeIntervalMs, () => this.onBootDeadline(id));
+    Promise.resolve(driver.nudge(this.tmux, driver.sessionName(id), { clear: false }))
       .catch((err) => { this.log(`boot nudge ${id} failed: ${err.message}`); this.onBootDeadline(id); });
     return worker;
   }
 
   /**
-   * Boot timer fired: the worker has not called get_task yet. Re-nudge once (the
-   * boot keystroke was likely swallowed by a still-booting pane), then on a
-   * second miss give up on this worker and recycle it.
+   * Boot tick: the worker has not called get_task yet. Re-nudge (the keystroke
+   * was likely swallowed by a still-rendering pane) and arm the next tick, until
+   * the boot deadline passes — then give up on this worker and recycle it.
    */
   async onBootDeadline(workerId) {
     const w = this.workers.get(workerId);
     if (!w || w.state !== STATE.BOOTING) return; // booted (or gone) in the meantime
     if (w.bootTimer) { this.timers.clear(w.bootTimer); w.bootTimer = null; }
 
-    if (!w.bootRetried) {
-      w.bootRetried = true;
-      this.log(`worker ${w.id} silent after ${this.firstTaskTimeoutMs}ms — re-nudging once`);
+    if (w.bootNudgesLeft-- > 0) {
       const driver = this.safeDriver(w.sourceType);
       if (driver) {
-        Promise.resolve(driver.nudge(this.tmux, driver.sessionName(w.id))).catch(() => {});
+        Promise.resolve(driver.nudge(this.tmux, driver.sessionName(w.id), { clear: false })).catch(() => {});
       }
-      w.bootTimer = this.timers.set(this.firstTaskTimeoutMs, () => this.onBootDeadline(workerId));
+      w.bootTimer = this.timers.set(this.bootNudgeIntervalMs, () => this.onBootDeadline(workerId));
       return;
     }
-    this.log(`worker ${w.id} failed to boot — recycling`);
+    // Say WHY. "silent after 45000ms" three times over is unactionable; the
+    // pane almost always holds the answer (trust dialog, /login, usage limit).
+    const driver = this.safeDriver(w.sourceType);
+    const h = driver
+      ? await driver.healthcheck(this.tmux, driver.sessionName(w.id)).catch(() => ({ reason: null }))
+      : { reason: null };
+    this.log(`worker ${w.id} failed to boot${h.reason ? ` (${h.reason})` : ''} — recycling`);
     await this.recycleBoot(w);
   }
 
@@ -437,7 +467,37 @@ export class SessionManager {
     } else if (fails >= this.maxBootFailures) {
       this.log(`managed-session: ${w.sourceType} worker failed to boot ${fails}× — staying on one-shot for this source type`);
       this.emit({ type: 'boot-failure', workerId: w.id, sourceType: w.sourceType, fails });
+      await this.drainQueue(w.sourceType, 'boot-failure');
     }
+  }
+
+  /**
+   * Run every QUEUED task of a source type through the fallback.
+   *
+   * A task enqueued while the pool was still BOOTING has no dead-man timer —
+   * that timer is armed at dispatch, and a task that is never dispatched never
+   * gets one. So when the pool gives up booting, anything already queued waits
+   * FOREVER: observed as a `remember` that hung past a 600s RPC timeout while
+   * the log cheerfully said "staying on one-shot". One-shot has to mean these
+   * tasks too, not just the next ones.
+   */
+  async drainQueue(sourceType, reason) {
+    const queue = this.queues.get(sourceType);
+    if (!queue?.length) return;
+    const stranded = queue.splice(0, queue.length);
+    this.log(`draining ${stranded.length} queued ${sourceType} task(s) to one-shot (${reason})`);
+
+    await Promise.all(stranded.map(async (task) => {
+      const p = this.pending.get(task.reqId);
+      if (!p || p.settled) return;
+      this.emit({ type: 'fallback', reqId: task.reqId, reason, sourceType, caller: task.caller, workerId: null });
+      try {
+        this.settle(p, await this.runFallbackRaw(task));
+      } catch (err) {
+        // The caller is awaiting this promise; a silent swallow is the hang.
+        if (!p.settled) { p.settled = true; this.pending.delete(task.reqId); p.reject(err); }
+      }
+    }));
   }
 
   /** Run the fallback and wrap into the uniform result shape (no pending entry). */

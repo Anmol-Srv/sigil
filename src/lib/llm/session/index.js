@@ -82,6 +82,12 @@ export async function initSessionManager({ config, log = () => {} } = {}) {
   const { join } = await import('node:path');
   const { existsSync } = await import('node:fs');
 
+  // Workers launch detached with nobody to answer Claude Code's folder-trust
+  // dialog; without this every worker wedges on it and the engine silently
+  // yields to one-shot. SIGIL_HOME is the workspace they inherit from the daemon.
+  const { ensureFolderTrusted } = await import('./trust.js');
+  log(`managed-session: workspace trust for ${SIGIL_HOME}: ${await ensureFolderTrusted(SIGIL_HOME)}`);
+
   const pools = {};
   for (const sourceType of supportedSourceTypes()) {
     pools[sourceType] = ms.poolSize;
@@ -104,6 +110,7 @@ export async function initSessionManager({ config, log = () => {} } = {}) {
     getDriver,
     fallback: fallbackFor,
     scratchDir: join(SIGIL_HOME, 'sessions'),
+    workerCwd: SIGIL_HOME,
     pools,
     workerServer,
     tokenBudget: ms.tokenBudget,

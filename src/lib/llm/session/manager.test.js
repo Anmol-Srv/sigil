@@ -24,10 +24,11 @@ function fakeDriver() {
   const d = {
     id: 'claude',
     nudges: [],
+    nudgeOpts: [],
     health: { healthy: true, reason: null },
     sessionName: (id) => `sigil-${id}`,
     buildLaunch: ({ workerId }) => ({ argv: ['claude', '--bare'], files: [{ path: `/tmp/${workerId}.json`, content: '{}' }] }),
-    async nudge(_tmux, name) { d.nudges.push(name); },
+    async nudge(_tmux, name, opts = {}) { d.nudges.push(name); d.nudgeOpts.push(opts); },
     async healthcheck() { return d.health; },
   };
   return d;
@@ -63,6 +64,8 @@ function makeManager(overrides = {}) {
     pools: overrides.pools || { claude: 1 },
     tokenBudget: overrides.tokenBudget ?? 60_000,
     firstTaskTimeoutMs: overrides.firstTaskTimeoutMs ?? 10_000,
+    bootNudgeIntervalMs: overrides.bootNudgeIntervalMs ?? 5_000,
+    workerCwd: overrides.workerCwd,
     maxBootFailures: overrides.maxBootFailures ?? 3,
     timers,
     writeFileFn: async () => {},
@@ -320,6 +323,118 @@ describe('SessionManager — boot handshake (finding-1 fix)', () => {
     const r = await mgr.submit({ sourceType: 'claude', prompt: 'x' });
     expect(r.viaFallback).toBe(true); // one-shot path
     expect(fallbackCalls).toHaveLength(1);
+  });
+
+  // ── Regressions from the first live run of the engine ────────────────────
+  // Enabling managed sessions changed nothing: every worker died on the boot
+  // handshake. Four separate causes, one test each.
+
+  it('launches the worker in a fixed workspace, not whatever cwd the daemon has', async () => {
+    // The daemon's cwd is the user's home. `claude` opens an un-answerable
+    // folder-trust dialog on a directory it has not seen, so the pane wedges
+    // and every worker "boots silent" forever.
+    const tmux = fakeTmux();
+    tmux.newSession = async function (name, argv, opts) { this.created.push({ name, opts }); this._sessions.push(name); };
+    const { mgr } = makeManager({ tmux, workerCwd: '/home/u/.sigil' });
+    await mgr.start();
+    expect(tmux.created[0].opts.cwd).toBe('/home/u/.sigil');
+  });
+
+  it('never sends /clear into a pane that has not booted yet', async () => {
+    // A still-rendering TUI merges the two sends into one garbage line
+    // ("/clear SIGIL_NEXT/clear") and the handshake is lost. There is nothing
+    // to clear in a fresh session anyway.
+    const { mgr, driver, timers } = makeManager();
+    await mgr.start();
+    await timers.fireLast();
+    expect(driver.nudgeOpts.every((o) => o.clear === false)).toBe(true);
+  });
+
+  it('keeps re-nudging across the whole boot window, not just once', async () => {
+    // The first keystroke lands before the TUI renders and is dropped. One
+    // retry a whole window later made every boot cost the full window.
+    const { mgr, driver, timers } = makeManager({ firstTaskTimeoutMs: 45_000, bootNudgeIntervalMs: 5_000 });
+    await mgr.start();
+    expect(driver.nudges).toHaveLength(1);
+    for (let i = 0; i < 5; i++) await timers.fireLast();
+    expect(driver.nudges).toHaveLength(6);
+    expect(mgr.stats().workers[0].state).toBe('booting'); // still trying, not recycled
+  });
+
+  it('does NOT nudge the worker that is mid-get_task when handing it work', async () => {
+    // The nudge sends `/clear` first. Sent to a worker already inside get_task,
+    // it wipes the task get_task is about to return, and the worker sits idle
+    // until its 120s dead-man timeout — so every freshly-booted worker burned
+    // its first real task and recycled. Observed as a ~200s first save, forever.
+    const { mgr, driver } = makeManager();
+    await mgr.start();
+    const wid = mgr.stats().workers[0].id;
+    const nudgesAfterBoot = driver.nudges.length;
+
+    mgr.submit({ sourceType: 'claude', prompt: 'real work' });
+    const t = mgr.getTask(wid); // boot handshake AND task pickup, one call
+
+    expect(t.prompt).toBe('real work');          // it still gets the task…
+    expect(driver.nudges).toHaveLength(nudgesAfterBoot); // …without being cleared
+  });
+
+  it('still nudges a DIFFERENT idle worker when one polls', async () => {
+    // The skip is scoped to the caller; a second worker must still be woken.
+    const { mgr, driver, timers } = makeManager({ pools: { claude: 2 } });
+    await mgr.start();
+    const [a, b] = mgr.stats().workers.map((w) => w.id);
+    mgr.getTask(a);                      // a boots, nothing queued
+    mgr.getTask(b);                      // b boots, nothing queued
+    timers.handles.forEach((h) => { h.cancelled = true; });
+
+    const before = driver.nudges.length;
+    mgr.submit({ sourceType: 'claude', prompt: 'x' });
+    expect(driver.nudges.length).toBe(before + 1); // dispatched via a real nudge
+  });
+
+  it('drains tasks queued behind a pool that never boots', async () => {
+    // The hang this fixes: submit() sees a BOOTING worker so it QUEUES, and the
+    // dead-man timer is armed at dispatch — which never happens. The pool then
+    // logs "staying on one-shot" and the already-queued task waits forever. Seen
+    // live as a `remember` that blew a 600s RPC timeout.
+    const { mgr, timers, fallbackCalls } = makeManager({ maxBootFailures: 1 });
+    await mgr.start();
+
+    const inflight = mgr.submit({ sourceType: 'claude', prompt: 'do not strand me' });
+    expect(mgr.stats().queued.claude).toBe(1);
+
+    await timers.fireLast(); // re-nudge
+    await timers.fireLast(); // give up → circuit breaker
+
+    await expect(inflight).resolves.toMatchObject({ text: 'FALLBACK', viaFallback: true });
+    expect(fallbackCalls).toHaveLength(1);
+    expect(mgr.stats().queued.claude).toBe(0);
+  });
+
+  it('rejects a stranded task when the fallback ALSO fails, rather than hanging', async () => {
+    // Settling with an error is a bad outcome; never settling is a worse one.
+    const { mgr, timers } = makeManager({
+      maxBootFailures: 1,
+      fallback: async () => { throw new Error('one-shot down too'); },
+    });
+    await mgr.start();
+    const inflight = mgr.submit({ sourceType: 'claude', prompt: 'x' });
+    await timers.fireLast();
+    await timers.fireLast();
+    await expect(inflight).rejects.toThrow(/one-shot down too/);
+  });
+
+  it('reports WHY a worker failed to boot, not just that it was silent', async () => {
+    // "silent after 45000ms" ×3 is unactionable; the pane holds the answer.
+    const driver = fakeDriver();
+    driver.health = { healthy: false, reason: 'blocking prompt: do you want to proceed' };
+    const lines = [];
+    const { mgr, timers } = makeManager({ driver });
+    mgr.log = (m) => lines.push(m);
+    await mgr.start();
+    await timers.fireLast(); // re-nudge
+    await timers.fireLast(); // give up
+    expect(lines.some((l) => /failed to boot.*do you want to proceed/.test(l))).toBe(true);
   });
 });
 

@@ -30,6 +30,33 @@ describe('claudeDriver.buildLaunch', () => {
     expect(argv[argv.indexOf('--model') + 1]).toBe('haiku');
   });
 
+  it('pre-approves the two worker tools, and nothing else', () => {
+    // Without --allowedTools the first get_task raises "Do you want to proceed?"
+    // in a pane nobody is watching, and every worker dies on the handshake.
+    // Scoped to these two names so a stray Bash/Edit would still stop dead.
+    const { argv } = built();
+    const allowed = argv[argv.indexOf('--allowedTools') + 1].split(',');
+    expect(allowed).toEqual(['mcp__sigil-worker__get_task', 'mcp__sigil-worker__submit_result']);
+  });
+
+  it('names the allowed tools after the MCP server it actually writes', () => {
+    // mcp__<server>__<tool> — a rename of the server key silently un-approves
+    // both tools, and the failure only shows up as a wedged pane.
+    const { argv, files } = built();
+    const server = Object.keys(JSON.parse(files[0].content).mcpServers)[0];
+    for (const t of argv[argv.indexOf('--allowedTools') + 1].split(',')) {
+      expect(t.startsWith(`mcp__${server}__`)).toBe(true);
+    }
+  });
+
+  it('skips /clear on the boot nudge — a cold pane merges the two sends', () => {
+    const sent = [];
+    const tmux = { sendKeys: async (_n, text) => { sent.push(text); } };
+    return claudeDriver.nudge(tmux, 's', { clear: false }).then(() => {
+      expect(sent).toEqual(['SIGIL_NEXT']);
+    });
+  });
+
   it('primes via --append-system-prompt (survives context resets, never a chat message)', () => {
     const { argv } = built();
     const i = argv.indexOf('--append-system-prompt');

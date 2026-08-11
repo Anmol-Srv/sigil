@@ -62,10 +62,13 @@ export function createTmux({ runner = defaultRunner } = {}) {
    * argv array; we pass it through tmux's own argv (NOT a shell string) so a
    * worker launch command with quotes/spaces can never be re-parsed by a shell.
    */
-  async function newSession(name, command, { env } = {}) {
+  async function newSession(name, command, { env, cwd } = {}) {
     // `tmux new-session -d -s <name> -- <argv...>` runs argv directly with no
     // intermediate shell, so special chars in flags are safe.
     const args = ['new-session', '-d', '-s', name];
+    // Without -c the pane inherits the DAEMON's cwd — usually the user's home —
+    // and `claude` opens its folder-trust dialog on it, wedging the worker.
+    if (cwd) args.push('-c', cwd);
     if (env) {
       for (const [k, v] of Object.entries(env)) args.push('-e', `${k}=${v}`);
     }

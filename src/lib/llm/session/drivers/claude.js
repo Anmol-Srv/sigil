@@ -53,6 +53,10 @@ const NUDGE = 'SIGIL_NEXT';
 // survives /clear, so the worker keeps its protocol across the reset.
 const CLEAR = '/clear';
 
+// Claude Code's naming for MCP tools: mcp__<server>__<tool>. Must match the
+// server key in the generated mcp config below.
+const WORKER_TOOLS = ['mcp__sigil-worker__get_task', 'mcp__sigil-worker__submit_result'];
+
 /** Whether to /clear between tasks. Escape hatch if /clear ever misbehaves in a
  *  given claude build: set llm.managedSession.clearBetweenTasks=false in
  *  config.json to revert to prompt-ordering only. */
@@ -147,6 +151,11 @@ export const claudeDriver = {
       // MCP without --bare.
       '--strict-mcp-config',
       '--mcp-config', cfgPath,
+      // Pre-approve EXACTLY the two worker tools. Without this the very first
+      // get_task raises "Do you want to proceed?" in a pane nobody is watching,
+      // and every worker dies on the boot handshake. Scoped to these two names,
+      // so if the worker ever reached for Bash/Edit it would still stop dead.
+      '--allowedTools', WORKER_TOOLS.join(','),
       '--append-system-prompt', SYSTEM_PROMPT,
       '--model', cliModel,
     ];
@@ -163,9 +172,13 @@ export const claudeDriver = {
    * nudge so the worker pulls + submits the next task over MCP. /clear is a
    * client-side reset (no inference, negligible cost) and the appended system
    * prompt survives it, so the worker keeps its protocol.
+   *
+   * On the BOOT nudge the caller passes {clear:false}: there is nothing to clear
+   * in a fresh session, and a still-rendering TUI merges the two sends into one
+   * garbage line ("/clear SIGIL_NEXT/clear"), costing the whole boot window.
    */
-  async nudge(tmux, name) {
-    if (clearBetweenTasks()) await tmux.sendKeys(name, CLEAR);
+  async nudge(tmux, name, { clear = true } = {}) {
+    if (clear && clearBetweenTasks()) await tmux.sendKeys(name, CLEAR);
     await tmux.sendKeys(name, NUDGE);
   },
 
@@ -179,4 +192,4 @@ export const claudeDriver = {
   },
 };
 
-export { NUDGE, CLEAR, SYSTEM_PROMPT, BLOCKING_PATTERNS, CLI_MODEL_MAP };
+export { NUDGE, CLEAR, SYSTEM_PROMPT, BLOCKING_PATTERNS, CLI_MODEL_MAP, WORKER_TOOLS };
