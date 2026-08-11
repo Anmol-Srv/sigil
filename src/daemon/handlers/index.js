@@ -38,6 +38,7 @@ import { registerDevice } from './device.js';
 import { registerTrace } from './trace.js';
 import { registerSetup } from './setup.js';
 import { registerRepair } from './repair.js';
+import { registerRelations } from './relations.js';
 import { registerLlmLog } from './llm-log.js';
 import { registerManagedSession } from './managed-session.js';
 
@@ -74,6 +75,7 @@ export function registerAll(registry, { startedAt }) {
   registerTrace(registry);
   registerSetup(registry);
   registerRepair(registry);
+  registerRelations(registry);
   registerLlmLog(registry);
   registerManagedSession(registry);
 }
