@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
-import { embed } from '../../ingestion/embedder.js';
+import { embed, embedBatch } from '../../ingestion/embedder.js';
 import { prompt as llmPrompt, parseJson } from '../../lib/llm.js';
 import config from '../../config.js';
 import {
@@ -8,6 +8,7 @@ import {
   getCanonicalEntity, pushAlias, updateName, safeParseEntityTypes,
 } from './store.js';
 import { findEmbeddingMatch, verifyEmbeddingMatch } from './embedding-matcher.js';
+import { matchEntitiesBatch } from './batch-matcher.js';
 
 /**
  * Resolve a single entity via a 3-stage deduplication cascade:
@@ -240,6 +241,24 @@ async function resolveEntityList(validItems, { namespace, episodeText }) {
     }
   }
 
+  // Pass 2. One batched call decides every remaining mention at once; the
+  // sequential cascade below is the fallback when it can't. See batch-matcher.js
+  // for why the batch is strictly more capable, not just cheaper.
+  if (needsFullResolve.length) {
+    const batched = await resolveBatch(
+      needsFullResolve.map((i) => validItems[i]),
+      { namespace, episodeText, anchorCohort },
+    ).catch((err) => {
+      console.error(`[resolver] batch match failed, falling back to per-pair: ${err.message}`);
+      return null;
+    });
+
+    if (batched) {
+      needsFullResolve.forEach((i, k) => { resolved[i] = batched[k]; });
+      return resolved.filter(Boolean);
+    }
+  }
+
   for (const i of needsFullResolve) {
     const item = validItems[i];
     const entity = await resolveEntity({
@@ -255,6 +274,113 @@ async function resolveEntityList(validItems, { namespace, episodeText }) {
   }
 
   return resolved.filter(Boolean);
+}
+
+/**
+ * Batched pass 2: gather every mention's candidates with NO LLM calls (vector
+ * search + the anchor cohort are both pure DB), then spend ONE call on the whole
+ * merge plan.
+ *
+ * Returns an array aligned with `items`, or null to hand back to the sequential
+ * cascade — the caller has made no writes yet when that happens.
+ */
+async function resolveBatch(items, { namespace, episodeText, anchorCohort }) {
+  const embeddings = await embedBatch(items.map((it) => `${it.entityType || 'topic'}: ${it.name}`));
+
+  // Stage 2 candidates (vector) + Stage 3 candidates (already-resolved entities
+  // from this same passage — the rename case the per-pair path needs a whole
+  // extra stage for).
+  const cohort = (await Promise.all(anchorCohort.map((id) => getCanonicalEntity(id))))
+    .filter(Boolean)
+    .filter((c) => c.namespace === namespace)
+    .map((c) => ({ ...c, types: safeParseEntityTypes(c), similarity: 0 }));
+
+  const mentions = [];
+  for (let k = 0; k < items.length; k++) {
+    const it = items[k];
+    const vector = await findEmbeddingMatch(it.name, embeddings[k], { namespace, limit: 3 });
+    const seen = new Set(vector.map((c) => c.id));
+    mentions.push({
+      name: it.name,
+      entityType: it.entityType || 'topic',
+      candidates: [
+        ...vector,
+        ...cohort.filter((c) => !seen.has(c.id) && c.name?.toLowerCase() !== it.name.toLowerCase()),
+      ],
+    });
+  }
+
+  // Nothing to compare against anywhere: every mention is new by definition, so
+  // the LLM has no question to answer. This is the common case for a fresh
+  // store and it now costs ZERO calls instead of one per mention.
+  const plan = mentions.some((m) => m.candidates.length)
+    ? await matchEntitiesBatch(mentions, episodeText)
+    : new Map();
+  if (!plan) return null;
+
+  // Apply. Mentions that point at a SIBLING mention are applied last, so the
+  // sibling they name has already become a real entity.
+  const out = new Array(items.length);
+  const deferred = [];
+
+  for (let k = 0; k < items.length; k++) {
+    const it = items[k];
+    const d = plan.get(it.name);
+    if (d?.sameAsMention) { deferred.push(k); continue; }
+
+    if (d?.sameAsId) {
+      const match = mentions[k].candidates.find((c) => c.id === d.sameAsId);
+      out[k] = await mergeIntoExisting(match, {
+        newName: it.name,
+        entityType: it.entityType || 'topic',
+        isRename: d.rename,
+        currentName: d.currentName,
+      });
+    } else {
+      out[k] = await insertOrAdopt({ ...it, namespace, embedding: embeddings[k] });
+    }
+  }
+
+  for (const k of deferred) {
+    const it = items[k];
+    const d = plan.get(it.name);
+    const target = out[items.findIndex((x) => x.name === d.sameAsMention)];
+    if (!target?.id) {
+      // The sibling it named didn't resolve (dropped decision, or it was itself
+      // deferred). Create it rather than losing the mention entirely.
+      out[k] = await insertOrAdopt({ ...it, namespace, embedding: embeddings[k] });
+      continue;
+    }
+    out[k] = await mergeIntoExisting(target, {
+      newName: it.name,
+      entityType: it.entityType || 'topic',
+      isRename: d.rename,
+      currentName: d.currentName,
+    });
+  }
+
+  return out;
+}
+
+/**
+ * Stage 4, extracted so the batch path shares it: insert, or adopt the winner
+ * when a concurrent ingest created the same name first (see the long note in
+ * resolveEntity — parallel ingests race on the unique constraint).
+ */
+async function insertOrAdopt({ name, entityType, description, namespace, embedding }) {
+  try {
+    return await insertEntity({
+      name, entityType: entityType || 'topic', description: description || null, namespace, embedding,
+    });
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const winner = await findByName(name, namespace);
+    if (!winner) throw err;
+    const canonical = await getCanonicalEntity(winner.id);
+    await incrementMentionCount(canonical.id);
+    await updateEntityTypes(canonical.id, entityType || 'topic');
+    return canonical;
+  }
 }
 
 // Lightweight Stage 1 only — used for the two-pass ordering above.

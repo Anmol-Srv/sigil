@@ -151,9 +151,10 @@ const config = {
       // Dead-man timeout per task → one-shot fallback + recycle.
       get taskTimeoutMs() { return Number(store().llm.managedSession?.taskTimeoutMs ?? 120000) || 120000; },
       // Boot handshake window: how long to wait for a freshly-spawned worker's
-      // first get_task before re-nudging once, then recycling. Keeps a lost
-      // cold-boot keystroke to a short retry instead of a full dead-man timeout.
-      get firstTaskTimeoutMs() { return Number(store().llm.managedSession?.firstTaskTimeoutMs ?? 10000) || 10000; },
+      // first get_task before re-nudging once, then recycling. Must clear a cold
+      // `claude` TUI render (~10s) PLUS one agent turn — measured 20-30s. At the
+      // old 10s every worker was recycled before it could ever answer.
+      get firstTaskTimeoutMs() { return Number(store().llm.managedSession?.firstTaskTimeoutMs ?? 45000) || 45000; },
       // How often the daemon sweeps BUSY workers for a wedged interactive dialog
       // (catches a stuck auth/trust prompt before its dead-man timeout fires).
       get healthProbeMs() { return Number(store().llm.managedSession?.healthProbeMs ?? 15000) || 15000; },

@@ -12,7 +12,21 @@ const NOISE_MIN_LENGTH = 3;
 const DOCUMENT_MIN_LENGTH = 2000;
 const VALID_ROUTES = ['thought', 'knowledge', 'noise'];
 
-async function classifyInput(content, { title } = {}) {
+/**
+ * @param {object}  [opts]
+ * @param {boolean} [opts.atomic]  The caller asserts this input is ONE short,
+ *   self-contained statement — `remember` guarantees it, since it rejects
+ *   anything document-shaped up front. Such an input can never need the
+ *   knowledge route: chunking a 100-character string yields one chunk,
+ *   contextualizing it prefixes a chunk that IS the whole document, and
+ *   extraction re-derives the sentence we were handed. That is three LLM calls
+ *   (~20s) to get back what the caller already gave us, and it lets the
+ *   extractor REWORD a fact the user asked to store verbatim. So a `knowledge`
+ *   verdict is coerced to `thought` here. The classifier still runs — splitting
+ *   into atomic facts, rejecting noise, and assigning a category are all real
+ *   work that only it can do.
+ */
+async function classifyInput(content, { title, atomic = false } = {}) {
   // Heuristic fast-paths — skip LLM for obvious cases
   if (!content?.trim() || content.trim().length < NOISE_MIN_LENGTH) {
     return { route: 'noise', facts: [], entities: [], reasoning: 'Empty or too short' };
@@ -24,7 +38,6 @@ async function classifyInput(content, { title } = {}) {
 
   // LLM classification for short-to-medium content
   const systemPrompt = await readFile(PROMPT_PATH, 'utf8');
-
   const input = `${systemPrompt}
 
 ---
@@ -40,12 +53,16 @@ Respond with ONLY a JSON object: { "route": "thought|knowledge|noise", "facts": 
     const result = await promptJson(input, { model: config.llm.extractionModel, caller: 'classifier' });
 
     if (!result || !VALID_ROUTES.includes(result.route)) {
-      return fallback('Invalid classification result');
+      return atomic ? atomicThought(content, 'Invalid classification result') : fallback('Invalid classification result');
     }
+
+    // `knowledge` is not a reachable answer for an input the caller has already
+    // guaranteed is one short fact — see the `atomic` note above.
+    const route = atomic && result.route === 'knowledge' ? 'thought' : result.route;
 
     // Validate extracted facts for thought route
     const validCategories = Object.keys(ALL_CATEGORIES);
-    const facts = result.route === 'thought' && Array.isArray(result.facts)
+    const facts = route === 'thought' && Array.isArray(result.facts)
       ? result.facts
           .filter((f) => f.content && validCategories.includes(f.category))
           .map((f) => ({
@@ -55,16 +72,34 @@ Respond with ONLY a JSON object: { "route": "thought|knowledge|noise", "facts": 
           }))
       : [];
 
+    // A coerced `knowledge` verdict carries no facts (the prompt tells it to
+    // leave them empty), and a thought route with zero facts stores NOTHING —
+    // the input would vanish. Fall back to the caller's own text, which is the
+    // fact by construction.
+    if (route === 'thought' && !facts.length && atomic) {
+      return atomicThought(content, result.reasoning || 'coerced from knowledge');
+    }
+
     return {
-      route: result.route,
+      route,
       facts,
       entities: Array.isArray(result.entities) ? result.entities : [],
       reasoning: result.reasoning || '',
     };
   } catch (err) {
     console.error('[input-classifier] Failed:', err.message);
-    return fallback(err.message);
+    return atomic ? atomicThought(content, err.message) : fallback(err.message);
   }
+}
+
+/** The input, stored verbatim as one fact. Used when the caller guaranteed it. */
+function atomicThought(content, reason) {
+  return {
+    route: 'thought',
+    facts: [{ content: content.trim(), category: 'domain_knowledge', confidence: 'high', importance: 'vital' }],
+    entities: [],
+    reasoning: `Atomic input — ${reason}`,
+  };
 }
 
 function fallback(reason) {

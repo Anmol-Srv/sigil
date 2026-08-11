@@ -55,4 +55,32 @@ export function registerManagedSession(registry) {
       ...stats,
     };
   });
+
+  // engine.setEnabled — flip the warm engine on/off from the dashboard. The
+  // manager is built once at daemon boot, so this persists the flag and reports
+  // `restartRequired`; the caller restarts. We refuse UP-FRONT when the host
+  // can't run it (no tmux / wrong provider) rather than writing a flag that
+  // would silently do nothing — the exact failure mode this whole feature had.
+  registry.register('engine.setEnabled', async ({ enabled } = {}) => {
+    const { default: config } = await import('../../config.js');
+    const { patchConfig } = await import('../../setup/config-store.js');
+
+    if (enabled) {
+      const provider = config.llm.provider || '';
+      if (provider && provider !== 'claude-cli') {
+        return { ok: false, error: `LLM provider is "${provider}" — warm workers only apply to claude-cli.` };
+      }
+      const { createTmux } = await import('../../lib/llm/session/tmux.js');
+      if (!(await createTmux().available())) {
+        return { ok: false, error: 'tmux was not found on PATH. Install tmux, then try again.' };
+      }
+    }
+
+    // patchConfig replaces the whole sub-object, so carry every tuning knob
+    // forward — otherwise flipping the switch silently resets pool size and
+    // timeouts to their defaults. The spread evaluates config's getters.
+    const current = config.llm.managedSession;
+    patchConfig('llm', { managedSession: { ...current, enabled: !!enabled } });
+    return { ok: true, enabled: !!enabled, restartRequired: true };
+  });
 }

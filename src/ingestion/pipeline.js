@@ -66,6 +66,11 @@ async function ingestDocument({
   skipEntities = false,
   skipContextualization = false,
   classify = true,
+  // The caller guarantees `content` is ONE short, self-contained fact, so the
+  // knowledge route (chunk → contextualize → extract) cannot apply. `remember`
+  // sets this: it already rejects document-shaped input, so what arrives is a
+  // fact by construction. Worth ~2 LLM calls per save. See classifyInput.
+  atomic = false,
   // Pod attachment. `podUids` is an explicit list (used by hooks to attach
   // to the active session pod). `resolvePodsFrom: 'metadata'` triggers
   // connector-derived attachment from the metadata payload (workspace
@@ -97,7 +102,7 @@ async function ingestDocument({
   let classification = null;
   if (classify) {
     process.stderr.write('[0/6] Classifying input...' + "\n");
-    classification = await classifyInput(content, { title: finalTitle });
+    classification = await classifyInput(content, { title: finalTitle, atomic });
     process.stderr.write(`  Route: ${classification.route} — ${classification.reasoning}` + "\n");
 
     if (classification.route === 'noise') {

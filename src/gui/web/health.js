@@ -93,6 +93,21 @@ export function systemCells(status = {}) {
   ];
 }
 
+/**
+ * Why the managed-session engine cannot be turned on from here, or null if it
+ * can. Same "no soft failures" rule applied to a control: this feature already
+ * spent a whole release flagged `enabled` while every worker died on boot, so a
+ * button that writes a flag the host cannot honour is worse than no button.
+ * Takes an `engine.status` payload.
+ */
+export function engineBlocker(s = {}) {
+  if (!s.tmuxAvailable) return 'tmux was not found on PATH — warm workers need it.';
+  if (s.provider && s.provider !== 'claude-cli') {
+    return `LLM provider is "${s.provider}" — warm workers only apply to claude-cli.`;
+  }
+  return null;
+}
+
 function providerCell(h) {
   if (!h) return { s: '', v: 'not probed', sub: 'daemon still starting' };
   if (h.ok) return { s: 'ok', v: h.provider, sub: h.model || undefined };

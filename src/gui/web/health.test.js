@@ -6,7 +6,7 @@
  * must never render as a store that is empty.
  */
 import { describe, it, expect } from 'vitest';
-import { systemAlert, systemCells, condenseProviderError } from './health.js';
+import { systemAlert, systemCells, condenseProviderError, engineBlocker } from './health.js';
 import { fuzzy } from './cmdk.js';
 
 const HEALTHY = {
@@ -134,5 +134,26 @@ describe('condenseProviderError', () => {
 
   it('trims the trailing separator left behind by the cut', () => {
     expect(condenseProviderError('failed to start: {"a":1}')).toBe('failed to start');
+  });
+});
+
+describe('engineBlocker', () => {
+  const OK = { tmuxAvailable: true, provider: 'claude-cli' };
+
+  it('lets the user turn warm workers on when the host can actually run them', () => {
+    expect(engineBlocker(OK)).toBeNull();
+  });
+
+  it('refuses without tmux, naming it', () => {
+    // The whole engine is warm processes inside tmux; no tmux, no engine.
+    expect(engineBlocker({ ...OK, tmuxAvailable: false })).toMatch(/tmux/);
+  });
+
+  it('refuses on an API provider, which has no cold start to amortize', () => {
+    expect(engineBlocker({ ...OK, provider: 'openai' })).toMatch(/openai/);
+  });
+
+  it('allows an unset provider rather than blocking on a not-yet-probed daemon', () => {
+    expect(engineBlocker({ tmuxAvailable: true, provider: null })).toBeNull();
   });
 });

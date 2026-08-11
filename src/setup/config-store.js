@@ -56,7 +56,7 @@ function defaults() {
       openrouterBaseUrl: '', openrouterReferer: 'https://github.com/Anmol-Srv/sigil', openrouterTitle: 'Sigil',
       managedSession: {
         enabled: false, poolSize: 1, tokenBudget: 60000,
-        taskTimeoutMs: 120000, firstTaskTimeoutMs: 10000, healthProbeMs: 15000,
+        taskTimeoutMs: 120000, firstTaskTimeoutMs: 45000, healthProbeMs: 15000,
         clearBetweenTasks: true,
       },
     },
