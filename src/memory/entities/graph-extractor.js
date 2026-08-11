@@ -10,6 +10,11 @@ import { isSelfReference, resolveSelfEntity } from './self.js';
 import { createRelation } from './relations.js';
 
 const GRAPH_PROMPT = path.join(PROMPTS_DIR, 'graph-extraction.md');
+// The pre-fusion entities-only prompt, revived. When relations are derived
+// from co-occurrence instead of read off prose, asking for them here is pure
+// waste: the model reasons about every pair, emits them, and the caller throws
+// the whole array away at the `extractRelations` guard below.
+const ENTITY_PROMPT = path.join(PROMPTS_DIR, 'entity-extraction.md');
 const GLEAN_MIN_FACTS = 5;
 
 // Schema-constrained output shape (OpenAI/OpenRouter json_schema). Forces the
@@ -17,6 +22,23 @@ const GLEAN_MIN_FACTS = 5;
 // {subject,relationship,object}] } — eliminating the mis-shaped-JSON failures
 // that free-form json_object mode lets through on small models. strict mode
 // requires every property listed in `required` and additionalProperties:false.
+const ENTITY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    entities: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { name: { type: 'string' }, description: { type: 'string' } },
+        required: ['name', 'description'],
+      },
+    },
+  },
+  required: ['entities'],
+};
+
 const GRAPH_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -137,18 +159,22 @@ function normalizeRelationships(raw) {
 // rounds that re-ask the model for anything it missed (GraphRAG's recall trick).
 // Gleaning only fires for fact-dense docs so short thought-route inputs don't
 // pay for a second call.
-async function extractGraph(factObjects) {
+async function extractGraph(factObjects, { withRelations = true } = {}) {
   const factsText = factObjects.map((f) => `- ${f.content}`).filter(Boolean).join('\n');
   if (!factsText) return { entities: [], relationships: [] };
 
-  const systemPrompt = await readFile(GRAPH_PROMPT, 'utf8');
+  const systemPrompt = await readFile(withRelations ? GRAPH_PROMPT : ENTITY_PROMPT, 'utf8');
   const basePrompt = `${systemPrompt}\n\n---\n\n**Facts:**\n${factsText}`;
 
-  const first = parseGraph(await promptJson(basePrompt, { model: config.llm.entityModel, caller: 'graph-extractor', schema: GRAPH_SCHEMA }));
+  const first = parseGraph(await promptJson(basePrompt, {
+    model: config.llm.entityModel,
+    caller: withRelations ? 'graph-extractor' : 'entity-extractor',
+    schema: withRelations ? GRAPH_SCHEMA : ENTITY_SCHEMA,
+  }));
   let entities = normalizeEntities(first.entities);
   let relationships = normalizeRelationships(first.relationships);
 
-  const rounds = factObjects.length >= GLEAN_MIN_FACTS ? Math.max(0, config.ingest.graphGleanRounds) : 0;
+  const rounds = withRelations && factObjects.length >= GLEAN_MIN_FACTS ? Math.max(0, config.ingest.graphGleanRounds) : 0;
   for (let r = 0; r < rounds; r++) {
     const already = JSON.stringify({
       entities: entities.map((e) => e.name),
@@ -197,9 +223,14 @@ Review the facts again and output ONLY the entities and relationships you MISSED
 async function extractAndResolveGraph(factObjects, { namespace, today }) {
   if (!factObjects?.length) return { entities: [], relationCount: 0 };
 
+  // Decided BEFORE the call, not after. The guard further down used to run on
+  // a response that already contained relationships — the model had done the
+  // work and the tokens were paid for; only the array was dropped.
+  const withRelations = Boolean(config.ingest.extractRelations);
+
   let graph;
   try {
-    graph = await extractGraph(factObjects);
+    graph = await extractGraph(factObjects, { withRelations });
   } catch (err) {
     console.error(`[graph-extractor] extraction failed: ${err.message}`);
     return { entities: [], relationCount: 0 };
@@ -216,7 +247,7 @@ async function extractAndResolveGraph(factObjects, { namespace, today }) {
   // Resolve the extracted entities (two-pass rename-aware) into canonical nodes.
   const entities = await resolveEntityList(named, { namespace, episodeText });
 
-  if (!config.ingest.extractRelations || !graph.relationships.length) {
+  if (!withRelations || !graph.relationships.length) {
     return { entities, relationCount: 0 };
   }
 
