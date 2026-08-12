@@ -1,6 +1,6 @@
 import { keyBy } from '../../lib/collection.js';
 import { escapeRegex } from '../../lib/text.js';
-import { RRF_K, VECTOR_WEIGHT, KEYWORD_WEIGHT } from './scoring-constants.js';
+import { RRF_K, VECTOR_WEIGHT, KEYWORD_WEIGHT, ACTIVATION_WEIGHT } from './scoring-constants.js';
 
 import { embed, embedBatch } from '../../ingestion/embedder.js';
 import config from '../../config.js';
@@ -179,7 +179,7 @@ function buildSearchTrace({ query, namespaces, limit, minConfidence, useGraph, e
       ? { applied: true, threshold: floored.threshold, dropped: floored.dropped, kept: floored.kept, note: 'precision-first: facts below cosine floor dropped from injection' }
       : { applied: false },
     ranking: {
-      model: 'RRF(vector×1.0 + keyword×0.7) × softplus(ACT-R activation) × importance × confidence',
+      model: `RRF(vector×${VECTOR_WEIGHT} + keyword×${KEYWORD_WEIGHT}) × (1 + ${ACTIVATION_WEIGHT}·softplus(ACT-R activation)) × importance × confidence`,
       facts: rankedFacts,
       chunks: rankedChunks,
     },
