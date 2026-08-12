@@ -14,12 +14,19 @@
 import { register } from '../registry.js';
 
 import { claudeSessionKind } from './claude_session.js';
+import { directiveKind } from './directive.js';
 import { personKind } from './person.js';
 import { projectKind } from './project.js';
 import { playbookKind } from './playbook.js';
 import { vitalKind } from './vital.js';
 
+// Order is the hot-context blend order (getHotFacts merges kind lists in
+// registration order until the overall limit fills). directive goes FIRST:
+// standing instructions about how to work with the user are the one class of
+// fact that query-driven recall can never surface on its own, so they get the
+// scarcest slots before project pods or vital can claim them.
 const BUILTINS = [
+  directiveKind,
   claudeSessionKind,
   projectKind,
   personKind,
