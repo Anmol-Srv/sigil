@@ -68,7 +68,13 @@ Respond with ONLY a JSON object: { "route": "thought|knowledge|noise", "facts": 
           .map((f) => ({
             ...f,
             confidence: ['high', 'medium', 'low'].includes(f.confidence) ? f.confidence : 'high',
-            importance: ['vital', 'supplementary'].includes(f.importance) ? f.importance : 'vital',
+            // Unrecognised importance falls back to 'supplementary', not
+            // 'vital'. Defaulting UP made vital the value of every fact the
+            // model didn't explicitly rate — measured at 50 of 62 on a real
+            // store — which drained the word of meaning: 'vital' gates the
+            // always-on context block and multiplies the search score, and
+            // neither can discriminate when almost everything qualifies.
+            importance: ['vital', 'supplementary'].includes(f.importance) ? f.importance : 'supplementary',
           }))
       : [];
 
@@ -96,7 +102,10 @@ Respond with ONLY a JSON object: { "route": "thought|knowledge|noise", "facts": 
 function atomicThought(content, reason) {
   return {
     route: 'thought',
-    facts: [{ content: content.trim(), category: 'domain_knowledge', confidence: 'high', importance: 'vital' }],
+    // 'supplementary': this path runs when classification FAILED, so nothing
+    // has judged the content. An unjudged fact is the weakest possible claim
+    // to a permanent slot in every future prompt.
+    facts: [{ content: content.trim(), category: 'domain_knowledge', confidence: 'high', importance: 'supplementary' }],
     entities: [],
     reasoning: `Atomic input — ${reason}`,
   };

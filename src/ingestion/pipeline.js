@@ -162,7 +162,7 @@ async function ingestDocument({
     await cortexDb.transaction(async (trx) => {
       thoughtResult = await storeFactsInBatches(classification.facts, {
         documentId: doc.id, namespace: ns, embeddings: thoughtEmbeddings,
-        defaultConfidence: 'high', defaultImportance: 'vital', db: trx,
+        defaultConfidence: 'high', defaultImportance: 'supplementary', db: trx,
       });
       // Mirror the document's pod attachments down to its facts so a session
       // pod query surfaces the actual fact rows, not just the document.
