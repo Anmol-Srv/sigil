@@ -26,10 +26,10 @@ async function searchChunks(embedding, { namespaces, limit = 20, podIds = null }
   return rows;
 }
 
-async function searchFacts(embedding, { namespaces, limit = 20, minConfidence = 'medium', pointInTime, categories }) {
+async function searchFacts(embedding, { namespaces, limit = 20, minConfidence = 'medium', pointInTime, categories, viewer = null }) {
   const vec = pgVector(embedding);
   const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
-  const { temporalClause, categoryClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories });
+  const { temporalClause, categoryClause, visibilityClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories, viewer });
 
   const params = [vec, namespaces, ...filterParams, vec, config.memory.minFactSimilarity, vec, limit];
 
@@ -45,6 +45,7 @@ async function searchFacts(embedding, { namespaces, limit = 20, minConfidence = 
       AND ${CONFIDENCE_CASE} >= ?
       ${temporalClause}
       ${categoryClause}
+      ${visibilityClause}
       AND 1 - (${embeddingDistance}) >= ?
     ORDER BY ${embeddingDistance}
     LIMIT ?

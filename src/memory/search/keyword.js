@@ -18,8 +18,8 @@ async function searchChunks(query, { namespaces, limit = 20, podIds = null }) {
   return rows;
 }
 
-async function searchFacts(query, { namespaces, limit = 20, minConfidence = 'medium', pointInTime, categories }) {
-  const { temporalClause, categoryClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories });
+async function searchFacts(query, { namespaces, limit = 20, minConfidence = 'medium', pointInTime, categories, viewer = null }) {
+  const { temporalClause, categoryClause, visibilityClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories, viewer });
 
   const params = [query, namespaces, query, ...filterParams, limit];
 
@@ -35,6 +35,7 @@ async function searchFacts(query, { namespaces, limit = 20, minConfidence = 'med
       AND ${CONFIDENCE_CASE} >= ?
       ${temporalClause}
       ${categoryClause}
+      ${visibilityClause}
     ORDER BY rank DESC
     LIMIT ?
   `, params);

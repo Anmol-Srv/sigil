@@ -15,6 +15,8 @@
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import { selfDeviceId } from '../net/self-device.js';
+
 const als = new AsyncLocalStorage();
 
 export function runWithRequestContext(ctx, fn) {
@@ -25,8 +27,23 @@ export function currentRequestContext() {
   return als.getStore() || null;
 }
 
+/**
+ * Which device is responsible for the current write.
+ *
+ * A remote Iroh caller wins: the fact is theirs, not ours. Otherwise it falls
+ * back to THIS install's own device row. That fallback is what makes shared-
+ * database deployments legible — without it every local write on every machine
+ * stamps NULL and the store cannot tell a cloud agent's facts from a laptop's.
+ *
+ * Still null before self-registration completes (very early boot) or if the
+ * device table is unreachable. Callers must read null as "origin unknown" and
+ * never as "not shared" — hiding a fact because we failed to identify
+ * ourselves would silently shrink recall.
+ */
 export function currentDeviceId() {
-  return als.getStore()?.device?.id ?? null;
+  const fromCaller = als.getStore()?.device?.id;
+  if (fromCaller != null) return fromCaller;
+  return selfDeviceId();
 }
 
 export function currentAgent() {

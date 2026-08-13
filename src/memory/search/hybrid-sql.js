@@ -6,20 +6,32 @@
  *   1. Semantic CTE — top-K via cosine similarity
  *   2. Keyword CTE — top-K via ts_rank
  *   3. fused — FULL OUTER JOIN with position-based RRF
- *   4. ranked — multiply RRF score by softplus(ACT-R activation) × importance × confidence
+ *   4. ranked — scale RRF by (1 + w·softplus(ACT-R activation)) × importance × confidence
  *
  * ACT-R activation (Anderson's cognitive architecture) makes frequently-used and
- * recently-used facts win ties over equally-similar but older/less-used facts.
+ * recently-used facts win TIES over equally-similar but older/less-used facts.
  * Formula: `ln(access_count+1) - 0.5*ln(t_days)`, then softplus to keep ≥0.
  *
+ * "Ties" is the operative word, and it used to be false. Activation multiplied
+ * the fused score outright, so its dynamic range competed with relevance rather
+ * than breaking ties within it — and because the decay term went POSITIVE below
+ * one day (see ACTIVATION_MIN_AGE_DAYS) while retrieval itself refreshes
+ * last_accessed_at, activation degenerated into raw access count. The result on
+ * a real store: a document ranked #1 for a query it matched at 0.43 similarity,
+ * ahead of a 0.76-similarity direct hit, purely on having been read 15 times
+ * during unrelated work. Retrieval reinforcing retrieval is a feedback loop.
+ *
  * Approach: single-SQL RRF (fewer round-trips than two-query JS merge)
- * + ACT-R activation as the ranking multiplier on top of the fused score.
+ * + ACT-R activation as a BOUNDED modifier on top of the fused score.
  */
 
 import cortexDb from '../../db/cortex.js';
 import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import { CONFIDENCE_CASE, buildFactFilters } from './filters.js';
-import { RRF_K, VECTOR_WEIGHT, KEYWORD_WEIGHT } from './scoring-constants.js';
+import {
+  RRF_K, VECTOR_WEIGHT, KEYWORD_WEIGHT,
+  ACTIVATION_WEIGHT, ACTIVATION_MIN_AGE_DAYS,
+} from './scoring-constants.js';
 
 const OVERFETCH = 3;
 
@@ -29,10 +41,10 @@ const CONFIDENCE_HIGH_MULT = 1.0;
 const CONFIDENCE_MEDIUM_MULT = 0.85;
 const CONFIDENCE_LOW_MULT = 0.7;
 
-async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5, minConfidence = 'medium', pointInTime, categories, podIds = null }) {
+async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5, minConfidence = 'medium', pointInTime, categories, podIds = null, viewer = null }) {
   const vec = pgVector(queryEmbedding);
   const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
-  const { temporalClause, categoryClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories });
+  const { temporalClause, categoryClause, visibilityClause, filterParams } = buildFactFilters({ minConfidence, pointInTime, categories, viewer });
   const overfetchLimit = limit * OVERFETCH;
 
   // Pod-scope filter — applied identically to both CTEs.
@@ -126,6 +138,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
         AND ${CONFIDENCE_CASE} >= ?
         ${temporalClause}
         ${categoryClause}
+        ${visibilityClause}
         ${podScopeClause}
       ORDER BY ${embeddingDistance}
       LIMIT ?
@@ -148,6 +161,7 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
         AND search_vector @@ plainto_tsquery('english', ?)
         ${temporalClause}
         ${categoryClause}
+        ${visibilityClause}
         ${podScopeClause}
       ORDER BY keyword_rank DESC
       LIMIT ?
@@ -179,13 +193,15 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
              COALESCE(fl.access_count, 0) AS access_count,
              fl.last_accessed_at,
              -- ACT-R activation: ln(n+1) - 0.5*ln(t_days), softplus to keep >= 0.
-             -- t_days floor of 0.01 prevents log(0). Recently-accessed facts win ties.
+             -- t_days floors at ACTIVATION_MIN_AGE_DAYS (1 day), NOT at some
+             -- epsilon: below one day the decay term changes sign and pays a
+             -- bonus instead, which every just-retrieved fact was collecting.
              ln(1.0 + exp(
                ln(COALESCE(fl.access_count, 0) + 1.0)
                - 0.5 * ln(
                    GREATEST(
                      EXTRACT(epoch FROM (now() - COALESCE(fl.last_accessed_at, f.created_at))) / 86400.0,
-                     0.01
+                     ${ACTIVATION_MIN_AGE_DAYS}
                    )
                  )
              )) AS activation,
@@ -205,7 +221,8 @@ async function hybridSearchFacts(query, queryEmbedding, { namespaces, limit = 5,
            access_count,
            last_accessed_at AS "lastAccessedAt",
            activation,
-           (rrf_raw * activation * importance_mult * confidence_mult) AS final_score
+           (rrf_raw * (1.0 + ${ACTIVATION_WEIGHT} * activation)
+              * importance_mult * confidence_mult) AS final_score
     FROM ranked
     ORDER BY final_score DESC,
              CASE WHEN importance = 'vital' THEN 0 ELSE 1 END

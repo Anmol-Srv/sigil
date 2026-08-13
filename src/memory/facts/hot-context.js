@@ -20,6 +20,7 @@
 import cortexDb from '../../db/cortex.js';
 import config from '../../config.js';
 import { SIGIL_MD_PATH } from '../../lib/paths.js';
+import { scopeVisibility, resolveViewer } from '../visibility.js';
 
 import '../pods/kinds/index.js'; // side-effect: register built-in kinds
 import { activeKinds } from '../pods/registry.js';
@@ -79,7 +80,7 @@ export async function getHotFacts({
   // full-and-polluted. Fresh installs still get something so day-one isn't
   // empty; once any pod/vital fact exists, the blend stays scoped.
   if (blended.length === 0) {
-    const filler = await cortexDb('fact as f')
+    const filler = await scopeVisibility(cortexDb('fact as f'), await resolveViewer('own'), 'f')
       .leftJoin('fact_lifecycle as fl', 'fl.fact_id', 'f.id')
       .where({ 'f.status': 'active', 'f.namespace': ns })
       .orderByRaw('COALESCE(fl.last_accessed_at, f.created_at) DESC')
@@ -100,11 +101,17 @@ export async function getHotFacts({
 // Ranks by importance_score × recency-decay, falling back to created_at
 // when fact_lifecycle is absent. Exposed for kind authors who want to
 // customise their own fetchFacts but reuse the default scoring.
-export async function factsInPodsByRecency(podUids, namespace, slots) {
+export async function factsInPodsByRecency(podUids, namespace, slots, viewer = undefined) {
   if (!Array.isArray(podUids) || podUids.length === 0) return [];
   const real = podUids.filter((u) => typeof u === 'string' && !u.startsWith('__virtual:'));
   if (real.length === 0) return [];
-  return cortexDb('fact as f')
+  // `undefined` (an old caller that hasn't been updated) resolves the viewer
+  // itself rather than defaulting to unscoped. Hot context is written into an
+  // agent's prompt, so an unscoped default here would leak another agent's
+  // persona instructions into the loudest channel there is. Pass `null`
+  // explicitly to opt out.
+  const scope = viewer === undefined ? await resolveViewer('own') : viewer;
+  return scopeVisibility(cortexDb('fact as f'), scope, 'f')
     .join('pod_membership as pm', function () {
       this.on('pm.member_id', '=', 'f.id')
           .andOnVal('pm.member_type', '=', 'fact');

@@ -40,6 +40,7 @@ Commands:
   facts                    List stored facts with IDs
   forget <id>              Delete a specific fact by ID
   namespace <sub>          Manage namespaces (list | delete <ns>)
+  visibility <id> <scope>  Scope a fact to one agent/device, or share it
   session <sub>            Inspect the active session pod (current | list | show)
   pod <sub>                List, show, create, or archive memory pods
   export [--format=json]   Export knowledge base as JSON or Markdown
@@ -189,6 +190,7 @@ const commands = {
   service: runServiceVerb,
   pair: runPairVerb,
   join: runJoinVerb,
+  visibility: runVisibility,
 };
 
 async function runUpdateVerb(args) {
@@ -879,6 +881,47 @@ Options:
   }
 
   await cortexDb.destroy();
+}
+
+// ─── Visibility ──────────────────────────────────────────────────────────────
+
+async function runVisibility(args) {
+  const [target, scope] = args.filter((a) => !a.startsWith('--'));
+
+  if (!target || !scope || args.includes('--help')) {
+    console.log(`sigil visibility — Control which agents can retrieve a fact
+
+Usage:
+  sigil visibility <fact-id|uid> <shared|agent|device>
+
+Scopes:
+  shared   every device and every agent. The default for almost everything.
+  agent    only the agent that wrote it — for instructions addressed to one
+           assistant ("call me sir") that would put words in another's mouth.
+  device   only the machine that wrote it — for local paths, ports, hardware.
+
+Find a fact's id with \`sigil search\` or in the GUI. Changing a scope takes
+effect on the next read, on every device.
+
+Examples:
+  sigil visibility fact-9fK2 agent
+  sigil visibility 412 shared`);
+    process.exit(target || scope ? 0 : 1);
+  }
+
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+  try {
+    const { data } = await client.call('setFactVisibility', { id: target, visibility: scope });
+    if (data.notFound) {
+      console.error(`No fact matching "${data.query}".`);
+      process.exit(1);
+    }
+    console.log(`${data.from} → ${data.to}`);
+    console.log(`  ${data.content}`);
+  } finally {
+    await client.close();
+  }
 }
 
 // ─── Namespace ───────────────────────────────────────────────────────────────
@@ -1724,6 +1767,7 @@ Usage:
 
 Options:
   --namespace=<ns>    Filter by namespace (comma-separated for multiple)
+  --all-namespaces    Search every namespace in the store
   --limit=<n>         Max results (default: 10)
   --graph             Enable graph enhancement
   --route             Enable LLM query routing
@@ -1741,7 +1785,9 @@ Examples:
   }
 
   const nsFlag = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1];
-  const namespaces = nsFlag ? nsFlag.split(',') : undefined;
+  const namespaces = flags.includes('--all-namespaces')
+    ? ['*']
+    : (nsFlag ? nsFlag.split(',') : undefined);
   const limit = Number(flags.find((f) => f.startsWith('--limit='))?.split('=')[1] || 10);
   const useGraph = flags.includes('--graph') && !flags.includes('--no-graph');
   const route = flags.includes('--route');
@@ -1759,6 +1805,10 @@ Examples:
     const { data } = await client.call('search', {
       query, namespaces, limit, useGraph, route, synthesize, includeChunks,
       podScope, cwd: process.cwd(),
+      // A person searching their own memory is not an agent and gets no
+      // visibility scoping. Agent-scoped facts still belong to the user, and
+      // hiding them here would make the store feel like it had lost them.
+      visibility: 'any',
     });
 
     if (data.synthesized) console.log(data.synthesized);

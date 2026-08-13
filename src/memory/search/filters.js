@@ -6,7 +6,37 @@ const CONFIDENCE_CASE = `CASE confidence
             ELSE 0
           END`;
 
-function buildFactFilters({ minConfidence = 'medium', pointInTime, categories }) {
+/**
+ * Visibility clause — the one place a fact can be hidden from a reader.
+ *
+ * `viewer` is the principal doing the reading:
+ *   null                      → no scoping at all. The human asking directly
+ *                               ("sigil search") owns every fact in the store
+ *                               and must be able to see all of it; hiding a
+ *                               user's own memory from the user is never right.
+ *                               This is the query-time wildcard, deliberately
+ *                               separate from any per-fact state — the same
+ *                               split Keychain draws with kSecAttrSynchronizableAny.
+ *   { agent, deviceId }       → an agent reading on the user's behalf. Sees
+ *                               everything shared, plus the private facts that
+ *                               belong to it specifically.
+ *
+ * IS NOT DISTINCT FROM, not `=`: created_by_agent and created_by_device_id are
+ * both nullable, and `NULL = NULL` is NULL, not true. With `=` a fact written
+ * before provenance stamping existed would be invisible to everyone forever,
+ * including the agent that wrote it.
+ */
+function buildVisibilityFilter(viewer) {
+  if (viewer === null || viewer === undefined) return { clause: '', params: [] };
+  return {
+    clause: `AND (visibility = 'shared'
+        OR (visibility = 'agent'  AND created_by_agent IS NOT DISTINCT FROM ?)
+        OR (visibility = 'device' AND created_by_device_id IS NOT DISTINCT FROM ?))`,
+    params: [viewer.agent ?? null, viewer.deviceId ?? null],
+  };
+}
+
+function buildFactFilters({ minConfidence = 'medium', pointInTime, categories, viewer = null }) {
   const minRank = CONFIDENCE_RANK[minConfidence] ?? 1;
   const params = [minRank];
   let temporalClause = '';
@@ -22,7 +52,19 @@ function buildFactFilters({ minConfidence = 'medium', pointInTime, categories })
     params.push(categories);
   }
 
-  return { minRank, temporalClause, categoryClause, filterParams: params };
+  // Appended LAST, and emitted last of the three clauses by every caller.
+  // filterParams is positional — callers splat it into a `?` sequence — so the
+  // push order here has to match the textual order of the clauses in the SQL.
+  const visibility = buildVisibilityFilter(viewer);
+  params.push(...visibility.params);
+
+  return {
+    minRank,
+    temporalClause,
+    categoryClause,
+    visibilityClause: visibility.clause,
+    filterParams: params,
+  };
 }
 
 /**
@@ -57,4 +99,4 @@ function buildChunkPodFilter(podIds) {
   };
 }
 
-export { CONFIDENCE_CASE, buildFactFilters, buildChunkPodFilter };
+export { CONFIDENCE_CASE, buildFactFilters, buildChunkPodFilter, buildVisibilityFilter };

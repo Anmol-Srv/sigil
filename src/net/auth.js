@@ -33,6 +33,7 @@ export const METHOD_ROLES = {
   remember:           'writer',
   ingestDoc:          'writer',
   forgetFact:         'writer',
+  setFactVisibility:  'writer',
 
   // Admin
   'pair.create':      'admin',

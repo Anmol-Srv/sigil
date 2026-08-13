@@ -10,9 +10,37 @@ export function registerSearch(registry) {
     const { search } = await import('../../memory/search/hybrid.js');
     const { default: config } = await import('../../config.js');
 
-    const namespaces = Array.isArray(params.namespaces) && params.namespaces.length
-      ? params.namespaces
+    // Namespace resolution, in precedence order: what the caller asked for,
+    // then the configured search set, then this device's own namespace.
+    //
+    // The configured set is what makes cross-device work when two installs
+    // don't agree on a namespace — the cloud agent writing under
+    // "hermes-work" and the laptop reading under "sigil" would otherwise
+    // never meet, which is the whole failure this is meant to fix. Writes
+    // stay narrow (one namespace, the local default); only reads widen. That
+    // asymmetry — narrow write scope, broad read scope — is what every
+    // comparable memory system converges on.
+    //
+    // '*' expands to every namespace that currently holds an active fact.
+    // Expanding to a concrete list rather than dropping the WHERE clause keeps
+    // one code path in the SQL and keeps the query planner on the namespace
+    // index.
+    const configured = Array.isArray(config.defaults.searchNamespaces) && config.defaults.searchNamespaces.length
+      ? config.defaults.searchNamespaces
       : [config.defaults.namespace];
+    const requested = Array.isArray(params.namespaces) && params.namespaces.length
+      ? params.namespaces
+      : configured;
+
+    let namespaces = requested;
+    if (requested.includes('*')) {
+      const { listNamespaces } = await import('../../memory/facts/store.js');
+      const all = (await listNamespaces()).map((n) => n.namespace);
+      // Never collapse to an empty ANY() — that matches no rows at all. A
+      // brand-new store with no facts yet must still behave like a search
+      // over its own namespace, not like a search over nothing.
+      namespaces = all.length ? all : [config.defaults.namespace];
+    }
     const limit = Number.isFinite(params.limit) ? params.limit : 10;
     const useGraph    = Boolean(params.useGraph);
     const route       = Boolean(params.route);
@@ -31,6 +59,13 @@ export function registerSearch(registry) {
     // the precision floor is for unprompted auto-injection (hooks), not for a
     // human/agent who deliberately asked. Opt in with applyFloor:true.
     const applyFloor = params.applyFloor ?? false;
+    // Visibility scope. 'own' (the default) means the caller sees shared facts
+    // plus the private ones addressed to it; 'any' lifts scoping entirely and
+    // is for a human reading their own store. Defaulting to 'own' is what
+    // keeps one agent from inheriting another agent's persona instructions —
+    // an agent that forgets to pass anything gets the safe answer.
+    const { resolveViewer } = await import('../../memory/visibility.js');
+    const viewer = await resolveViewer(params.visibility === 'any' ? 'any' : 'own');
     const ctx = { cwd: params.cwd || null, sessionId: params.sessionId || null };
 
     const result = await search(query, {
@@ -45,6 +80,7 @@ export function registerSearch(registry) {
       pointInTime,
       podScope,
       applyFloor,
+      viewer,
       ctx,
     });
 
