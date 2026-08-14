@@ -18,17 +18,31 @@ async function upsert({ sourcePath, sourceType, title = null, contentHash, names
   // ON CONFLICT target matches the (source_path, namespace) composite unique
   // (migration 20260504120000). The same path can live in multiple namespaces;
   // the upsert only collapses dupes within one.
+  // Capture the OLD hash in a CTE. `RETURNING content_hash != ?` after the
+  // upsert compared the newly-written hash to itself and therefore reported
+  // every update as unchanged — changed documents never re-ingested.
   const { rows: [doc] } = await cortexDb.raw(`
-    INSERT INTO document (uid, source_path, source_type, title, content_hash, content, namespace, last_ingested_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
-    ON CONFLICT (source_path, namespace) DO UPDATE SET
-      title = EXCLUDED.title,
-      content_hash = EXCLUDED.content_hash,
-      content = EXCLUDED.content,
-      last_ingested_at = NOW(),
-      updated_at = NOW()
-    RETURNING *, (xmax = 0) AS "isNew", content_hash != ? AS "contentChanged"
-  `, [uid, sourcePath, sourceType, title, contentHash, content, namespace, contentHash]);
+    WITH prior AS (
+      SELECT content_hash
+      FROM document
+      WHERE source_path = ? AND namespace = ?
+    ), upserted AS (
+      INSERT INTO document (uid, source_path, source_type, title, content_hash, content, namespace, last_ingested_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NOW())
+      ON CONFLICT (source_path, namespace) DO UPDATE SET
+        source_type = EXCLUDED.source_type,
+        title = EXCLUDED.title,
+        content_hash = EXCLUDED.content_hash,
+        content = EXCLUDED.content,
+        last_ingested_at = NOW(),
+        updated_at = NOW()
+      RETURNING *
+    )
+    SELECT upserted.*,
+           NOT EXISTS (SELECT 1 FROM prior) AS "isNew",
+           COALESCE((SELECT content_hash IS DISTINCT FROM ? FROM prior), TRUE) AS "contentChanged"
+    FROM upserted
+  `, [sourcePath, namespace, uid, sourcePath, sourceType, title, contentHash, content, namespace, contentHash]);
 
   const isNew = doc.isNew;
   const changed = isNew || doc.contentChanged;
@@ -36,8 +50,8 @@ async function upsert({ sourcePath, sourceType, title = null, contentHash, names
   return { doc, changed };
 }
 
-async function updateCounts(documentId, { chunkCount, factCount }) {
-  await cortexDb('document')
+async function updateCounts(documentId, { chunkCount, factCount }, db = cortexDb) {
+  await db('document')
     .where({ id: documentId })
     .update({ chunkCount, factCount });
 }

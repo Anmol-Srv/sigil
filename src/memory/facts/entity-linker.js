@@ -21,7 +21,9 @@ async function linkEntitiesToFact(factId, entities) {
   await cortexDb('fact_entity')
     .insert(rows)
     .onConflict(cortexDb.raw('(fact_id, entity_id, mention_type)'))
-    .merge({ mentionCount: cortexDb.raw('fact_entity.mention_count + 1') });
+    // One fact/entity pair is one piece of evidence. Durable enrichment retries
+    // must be idempotent rather than inflating rank after a crash.
+    .merge({ mentionCount: cortexDb.raw('GREATEST(fact_entity.mention_count, EXCLUDED.mention_count)') });
 
   await attachFactToEntityPods(factId, uniqueEntities);
 }

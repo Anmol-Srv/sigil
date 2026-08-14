@@ -8,7 +8,13 @@ async function createRelation({
     INSERT INTO relation (source_id, target_id, relation_type, source_fact_id, mention_count, valid_at, derived_by, confidence, weight, created_at, updated_at)
     VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, NOW(), NOW())
     ON CONFLICT (source_id, target_id, relation_type) DO UPDATE SET
-      mention_count = relation.mention_count + 1,
+      -- A recovered enrichment job may replay the same source fact. Count new
+      -- evidence, not job executions; NULL-safe comparison also keeps derived
+      -- maintenance retries idempotent (their source_fact_id is NULL).
+      mention_count = relation.mention_count + CASE
+        WHEN relation.source_fact_id IS DISTINCT FROM EXCLUDED.source_fact_id THEN 1
+        ELSE 0
+      END,
       source_fact_id = COALESCE(EXCLUDED.source_fact_id, relation.source_fact_id),
       -- An asserted edge outranks a derived one: if graph-extractor later reads
       -- this same relation off a sentence, that is stronger evidence than the

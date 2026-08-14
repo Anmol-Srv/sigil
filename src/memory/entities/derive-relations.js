@@ -79,12 +79,14 @@ export async function deriveCandidates({
         SELECT 1 FROM relation r
         WHERE (r.source_id = p.x AND r.target_id = p.y)
            OR (r.source_id = p.y AND r.target_id = p.x)
-      ) AS has_relation
+      ) AS has_relation,
+      j.shared_facts AS judged_shared_facts
     FROM pairs p
     JOIN totals tx ON tx.entity_id = p.x
     JOIN totals ty ON ty.entity_id = p.y
     JOIN entity ex ON ex.id = p.x
     JOIN entity ey ON ey.id = p.y
+    LEFT JOIN relation_candidate_judgment j ON j.source_id = p.x AND j.target_id = p.y
     CROSS JOIN grand g
     WHERE p.shared >= ?
     ORDER BY pmi DESC, p.shared DESC
@@ -104,9 +106,12 @@ export async function deriveCandidates({
     targetFacts: Number(r.y_facts),
     pmi: Number(r.pmi),
     hasRelation: Boolean(r.has_relation),
+    judgedSharedFacts: r.judged_shared_facts == null ? null : Number(r.judged_shared_facts),
   }));
 
-  const candidates = includeExisting ? all : all.filter((c) => !c.hasRelation);
+  const candidates = includeExisting ? all : all.filter((c) =>
+    !c.hasRelation
+    && (c.judgedSharedFacts == null || c.sharedFacts > c.judgedSharedFacts));
   return {
     totalPairs: all.length,
     alreadyRelated: all.filter((c) => c.hasRelation).length,
@@ -191,17 +196,36 @@ Respond with ONLY a JSON object: {"relations":[{"n":1,"relationship":"uses","dir
  * Never put this on the write path. Even at 84s it is a maintenance job; the
  * point of doing discovery in SQL is that ingest no longer waits for any of it.
  */
-export async function nameCandidates(candidates, { promptJson, batchSize = 8, caller = 'relation-namer' } = {}) {
+export async function nameCandidates(candidates, {
+  promptJson,
+  batchSize = 8,
+  caller = 'relation-namer',
+  strict = false,
+  evidence = null,
+} = {}) {
   if (!candidates.length) return [];
-  const evidence = await evidenceFor(candidates);
+  const evidenceMap = evidence || await evidenceFor(candidates);
   const batches = [];
   for (let i = 0; i < candidates.length; i += batchSize) batches.push(candidates.slice(i, i + batchSize));
 
   const results = await Promise.all(batches.map((batch) =>
-    promptJson(buildNamingPrompt(batch, evidence), { caller })
-      .then((r) => ({ batch, rels: (r && r.relations) || [] }))
+    promptJson(buildNamingPrompt(batch, evidenceMap), { caller })
+      .then((r) => {
+        const rels = (r && r.relations) || [];
+        if (strict) {
+          const numbered = new Set(rels.map((rel) => Number(rel.n)));
+          const complete = batch.every((_, index) => numbered.has(index + 1));
+          if (!Array.isArray(rels) || !complete) {
+            throw new Error('relation namer returned an incomplete batch');
+          }
+        }
+        return { batch, rels };
+      })
       // One bad batch must not lose the rest — this runs unattended.
-      .catch(() => ({ batch, rels: [] }))));
+      .catch((err) => {
+        if (strict) throw err;
+        return { batch, rels: [] };
+      })));
 
   const out = [];
   for (const { batch, rels } of results) {
@@ -221,6 +245,27 @@ export async function nameCandidates(candidates, { promptJson, batchSize = 8, ca
     });
   }
   return out;
+}
+
+/** Persist only successful negative judgments; model-call failures never land. */
+export async function recordRejectedCandidates(candidates, db = cortexDb) {
+  if (!candidates.length) return 0;
+  const rows = candidates.map((candidate) => ({
+    sourceId: Math.min(Number(candidate.sourceId), Number(candidate.targetId)),
+    targetId: Math.max(Number(candidate.sourceId), Number(candidate.targetId)),
+    sharedFacts: Number(candidate.sharedFacts),
+    decision: 'rejected',
+    updatedAt: new Date(),
+  }));
+  await db('relation_candidate_judgment')
+    .insert(rows)
+    .onConflict(['sourceId', 'targetId'])
+    .merge({
+      sharedFacts: db.raw('GREATEST(relation_candidate_judgment.shared_facts, EXCLUDED.shared_facts)'),
+      decision: 'rejected',
+      updatedAt: db.fn.now(),
+    });
+  return rows.length;
 }
 
 /**

@@ -10,7 +10,7 @@ function registerIngestTool(server) {
   server.tool(
     'ingest',
     `Ingest a document into the Sigil knowledge base. Accepts raw content, a file path, or a URL.
-Parses the content, chunks it, embeds it, extracts facts, links entities, and stores everything for search.
+Durably queues the content, then chunks, embeds, and extracts facts in the background; entity/relation enrichment follows after the document becomes searchable.
 Use when: adding documents to the knowledge base, ingesting files, URLs, or raw text.`,
     {
       content: z.string().optional().describe('Raw text content to ingest. Provide this OR filePath OR url.'),
@@ -22,8 +22,9 @@ Use when: adding documents to the knowledge base, ingesting files, URLs, or raw 
       cwd: z.string().optional().describe('Working directory — attaches the document to that project\'s pod so it is findable from that project later. Pass the project you are working in.'),
       skipFacts: z.boolean().optional().default(false).describe('Skip fact extraction (faster, chunks only)'),
       skipEntities: z.boolean().optional().default(false).describe('Skip entity linking'),
+      wait: z.boolean().optional().default(false).describe('Wait for searchable chunks/facts instead of returning a durable job acknowledgement immediately.'),
     },
-    async ({ content, filePath, url, title, namespace, sourceType, cwd, skipFacts, skipEntities }) => {
+    async ({ content, filePath, url, title, namespace, sourceType, cwd, skipFacts, skipEntities, wait }) => {
       // Read the file HERE, not in the daemon. `ingestDoc` runs inside sigild,
       // whose cwd is `/` — a relative path like ./NOTES.md resolved to /NOTES.md
       // and failed, and the daemon's traversal guard (`startsWith(cwd)`) is
@@ -40,9 +41,19 @@ Use when: adding documents to the knowledge base, ingesting files, URLs, or raw 
         sourceType = sourceType || src.sourceType;
       }
 
-      // Ingest runs the full LLM chain; the 30s read default would report failure
-      // on a write the daemon is still completing.
-      const result = await daemonCall('ingestDoc', { ...payload, title, namespace, sourceType, cwd, skipFacts, skipEntities }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
+      const result = await daemonCall('ingestDoc', {
+        ...payload, title, namespace, sourceType, cwd, skipFacts, skipEntities,
+        background: !wait,
+      }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
+
+      if (result.queued) {
+        return textResponse([
+          `Document "${result.title || title || 'Untitled'}" durably queued.`,
+          `- Job: ${result.jobUid}`,
+          '- Source bytes are staged; processing resumes automatically after daemon restarts.',
+          '- Check `sigil status` for queued/running/failed ingestion counts.',
+        ].join('\n'));
+      }
 
       const text = result.skipped
         ? `Document "${result.title}" already up to date — skipped.`
@@ -52,7 +63,9 @@ Use when: adding documents to the knowledge base, ingesting files, URLs, or raw 
             result.pods?.length ? `- Pods: ${result.pods.join(', ')}` : null,
             `- Chunks: ${result.chunkCount}`,
             result.facts ? `- Facts: ${result.facts.total} extracted (${result.facts.added} new, ${result.facts.skipped} skipped)` : '- Facts: skipped',
-            result.entities ? `- Entities: ${result.entities.entityCount}, Relations: ${result.entities.relationCount}` : '- Entities: skipped',
+            result.entities?.queued
+              ? `- Graph enrichment: queued (${result.entities.jobUid})`
+              : result.entities ? `- Entities: ${result.entities.entityCount}, Relations: ${result.entities.relationCount}` : '- Entities: skipped',
             result.output ? `- Output: ${result.output}` : '',
           ].filter(Boolean).join('\n');
 

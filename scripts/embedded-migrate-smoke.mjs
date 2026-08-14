@@ -12,6 +12,11 @@ import { join } from 'node:path';
 const dir = mkdtempSync(join(tmpdir(), 'sigil-embedded-'));
 process.env.SIGIL_DB_MODE = 'embedded';
 process.env.SIGIL_PGLITE_PATH = dir;
+// This subprocess is the sole intentional owner of its isolated temp cluster.
+// Mark it as the DB-owning process so the global live-daemon discovery guard
+// does not confuse the unrelated production daemon with this throwaway path;
+// the path-scoped owner lock still enforces exclusive access.
+process.env.SIGIL_DAEMON_PROCESS = '1';
 
 // Import AFTER env is set — cortex.js calls selectDriver(config) at module load.
 const { MIGRATIONS_DIR } = await import('../src/lib/paths.js');

@@ -1,12 +1,10 @@
 /**
  * remember — save one or more facts to memory.
  *
- * Sequential ingest is deliberate (see runRemember comment in cli.js):
- * parallel ingests with shared entities race on entity create/rename and
- * break AUDM's pairwise dedup invariants.
+ * Inputs are admitted and embedded as one atomic batch. Graph enrichment is a
+ * durable follow-up job, so an explicit save returns once its facts are
+ * searchable rather than serially resolving entities.
  */
-
-import { withWriteLock } from '../write-queue.js';
 
 // A fact is a short, self-contained statement. Agents reach for `remember` for
 // everything because it is the tool they know, so whole markdown files and
@@ -54,16 +52,15 @@ export function registerRemember(registry) {
       throw err;
     }
 
-    // Serialize against every other writer. `remember` already ingests its own
-    // facts sequentially on purpose; the lock extends that across RPCs, so a
-    // save arriving during an ingest waits instead of starving on PGlite's
-    // single connection (which surfaced as "pool is probably full").
-    return withWriteLock(() => saveFacts(facts, params));
+    // The ingestion pipeline now locks only its short SQL admission/commit
+    // sections. Keeping a handler-wide lock here would reintroduce head-of-line
+    // blocking across classifier, embedder and graph model calls.
+    return saveFacts(facts, params);
   });
 }
 
 async function saveFacts(facts, params) {
-    const { ingestDocument } = await import('../../ingestion/pipeline.js');
+    const { ingestAtomicFacts } = await import('../../ingestion/pipeline.js');
     const { default: config } = await import('../../config.js');
     const namespace = params.namespace || config.defaults.namespace;
 
@@ -76,37 +73,24 @@ async function saveFacts(facts, params) {
     // when the agent knows the subject better than the cwd does.
     const podUids = await resolveRememberPods(params, namespace);
 
-    let added = 0;
-    let updated = 0;
-    let alreadyKnown = 0;
     const _t0 = Date.now();
-    const inputs = []; // per-input causal trace
-
-    for (const text of facts) {
-      // `atomic`: documentShape() above already rejected anything that isn't a
-      // short self-contained statement, so this input never needs the knowledge
-      // route. Skips chunk → contextualize → extract, and stops the extractor
-      // rewording a fact the caller asked to store as written.
-      const result = await ingestDocument({ content: text, namespace, classify: true, atomic: true, podUids });
-      if (result.skipped || result.route === 'noise') {
-        alreadyKnown++;
-        inputs.push({ input: String(text).slice(0, 240), route: result.route ?? null, skipped: true, verdicts: result.facts?.verdicts || [] });
-        continue;
-      }
-      const a = result.facts?.added ?? 0;
-      const u = result.facts?.updated ?? 0;
-      added += a;
-      updated += u;
-      if (a + u === 0) alreadyKnown++;
-      inputs.push({
+    const batch = await ingestAtomicFacts({ facts, namespace, podUids });
+    const added = batch.counts.added;
+    const updated = batch.counts.updated + batch.counts.contradicted;
+    const alreadyKnown = batch.counts.skipped;
+    const inputs = facts.map((text, index) => {
+      const result = batch.results[index];
+      return {
         input: String(text).slice(0, 240),
-        route: result.route ?? null,
-        skipped: false,
-        counts: { added: a, updated: u, skipped: result.facts?.skipped ?? 0, contradicted: result.facts?.contradicted ?? 0 },
-        verdicts: result.facts?.verdicts || [],
-        entities: result.entities ? { entityCount: result.entities.entityCount, relationCount: result.entities.relationCount, topics: result.entities.topics || [] } : null,
-      });
-    }
+        route: 'atomic',
+        skipped: result?.action === 'SKIP' || result?.action === 'SKIP_DOCUMENT',
+        verdicts: result ? [{
+          action: result.action,
+          factId: result.fact?.id ?? result.existing?.id ?? null,
+          audm: result.audm || null,
+        }] : [],
+      };
+    });
 
     if (added + updated > 0) {
       const { updateContextSnapshot } = await import('../../memory/facts/hot-context.js');

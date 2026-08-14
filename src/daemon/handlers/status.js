@@ -1,4 +1,4 @@
-import { writeQueueDepth } from '../write-queue.js';
+import { writeQueueDepth, writeQueueStats } from '../write-queue.js';
 
 export function registerStatus(registry) {
   registry.register('status', async (params) => {
@@ -59,16 +59,26 @@ export function registerStatus(registry) {
     // instead of silent. `managedSession` is the warm-worker engine snapshot,
     // present only when it is running in this daemon.
     let claudeProcs = null;
+    let codexProcs = null;
     let managedSession = null;
+    let ingestionRunner = null;
     try {
       const { claudeProcStats } = await import('../../lib/llm/providers/claude-cli.js');
       claudeProcs = claudeProcStats();
+    } catch { /* provider unavailable */ }
+    try {
+      const { codexProcStats } = await import('../../lib/llm/providers/codex.js');
+      codexProcs = codexProcStats();
     } catch { /* provider unavailable */ }
     try {
       const { getSessionManager } = await import('../../lib/llm/session/index.js');
       const mgr = getSessionManager();
       managedSession = mgr ? { enabled: true, ...mgr.stats() } : { enabled: false };
     } catch { /* holder unavailable outside daemon */ }
+    try {
+      const { getIngestionJobRunner } = await import('../../ingestion/jobs/runner.js');
+      ingestionRunner = getIngestionJobRunner()?.stats() || { enabled: false };
+    } catch { /* runner unavailable */ }
 
     if (!dbHealthy) {
       // NULL, not 0. These are "we could not read the store", and rendering
@@ -81,8 +91,12 @@ export function registerStatus(registry) {
         db: { healthy: false, error: dbError, schema: dbSchema },
         unavailable: true,
         writeQueue: writeQueueDepth(),
+        writeQueueStats: writeQueueStats(),
+        ingestionJobs: null,
+        ingestionRunner,
         providers,
         claudeProcs,
+        codexProcs,
         managedSession,
         documents: null,
         chunks: null,
@@ -95,7 +109,7 @@ export function registerStatus(registry) {
       };
     }
 
-    const [docStats, factCount, documents, people, topics, relations, podRows, hebbian, hotFacts] = await Promise.all([
+    const [docStats, factCount, documents, people, topics, relations, podRows, hebbian, hotFacts, ingestionJobs] = await Promise.all([
       getStats(namespace),
       getFactCount(namespace),
       getEntityCount('document'),
@@ -105,6 +119,9 @@ export function registerStatus(registry) {
       cortexDb('pod').where({ status: 'active' }).select('podType'),
       getEntityHebbianStats({ topN: 3 }).catch(() => null),
       getHotFacts(namespace, { limit: hotFactsLimit }).catch(() => []),
+      import('../../ingestion/jobs/store.js')
+        .then(({ getJobStats }) => getJobStats({ namespace }))
+        .catch(() => null),
     ]);
 
     const podsByType = podRows.reduce((acc, r) => {
@@ -118,8 +135,12 @@ export function registerStatus(registry) {
       // Writers queued behind the single-connection write lock. A non-zero
       // depth is why a save is slow; it is the honest answer to "is it stuck?"
       writeQueue: writeQueueDepth(),
+      writeQueueStats: writeQueueStats(),
+      ingestionJobs,
+      ingestionRunner,
       providers,
       claudeProcs,
+      codexProcs,
       managedSession,
       documents: docStats.documentCount,
       chunks: docStats.totalChunks,

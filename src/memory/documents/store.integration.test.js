@@ -50,7 +50,9 @@ beforeAll(async () => {
       chunk_count INTEGER DEFAULT 0,
       fact_count INTEGER DEFAULT 0,
       last_ingested_at TIMESTAMP,
-      created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      UNIQUE (source_path, namespace)
     );
     CREATE TABLE chunk (
       id SERIAL PRIMARY KEY,
@@ -185,5 +187,22 @@ describe('listDocuments pod scoping', () => {
   it('never drags content into a listing', async () => {
     const [doc] = await store.listDocuments({ podIds: [1] });
     expect(doc.content).toBeUndefined();
+  });
+});
+
+describe('document upsert change detection', () => {
+  it('reprocesses changed content and skips only the identical hash', async () => {
+    const changed = await store.upsert({
+      sourcePath: '/p/alpha/DESIGN.md', sourceType: 'file', title: 'Design v2',
+      contentHash: 'hash-v2', namespace: 'default', content: 'new bytes',
+    });
+    expect(changed.changed).toBe(true);
+    expect(changed.doc.content).toBe('new bytes');
+
+    const same = await store.upsert({
+      sourcePath: '/p/alpha/DESIGN.md', sourceType: 'file', title: 'Design v2',
+      contentHash: 'hash-v2', namespace: 'default', content: 'new bytes',
+    });
+    expect(same.changed).toBe(false);
   });
 });

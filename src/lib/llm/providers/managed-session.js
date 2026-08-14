@@ -15,14 +15,24 @@
  * The manager's OWN fallback also calls claude-cli.chat(), so there is exactly
  * one one-shot implementation and no recursion.
  */
-const SOURCE_TYPE = 'claude';
+const INTERACTIVE_CALLERS = new Set([
+  'query-router', 'query-expander', 'synthesizer', 'stop-hook',
+  'session-end-synth', 'provider-probe', 'setup-llm-test',
+]);
+
+function laneForCaller(caller) {
+  if (INTERACTIVE_CALLERS.has(caller)) return 'claude:interactive';
+  if (/^(entity-|graph-|relation-)/.test(String(caller || ''))) return 'claude:maintenance';
+  return 'claude:ingest';
+}
 
 async function chat(input, { model, jsonMode = false, schema, temperature, caller } = {}) {
   const { getSessionManager } = await import('../session/index.js');
   const mgr = getSessionManager();
+  const sourceType = laneForCaller(caller);
 
-  if (mgr && mgr.hasWorkers(SOURCE_TYPE)) {
-    const r = await mgr.submit({ sourceType: SOURCE_TYPE, prompt: input, model, schema, caller });
+  if (mgr && mgr.hasUsableWorkers(sourceType)) {
+    const r = await mgr.submit({ sourceType, prompt: input, model, schema, caller });
     return {
       text: r.text,
       inputTokens: r.inputTokens,
@@ -34,6 +44,7 @@ async function chat(input, { model, jsonMode = false, schema, temperature, calle
       workerId: r.workerId ?? null,
       reqId: r.reqId ?? null,
       viaFallback: r.viaFallback ?? false,
+      queuedMs: r.queuedMs ?? 0,
     };
   }
 
@@ -57,4 +68,4 @@ async function setup() {
   return { env: {} };
 }
 
-export { chat, meta, setup };
+export { chat, meta, setup, laneForCaller };

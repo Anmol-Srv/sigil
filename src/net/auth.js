@@ -32,6 +32,7 @@ export const METHOD_ROLES = {
   // Write-side
   remember:           'writer',
   ingestDoc:          'writer',
+  'ingestionJob.get': 'reader',
   forgetFact:         'writer',
   setFactVisibility:  'writer',
 

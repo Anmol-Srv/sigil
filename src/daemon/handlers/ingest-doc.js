@@ -3,22 +3,19 @@
  *
  * Distinct from `remember` (CLI), which only handles plain fact strings.
  *
- * Supports `params.background`: queue the ingest and return immediately. Graph-
- * building is LLM-heavy and can exceed the RPC timeout, so — like every graph-
- * memory system (Graphiti, GraphRAG, HippoRAG) — the write is made async and
- * the cleverness lives at read time. Both the background and foreground paths
- * run under the daemon-wide write lock so concurrent ingests don't race on
- * entity create/rename (the same invariant `remember` protects with sequential
- * processing) and don't starve each other on PGlite's single connection.
+ * `params.background` stages source bytes in the durable job table before it
+ * acknowledges. The searchable document/fact commit and graph enrichment are
+ * separate recoverable stages, so callers no longer sit through the full model
+ * chain and a daemon restart cannot lose accepted work.
  */
+
+import { createHash } from 'node:crypto';
 
 // Serialization now lives in the shared daemon-wide write queue rather than a
 // queue private to this handler. The private one only ordered background
 // ingests against each OTHER — a foreground ingest, a `remember`, or a Stop
 // hook's `ingestTurn` could still land mid-transaction and starve on PGlite's
 // single connection. See src/daemon/write-queue.js.
-import { withWriteLock } from '../write-queue.js';
-
 /**
  * Which pod should this document attach to?
  *
@@ -51,37 +48,64 @@ async function resolveIngestPods({ podUids, cwd, sessionId, namespace }) {
   }
 }
 
-async function doIngest(params) {
-  const { ingestDocument } = await import('../../ingestion/pipeline.js');
+async function stageIngestParams(params) {
   const { resolveSource } = await import('../../ingestion/resolve-source.js');
-
-  const { content, filePath, url, title, namespace, sourceType, skipFacts, skipEntities, metadata, cwd, sessionId, sourcePath } = params;
-  // sourcePath must survive: it is the (source_path, namespace) upsert key. A
-  // caller that read the file itself (the MCP tool — the daemon's cwd is `/`)
-  // sends content + the real path; dropping it would mint a fresh `raw/<ts>`
-  // path on every ingest and duplicate the document instead of updating it.
-  const source = await resolveSource({ content, filePath, url, title, sourceType, sourcePath });
+  const { maskSecrets } = await import('../../hooks/secret-mask.js');
+  const source = await resolveSource({
+    content: params.content,
+    filePath: params.filePath,
+    url: params.url,
+    title: params.title,
+    sourceType: params.sourceType,
+    sourcePath: params.sourcePath,
+    metadata: params.metadata,
+  });
   if (!source) {
     const err = new Error('ingestDoc: provide content, filePath, or url');
     err.code = 'invalid_params';
     throw err;
   }
+  return {
+    ...params,
+    // Durable jobs must not depend on a file or URL still existing later.
+    content: maskSecrets(source.content),
+    filePath: null,
+    url: null,
+    title: params.title || source.title,
+    sourcePath: params.sourcePath || source.sourcePath,
+    sourceType: params.sourceType || source.sourceType,
+    contentType: params.contentType || source.contentType,
+    metadata: params.metadata || source.metadata || {},
+    background: false,
+  };
+}
+
+async function doIngest(params) {
+  const started = Date.now();
+  const { ingestDocument } = await import('../../ingestion/pipeline.js');
+  const staged = await stageIngestParams(params);
+  const {
+    title, namespace, sourceType, skipFacts, skipEntities, metadata, entities,
+    cwd, sessionId,
+  } = staged;
 
   const podUids = await resolveIngestPods({
-    podUids: params.podUids, cwd, sessionId, namespace,
+    podUids: staged.podUids, cwd, sessionId, namespace,
   });
 
   const result = await ingestDocument({
-    content: source.content,
-    title: title || source.title,
-    sourcePath: source.sourcePath,
-    sourceType: sourceType || source.sourceType,
-    contentType: source.contentType,
+    content: staged.content,
+    title,
+    sourcePath: staged.sourcePath,
+    sourceType,
+    contentType: staged.contentType,
     namespace,
-    metadata: metadata || source.metadata,
+    metadata,
     podUids,
     skipFacts,
     skipEntities,
+    entities,
+    force: staged.force === true,
   });
 
   const response = {
@@ -92,7 +116,7 @@ async function doIngest(params) {
     pods: podUids,
     chunkCount: result.chunkCount ?? 0,
     facts: result.facts ?? null,
-    entities: result.entities ?? null,
+    entities: result.entities || null,
     output: result.md?.url ?? null,
   };
 
@@ -102,6 +126,7 @@ async function doIngest(params) {
     kind: 'ingest',
     summary: `ingest "${String(response.title || 'document').slice(0, 60)}" → ${response.chunkCount} chunks, +${f.added ?? 0} facts${response.skipped ? ' (skipped)' : ''}`,
     namespace: namespace || null,
+    durationMs: Date.now() - started,
     detail: {
       op: 'ingestDoc',
       title: response.title,
@@ -111,7 +136,9 @@ async function doIngest(params) {
       chunkCount: response.chunkCount,
       counts: { added: f.added ?? 0, updated: f.updated ?? 0, skipped: f.skipped ?? 0, contradicted: f.contradicted ?? 0, total: f.total ?? 0 },
       verdicts: f.verdicts || [],
-      entities: response.entities ? { entityCount: response.entities.entityCount, relationCount: response.entities.relationCount, topics: response.entities.topics || [] } : null,
+      enrichment: response.entities?.queued ? response.entities : null,
+      entities: response.entities && !response.entities.queued ? { entityCount: response.entities.entityCount, relationCount: response.entities.relationCount, topics: response.entities.topics || [] } : null,
+      durationMs: Date.now() - started,
     },
   }).catch(() => {});
 
@@ -121,25 +148,39 @@ async function doIngest(params) {
 export function registerIngestDoc(registry) {
   registry.register('ingestDoc', async (params) => {
     if (params.background) {
-      // Fire-and-forget: queue the work and return an ack immediately. Failures
-      // can't propagate to a caller that already left, so log them where
-      // `sigil doctor` will surface them.
-      const { resolveSource } = await import('../../ingestion/resolve-source.js');
-      const source = await resolveSource({
-        content: params.content, filePath: params.filePath, url: params.url,
-        title: params.title, sourceType: params.sourceType,
-      }).catch(() => null);
-
-      withWriteLock(() => doIngest(params)).catch(async (err) => {
-        try {
-          const { recordHookError } = await import('../../hooks/error-log.js');
-          await recordHookError('ingestDoc', err, String(params.title || params.filePath || params.url || '').slice(0, 200));
-        } catch { /* never let logging mask the failure */ }
+      const staged = await stageIngestParams(params);
+      staged.podUids = await resolveIngestPods({
+        podUids: staged.podUids,
+        cwd: staged.cwd,
+        sessionId: staged.sessionId,
+        namespace: staged.namespace,
       });
-
-      return { queued: true, title: params.title || source?.title || null };
+      const { enqueueAndKick } = await import('../../ingestion/jobs/runner.js');
+      const { default: config } = await import('../../config.js');
+      const dedupeKey = `document-ingest:${createHash('sha256')
+        .update(JSON.stringify(staged))
+        .digest('hex')}`;
+      const queued = await enqueueAndKick({
+        kind: 'document-ingest',
+        namespace: staged.namespace || config.defaults.namespace,
+        dedupeKey,
+        // The key covers the complete staged request. A collision is an exact
+        // duplicate, so a running copy already includes all of its work.
+        rerunIfRunning: false,
+        maxAttempts: config.ingest.maxJobAttempts,
+        payload: staged,
+      });
+      return {
+        queued: true,
+        durable: true,
+        jobUid: queued.job.uid,
+        title: staged.title || null,
+        pods: staged.podUids,
+      };
     }
 
-    return withWriteLock(() => doIngest(params));
+    return doIngest(params);
   });
 }
+
+export { doIngest, stageIngestParams };

@@ -32,9 +32,9 @@ describe('buildRow — managed-session correlation columns', () => {
     const row = buildRow({
       provider: 'managed-session', model: 'haiku', caller: 'extractor',
       input: 'x', response: 'y', inputTokens: 1, outputTokens: 2, cost: 0,
-      durationMs: 5, status: 'success', workerId: 'claude-0', reqId: 'req-1', viaFallback: false,
+      durationMs: 5, status: 'success', workerId: 'claude-0', reqId: 'req-1', viaFallback: false, queuedMs: 7,
     });
-    expect(row).toMatchObject({ workerId: 'claude-0', reqId: 'req-1', viaFallback: false, caller: 'extractor' });
+    expect(row).toMatchObject({ workerId: 'claude-0', reqId: 'req-1', viaFallback: false, caller: 'extractor', queuedMs: 7 });
   });
 
   it('defaults the correlation columns to null for one-shot/API calls', () => {
@@ -42,5 +42,6 @@ describe('buildRow — managed-session correlation columns', () => {
     expect(row.workerId).toBeNull();
     expect(row.reqId).toBeNull();
     expect(row.viaFallback).toBeNull();
+    expect(row.queuedMs).toBeNull();
   });
 });

@@ -57,7 +57,7 @@ function routeThroughDaemon() {
   return shouldRouteLlmLog(mode, process.env.SIGIL_DAEMON_PROCESS === '1');
 }
 
-function buildRow({ provider, model, caller, input, response, inputTokens, outputTokens, cost, durationMs, status, error, workerId, reqId, viaFallback }) {
+function buildRow({ provider, model, caller, input, response, inputTokens, outputTokens, cost, durationMs, status, error, workerId, reqId, viaFallback, queuedMs }) {
   return {
     provider,
     model,
@@ -76,6 +76,7 @@ function buildRow({ provider, model, caller, input, response, inputTokens, outpu
     workerId: workerId ?? null,
     reqId: reqId ?? null,
     viaFallback: viaFallback ?? null,
+    queuedMs: queuedMs ?? null,
   };
 }
 

@@ -21,6 +21,7 @@ import { ClientPGlite } from '../db/pglite-adapter.js';
 let pg;
 let db;
 let supersedeStaleDocFacts;
+let countActiveByDocuments;
 
 // Mirror cortex.js: snake_case columns on the wire, camelCase keys in JS.
 const toCamel = (obj) => {
@@ -86,7 +87,7 @@ beforeAll(async () => {
   vi.doMock('./embedder.js', () => ({ embed: vi.fn(), embedBatch: vi.fn() }));
   vi.doMock('../lib/llm.js', () => ({ prompt: vi.fn(), promptJson: vi.fn() }));
 
-  ({ supersedeStaleDocFacts } = await import('../memory/facts/store.js'));
+  ({ supersedeStaleDocFacts, countActiveByDocuments } = await import('../memory/facts/store.js'));
 });
 
 afterAll(async () => {
@@ -128,5 +129,10 @@ describe('supersedeStaleDocFacts (PGlite)', () => {
   it('is a no-op for a document with no stale facts (fresh ingest)', async () => {
     const res = await supersedeStaleDocFacts(999, []);
     expect(res).toEqual({ superseded: 0, dissociated: 0 });
+  });
+
+  it('counts active fact provenance for multiple documents in one query', async () => {
+    const counts = await countActiveByDocuments([100, 200, 999], db);
+    expect(counts).toEqual(new Map([[100, 1], [200, 1], [999, 0]]));
   });
 });

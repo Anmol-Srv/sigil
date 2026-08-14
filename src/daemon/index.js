@@ -148,17 +148,6 @@ export async function startDaemon({ foreground = false } = {}) {
       }
     })();
 
-    // Replay any Stop-hook saves that failed during an outage (provider/DB
-    // down). Best-effort and non-blocking — the daemon stays up regardless.
-    (async () => {
-      try {
-        const { drainStopSpool } = await import('../hooks/stop-spool.js');
-        const r = await drainStopSpool();
-        if (r.drained) log(`stop-spool drained: ${r.drained} turns replayed (${r.replayed} facts, ${r.remaining} remaining)`);
-      } catch (err) {
-        log(`stop-spool drain failed: ${err.message}`);
-      }
-    })();
   }
 
   // Managed-session engine (warm tmux workers; opt-in via SIGIL_MANAGED_SESSION).
@@ -168,11 +157,32 @@ export async function startDaemon({ foreground = false } = {}) {
   // call back over RPC immediately.
   if (config.network.mode !== 'lite-follower') {
     (async () => {
+      // Provider capacity comes first. Previously the Stop spool replayed while
+      // warm workers were still booting, forcing cold one-shot fallbacks and
+      // competing with live writes during the most fragile part of startup.
       try {
         const { initSessionManager } = await import('../lib/llm/session/index.js');
         await initSessionManager({ config, log });
       } catch (err) {
         log(`managed-session init failed: ${err.message}`);
+      }
+
+      try {
+        const { startIngestionJobRunner } = await import('../ingestion/jobs/runner.js');
+        await startIngestionJobRunner({ log, concurrency: config.ingest.workerConcurrency });
+        log(`ingestion jobs ready (${config.ingest.workerConcurrency} workers)`);
+      } catch (err) {
+        log(`ingestion job runner failed: ${err.message}`);
+      }
+
+      // Replay failed Stop-hook facts through the fast atomic batch only after
+      // the durable worker and managed provider have initialized.
+      try {
+        const { drainStopSpool } = await import('../hooks/stop-spool.js');
+        const r = await drainStopSpool();
+        if (r.drained) log(`stop-spool drained: ${r.drained} turns replayed (${r.replayed} facts, ${r.remaining} remaining)`);
+      } catch (err) {
+        log(`stop-spool drain failed: ${err.message}`);
       }
     })();
   }
@@ -361,6 +371,15 @@ export async function startDaemon({ foreground = false } = {}) {
     if (snapshotTimer) clearInterval(snapshotTimer);
     if (bootSnapshotTimer) clearTimeout(bootSnapshotTimer);
     try { rmSync(SIGIL_HEARTBEAT, { force: true }); } catch { /* ignore */ }
+    // Stop claiming durable work before providers/DB go away. Any job that
+    // outlives the bounded grace period keeps its lease and is recovered at the
+    // next boot after expiry.
+    try {
+      const { stopIngestionJobRunner } = await import('../ingestion/jobs/runner.js');
+      await stopIngestionJobRunner();
+    } catch (err) {
+      log(`ingestion job runner shutdown failed: ${err.message}`);
+    }
     // Kill warm tmux workers + stop the health sweep before tearing down the
     // socket, so no worker is left holding a half-open RPC connection.
     try {

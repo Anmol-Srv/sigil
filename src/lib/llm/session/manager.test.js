@@ -122,6 +122,35 @@ describe('SessionManager — warm path (fake-worker E2E)', () => {
 });
 
 describe('SessionManager — failure envelope', () => {
+  it('falls back a task that waits too long in the queue', async () => {
+    const { mgr, timers, fallbackCalls } = makeManager();
+    await mgr.start();
+    const wid = mgr.stats().workers[0].id;
+    mgr.getTask(wid); // boot → ready
+
+    const first = mgr.submit({ sourceType: 'claude', prompt: 'occupy worker' });
+    const second = mgr.submit({ sourceType: 'claude', prompt: 'queued too long' });
+    expect(mgr.stats().queued.claude).toBe(1);
+    await timers.fireLast(); // second task's enqueue deadline
+    await expect(second).resolves.toMatchObject({ viaFallback: true, queuedMs: expect.any(Number) });
+    expect(fallbackCalls.at(-1).prompt).toBe('queued too long');
+    expect(mgr.stats().queued.claude).toBe(0);
+
+    const task = mgr.getTask(wid);
+    mgr.submitResult(wid, task.reqId, 'done');
+    await first;
+  });
+
+  it('does not queue behind a worker already marked unhealthy', async () => {
+    const { mgr, fallbackCalls } = makeManager();
+    await mgr.start();
+    const worker = mgr.workers.values().next().value;
+    worker.state = 'unhealthy';
+    const result = await mgr.submit({ sourceType: 'claude', prompt: 'use fallback now' });
+    expect(result.viaFallback).toBe(true);
+    expect(fallbackCalls).toHaveLength(1);
+  });
+
   it('dead-man timeout falls back to one-shot AND recycles the worker', async () => {
     const { mgr, tmux, driver, timers, fallbackCalls } = makeManager();
     await mgr.start();

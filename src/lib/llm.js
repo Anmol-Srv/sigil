@@ -35,6 +35,7 @@ async function prompt(input, { model, caller, temperature } = {}) {
       inputTokens: result.inputTokens, outputTokens: result.outputTokens,
       cost, durationMs: Date.now() - start, status: 'success',
       workerId: result.workerId, reqId: result.reqId, viaFallback: result.viaFallback,
+      queuedMs: result.queuedMs,
     });
 
     return result.text;
@@ -67,6 +68,7 @@ async function promptJson(input, { model, caller, schema, temperature } = {}) {
       inputTokens: result.inputTokens, outputTokens: result.outputTokens,
       cost, durationMs: Date.now() - start, status: 'success',
       workerId: result.workerId, reqId: result.reqId, viaFallback: result.viaFallback,
+      queuedMs: result.queuedMs,
     });
 
     return parseJson(result.text);

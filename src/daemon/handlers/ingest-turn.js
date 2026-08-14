@@ -12,8 +12,6 @@
  * conflict: a per-turn hook opening PGlite while the daemon holds it aborts the
  * WASM engine (finding 6.1). Now nothing but the daemon touches the DB.
  */
-import { withWriteLock } from '../write-queue.js';
-
 export function registerIngestTurn(registry) {
   registry.register('ingestTurn', async (params = {}) => {
     const facts = Array.isArray(params.facts) ? params.facts.filter(Boolean) : [];
@@ -37,14 +35,11 @@ export function registerIngestTurn(registry) {
       console.error(`[ingestTurn] pod dispatch failed: ${err.message}`);
     }
 
-    // saveFacts runs the AUDM ingest (classify:false — the hook already did it)
-    // with pod attachment, then refreshes the hot-context snapshot. throwOnError
-    // so a save failure reaches the hook, which spools the turn for replay.
-    // Under the daemon-wide write lock: a Stop hook firing while an ingest or
-    // remember is mid-transaction would otherwise starve on PGlite's single
-    // connection and spool a turn that was perfectly saveable.
+    // saveFacts uses the atomic batch lane (the hook already classified) and
+    // owns only short admission/commit locks. throwOnError lets the hook spool
+    // the turn if embedding or persistence genuinely fails.
     const { saveFacts } = await import('../../hooks/stop-classify.js');
-    await withWriteLock(() => saveFacts(facts, { podUids, throwOnError: true }));
+    await saveFacts(facts, { podUids, throwOnError: true });
 
     return { saved: facts.length, podUids: podUids.length };
   });

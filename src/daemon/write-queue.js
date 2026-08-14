@@ -4,9 +4,9 @@
  * THE PROBLEM
  * The embedded engine (PGlite) is single-process AND single-connection: knex is
  * configured with a pool of exactly 1, because PGlite is one session and
- * BEGIN/COMMIT are session-global. `ingestDocument` opens a transaction and, by
- * design, keeps it open across LLM work (AUDM's decide-call for ambiguous
- * facts). While that transaction is open the single connection is HELD.
+ * BEGIN/COMMIT are session-global. Model work now happens before transactions,
+ * but admission, fact commits, pod writes, and durable-job state transitions
+ * still need a single global ordering boundary.
  *
  * Nothing serialized writes ACROSS RPC calls. Two saves arriving close together
  * — a `remember` while an `ingest` is mid-flight, or a Stop hook's `ingestTurn`
@@ -26,13 +26,8 @@
  * all failed for the duration.
  *
  * THE FIX
- * Funnel every write path through one queue, so a second write WAITS instead of
- * fighting for a connection that cannot be shared. This is not a new
- * constraint — `remember` already ingests its facts sequentially on purpose
- * ("parallel ingests with shared entities race on entity create/rename and
- * break AUDM's pairwise dedup invariants"), and ingestDoc already serialized
- * its own background jobs. This extends that same invariant across RPCs, which
- * is where it was missing.
+ * Funnel short mutation sections through one queue, so preparation can run in
+ * parallel while commits never fight for the connection or interleave.
  *
  * ponytail: a promise chain, not a semaphore library. Depth is the only knob
  * worth having and it's observable; if writes ever need to run concurrently the
@@ -45,6 +40,13 @@
 
 let tail = Promise.resolve();
 let depth = 0;
+let running = 0;
+let sequence = 0;
+let totalStarted = 0;
+let totalWaitMs = 0;
+let maxWaitMs = 0;
+let lastWaitMs = 0;
+const waiting = new Map();
 
 /**
  * Run `fn` once every previously-queued writer has finished. Returns fn's
@@ -53,7 +55,23 @@ let depth = 0;
  */
 export function withWriteLock(fn) {
   depth += 1;
-  const run = tail.then(fn, fn);
+  const ticket = sequence++;
+  const enqueuedAt = Date.now();
+  waiting.set(ticket, enqueuedAt);
+  const invoke = async () => {
+    waiting.delete(ticket);
+    running += 1;
+    lastWaitMs = Date.now() - enqueuedAt;
+    totalWaitMs += lastWaitMs;
+    maxWaitMs = Math.max(maxWaitMs, lastWaitMs);
+    totalStarted += 1;
+    try {
+      return await fn();
+    } finally {
+      running -= 1;
+    }
+  };
+  const run = tail.then(invoke, invoke);
   // Swallow rejections on the CHAIN only (the caller still gets the real
   // rejection via `run`), otherwise one failed write would reject every
   // subsequent one and stall the queue permanently.
@@ -64,4 +82,20 @@ export function withWriteLock(fn) {
 /** Writers currently queued or running — surfaced by `status` for diagnosis. */
 export function writeQueueDepth() {
   return depth;
+}
+
+/** Detailed queue latency without changing the legacy numeric depth field. */
+export function writeQueueStats() {
+  const now = Date.now();
+  const oldestEnqueuedAt = waiting.size ? Math.min(...waiting.values()) : null;
+  return {
+    depth,
+    running,
+    queued: waiting.size,
+    oldestWaitMs: oldestEnqueuedAt == null ? 0 : now - oldestEnqueuedAt,
+    lastWaitMs,
+    maxWaitMs,
+    averageWaitMs: totalStarted ? Math.round(totalWaitMs / totalStarted) : 0,
+    totalStarted,
+  };
 }

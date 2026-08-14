@@ -61,6 +61,48 @@ async function classifyTurn(userMessage) {
     .filter((f) => f.length >= 8 && f.length <= 200);
 }
 
+/** Classify a replay batch in one provider call instead of one cold call/turn. */
+async function classifyTurns(userMessages, { caller = 'stop-spool' } = {}) {
+  if (!userMessages.length) return [];
+  const { promptJson } = await import('../lib/llm.js');
+  const config = (await import('../config.js')).default;
+  const turns = userMessages.map((message, index) => ({ index, message }));
+  const input = `${CLASSIFIER_PROMPT}\n\nClassify every independent turn below. Return {"turns":[{"index":0,"memorable":true,"facts":["..."]}]}, one entry per input.\n\n${JSON.stringify(turns)}`;
+  const result = await promptJson(input, {
+    model: config.llm.extractionModel,
+    caller,
+    schema: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        turns: {
+          type: 'array',
+          items: {
+            type: 'object', additionalProperties: false,
+            properties: {
+              index: { type: 'integer' },
+              memorable: { type: 'boolean' },
+              facts: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['index', 'memorable', 'facts'],
+          },
+        },
+      },
+      required: ['turns'],
+    },
+  });
+  if (!Array.isArray(result?.turns)) throw new Error('stop-spool classifier returned no turns array');
+  const byIndex = new Map(result.turns.map((turn) => [Number(turn.index), turn]));
+  return userMessages.map((_, index) => {
+    const turn = byIndex.get(index);
+    if (!turn || !Array.isArray(turn.facts)) throw new Error(`stop-spool classifier omitted turn ${index}`);
+    if (turn.memorable !== true) return [];
+    return turn.facts
+      .filter((fact) => typeof fact === 'string')
+      .map((fact) => fact.trim())
+      .filter((fact) => fact.length >= 8 && fact.length <= 200);
+  });
+}
+
 /**
  * Save classified facts through the regular AUDM ingest pipeline.
  *
@@ -69,23 +111,18 @@ async function classifyTurn(userMessage) {
  * best-effort behaviour (log + continue) so it never blocks Claude.
  */
 async function saveFacts(facts, { podUids = [], throwOnError = false } = {}) {
-  const { ingestDocument } = await import('../ingestion/pipeline.js');
+  const { ingestAtomicFacts } = await import('../ingestion/pipeline.js');
   const config = (await import('../config.js')).default;
 
-  for (const fact of facts) {
-    try {
-      await ingestDocument({
-        content: fact,
-        namespace: config.defaults.namespace,
-        // Skip the LLM classifier inside the pipeline — we already classified.
-        // The fact-extraction step still runs.
-        classify: false,
-        podUids,
-      });
-    } catch (err) {
-      process.stderr.write(`[sigil:stop] save failed: ${maskSecrets(err.message)}\n`);
-      if (throwOnError) throw err;
-    }
+  try {
+    await ingestAtomicFacts({
+      facts,
+      namespace: config.defaults.namespace,
+      podUids,
+    });
+  } catch (err) {
+    process.stderr.write(`[sigil:stop] save failed: ${maskSecrets(err.message)}\n`);
+    if (throwOnError) throw err;
   }
 
   // Refresh hot-context so the new fact shows up at next session start
@@ -95,4 +132,4 @@ async function saveFacts(facts, { podUids = [], throwOnError = false } = {}) {
   } catch { /* best effort */ }
 }
 
-export { classifyTurn, saveFacts, CLASSIFIER_PROMPT };
+export { classifyTurn, classifyTurns, saveFacts, CLASSIFIER_PROMPT };

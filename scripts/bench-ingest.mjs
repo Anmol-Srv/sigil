@@ -1,5 +1,6 @@
 /**
- * Ingest benchmark — how many LLM calls does a save cost, and where do they go?
+ * Ingest benchmark — acceptance, searchable-core, graph-enrichment latency,
+ * plus LLM call count by stage.
  *
  * Wall-clock alone is useless for tuning this pipeline: the route the classifier
  * picks (thought vs knowledge) changes which stages run at all, a worker
@@ -56,6 +57,27 @@ for (const text of CORPUS) {
 }
 const wall = Date.now() - t0;
 
+// Document path: distinguish the latency the caller experiences from the time
+// until facts are searchable and the later graph maintenance tail.
+const docText = `# Benchmark document\n\nSigil benchmark ${process.pid} uses durable staged ingestion. It stores searchable facts before entity and relation enrichment.`;
+const docStarted = Date.now();
+const queued = await client.call('ingestDoc', {
+  content: docText,
+  title: 'Ingestion latency benchmark',
+  sourcePath: `bench/${NS}/latency.md`,
+  namespace: NS,
+  background: true,
+}, { timeoutMs: 30_000 });
+const acceptedMs = Date.now() - docStarted;
+const core = await waitJob(queued.data.jobUid);
+const searchableMs = Date.now() - docStarted;
+const entityUid = core.result?.entities?.jobUid || null;
+const entity = entityUid ? await waitJob(entityUid) : null;
+const enrichedMs = entity ? Date.now() - docStarted : null;
+const relationUid = entity?.result?.maintenanceJobUid || null;
+const relation = relationUid && !args.has('--no-relations') ? await waitJob(relationUid) : null;
+const relatedMs = relation ? Date.now() - docStarted : null;
+
 // Aggregate the engine/llm traces this run produced.
 const { data } = await client.call('trace.list', { limit: 500 });
 const mine = data.traces.filter((t) => t.ts >= startedAt);
@@ -69,6 +91,7 @@ for (const t of mine) {
 }
 
 console.log(`\nnamespace ${NS} · ${CORPUS.length} facts · wall ${ms(wall)}\n`);
+console.log(`  document accepted ${ms(acceptedMs)} · searchable ${ms(searchableMs)}${enrichedMs != null ? ` · entities ${ms(enrichedMs)}` : ''}${relatedMs != null ? ` · relations ${ms(relatedMs)}` : ''}\n`);
 for (const [i, f] of perFact.entries()) {
   console.log(`  ${String(i + 1).padStart(2)}. ${ms(f.ms).padStart(6)}  ${f.text.slice(0, 62)}…`);
 }
@@ -90,3 +113,15 @@ process.exit(0);
 
 function sum(a) { return a.reduce((x, y) => x + y, 0); }
 function median(a) { const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; }
+
+async function waitJob(uid, timeoutMs = 10 * 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { data: job } = await client.call('ingestionJob.get', { uid });
+    if (!job) throw new Error(`job disappeared: ${uid}`);
+    if (job.status === 'completed') return job;
+    if (job.status === 'failed') throw new Error(`${uid} failed: ${job.error}`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`${uid} did not finish within ${timeoutMs}ms`);
+}

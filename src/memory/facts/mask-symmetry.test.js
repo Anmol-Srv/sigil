@@ -29,11 +29,17 @@ beforeAll(() => {
   vi.doMock('../../lib/llm.js', () => ({ prompt: vi.fn(), promptJson: vi.fn() }));
 
   // Minimal knex-shaped stub: no similar facts, capture the inserted row.
-  const fakeDb = (_table) => ({
-    insert: (row) => ({ returning: async () => { insertedRows.push(row); return [{ id: 1, ...row }]; } }),
-    where: () => ({ update: async () => 1 }),
-  });
-  fakeDb.transaction = async (cb) => cb({ raw: async () => ({ rows: [] }) });
+  const fakeDb = (_table) => {
+    const query = {
+      insert: (row) => ({ returning: async () => { insertedRows.push(row); return [{ id: 1, ...row }]; } }),
+      where: () => query,
+      whereRaw: () => query,
+      first: async () => null,
+      update: async () => 1,
+    };
+    return query;
+  };
+  fakeDb.transaction = async (cb) => cb(fakeDb);
   fakeDb.raw = async () => ({ rows: [] });
   fakeDb.fn = { now: () => new Date() };
   vi.doMock('../../db/cortex.js', () => ({ default: fakeDb }));

@@ -1991,11 +1991,26 @@ Usage:
     console.log(`  Entities:   ${data.entities.documents} documents, ${data.entities.people} people, ${data.entities.topics} topics`);
     console.log(`  Relations:  ${data.relations}`);
     console.log(`  Pods:       ${podSummary}`);
+    if (data.ingestionJobs) {
+      const j = data.ingestionJobs;
+      console.log(`  Ingestion jobs: ${j.running} running, ${j.queued} queued, ${j.failed} failed${j.oldestActiveMs ? ` (oldest ${Math.ceil(j.oldestActiveMs / 1000)}s)` : ''}`);
+      for (const failed of j.recentFailures || []) {
+        console.log(`    failed ${failed.uid} (${failed.kind}, ${failed.attempts} attempts): ${failed.error}`);
+      }
+    }
+    if (data.writeQueueStats?.maxWaitMs) {
+      const q = data.writeQueueStats;
+      console.log(`  DB commit queue: ${q.queued} queued, ${q.running} running (avg wait ${q.averageWaitMs}ms, max ${q.maxWaitMs}ms)`);
+    }
     // Live agent-process gauges. The Claude-procs line is the hard cap that
     // prevents the 1600-session blowup — show it whenever the daemon reports it.
     if (data.claudeProcs) {
       const { active, waiting, limit } = data.claudeProcs;
       console.log(`  Claude procs: ${active}/${limit} active${waiting ? `, ${waiting} queued` : ''}`);
+    }
+    if (data.codexProcs) {
+      const { active, waiting, limit } = data.codexProcs;
+      console.log(`  Codex procs: ${active}/${limit} active${waiting ? `, ${waiting} queued` : ''}`);
     }
     if (data.managedSession?.enabled) {
       const ms = data.managedSession;

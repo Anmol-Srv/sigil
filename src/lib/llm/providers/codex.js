@@ -5,8 +5,9 @@
  *
  * Invocation (verified against codex-cli 0.146.0):
  *
- *   codex exec --sandbox read-only --skip-git-repo-check \
- *     [-m <model>] --output-last-message <file> <prompt>
+ *   codex exec --ignore-user-config --ignore-rules --ephemeral \
+ *     --sandbox read-only --skip-git-repo-check \
+ *     [-m <model>] [--output-schema <file>] --output-last-message <file> <prompt>
  *
  * Notes on each flag, because each one is load-bearing:
  *
@@ -23,15 +24,14 @@
  *      sources of truth that silently disagree. Sigil passes -m only when the
  *      user explicitly picks one.
  *
- * KNOWN COST: codex loads the user's configured MCP servers on every exec,
- * which inflates the prompt (measured: ~9.9k tokens to answer "say ok") and
- * emits transport errors for unreachable ones. We cannot isolate it — pointing
- * CODEX_HOME at a scratch dir loses the credentials and auth fails outright,
- * the same trap as claude-cli's `--bare`. Trimming ~/.codex/config.toml is the
- * user's lever; extraArgs below is the escape hatch.
+ * `--ignore-user-config` is the important latency flag: it prevents every
+ * one-shot from loading the user's MCP/plugin surface (measured at ~9.9k input
+ * tokens for "say ok") without replacing CODEX_HOME, so subscription auth is
+ * still available. `--ignore-rules` avoids unrelated AGENTS.md discovery and
+ * `--ephemeral` avoids persisting these internal extraction sessions.
  */
 import { spawn } from 'node:child_process';
-import { readFile, unlink } from 'node:fs/promises';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -104,18 +104,32 @@ function rawSpawnCodex(args) {
 
 const spawnCodex = (args) => codexGate.run(() => rawSpawnCodex(args));
 
-// eslint-disable-next-line no-unused-vars -- jsonMode kept for interface parity
-async function chat(input, { model, jsonMode = false } = {}) {
-  // The answer comes back through a file, so each call needs its own path —
-  // concurrent calls would otherwise read each other's output.
-  const outPath = join(tmpdir(), `sigil-codex-${randomUUID()}.txt`);
-  const resolved = model || config.llm.codexModel || null;
-
-  const args = ['exec', '--sandbox', 'read-only', '--skip-git-repo-check'];
-  if (resolved) args.push('-m', resolved);
+function buildCodexArgs({ input, model, outPath, schemaPath = null } = {}) {
+  const args = [
+    'exec',
+    '--ignore-user-config',
+    '--ignore-rules',
+    '--ephemeral',
+    '--sandbox', 'read-only',
+    '--skip-git-repo-check',
+  ];
+  if (model) args.push('-m', model);
+  if (schemaPath) args.push('--output-schema', schemaPath);
   args.push('--output-last-message', outPath);
   if (config.llm.codexExtraArgs?.length) args.push(...config.llm.codexExtraArgs);
   args.push(input);
+  return args;
+}
+
+// eslint-disable-next-line no-unused-vars -- jsonMode kept for interface parity
+async function chat(input, { model, jsonMode = false, schema } = {}) {
+  // The answer comes back through a file, so each call needs its own path —
+  // concurrent calls would otherwise read each other's output.
+  const outPath = join(tmpdir(), `sigil-codex-${randomUUID()}.txt`);
+  const schemaPath = schema ? join(tmpdir(), `sigil-codex-${randomUUID()}.schema.json`) : null;
+  const resolved = model || config.llm.codexModel || null;
+  if (schemaPath) await writeFile(schemaPath, JSON.stringify(schema), { mode: 0o600 });
+  const args = buildCodexArgs({ input, model: resolved, outPath, schemaPath });
 
   try {
     const { stdout, stderr, code } = await spawnCodex(args);
@@ -144,6 +158,7 @@ async function chat(input, { model, jsonMode = false } = {}) {
     };
   } finally {
     await unlink(outPath).catch(() => {});
+    if (schemaPath) await unlink(schemaPath).catch(() => {});
   }
 }
 
@@ -158,4 +173,4 @@ async function setup() {
   return { env: {} };
 }
 
-export { chat, meta, setup };
+export { chat, meta, setup, buildCodexArgs };

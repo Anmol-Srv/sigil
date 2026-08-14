@@ -8,7 +8,7 @@
  * would write confidently wrong edges, which is worse than writing none.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { buildNamingPrompt, applyDerived } from './derive-relations.js';
+import { buildNamingPrompt, applyDerived, nameCandidates } from './derive-relations.js';
 
 const PAIR = {
   sourceId: 1, targetId: 2, sourceName: 'sigil', targetName: 'tmux',
@@ -87,5 +87,20 @@ describe('applyDerived', () => {
     const createRelation = vi.fn().mockResolvedValue({});
     await applyDerived([{ ...PAIR, relationship: 'uses' }], { canonicalize, createRelation });
     expect(createRelation).toHaveBeenCalledWith(expect.objectContaining({ confidence: 'medium' }));
+  });
+});
+
+describe('nameCandidates strict maintenance mode', () => {
+  it('accepts explicit none verdicts as completed judgments', async () => {
+    const promptJson = vi.fn().mockResolvedValue({
+      relations: [{ n: 1, relationship: 'none', direction: 'forward', confidence: 'high' }],
+    });
+    await expect(nameCandidates([PAIR], { promptJson, strict: true, evidence: new Map() })).resolves.toEqual([]);
+  });
+
+  it('fails an incomplete model batch so the durable job retries it', async () => {
+    const promptJson = vi.fn().mockResolvedValue({ relations: [] });
+    await expect(nameCandidates([PAIR], { promptJson, strict: true, evidence: new Map() }))
+      .rejects.toThrow('incomplete batch');
   });
 });

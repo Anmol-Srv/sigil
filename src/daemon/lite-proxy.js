@@ -20,6 +20,7 @@ const PROXIED_TO_MASTER = new Set([
   'getPod',
   'listPods',
   'listFacts',
+  'ingestionJob.get',
   'status',
   'refreshContext.fetch',
   'refreshContext.explain',

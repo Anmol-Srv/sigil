@@ -55,8 +55,8 @@ function defaults() {
       maxRetries: 3, cliTimeout: 120000, requestTimeout: 60000, maxClaudeProcs: 4,
       openrouterBaseUrl: '', openrouterReferer: 'https://github.com/Anmol-Srv/sigil', openrouterTitle: 'Sigil',
       managedSession: {
-        enabled: false, poolSize: 1, tokenBudget: 60000,
-        taskTimeoutMs: 120000, firstTaskTimeoutMs: 45000, healthProbeMs: 15000,
+        enabled: false, poolSize: 2, tokenBudget: 60000,
+        taskTimeoutMs: 120000, queueTimeoutMs: 45000, firstTaskTimeoutMs: 45000, healthProbeMs: 15000,
         clearBetweenTasks: true,
       },
     },
@@ -80,7 +80,15 @@ function defaults() {
       supersedeScanLimit: 8, minFactSimilarity: 0.45, injectionFloor: 0.6,
     },
     search: { synthesize: true, synthesizeModel: '' },
-    ingest: { eagerExtract: true, extractRelations: true, graphGleanRounds: 0 },
+    ingest: {
+      eagerExtract: true,
+      // Relation discovery is maintenance work. Entity enrichment is durable
+      // and asynchronous; a coalesced relation job handles cross-document edges.
+      extractRelations: false,
+      graphGleanRounds: 0,
+      workerConcurrency: 2,
+      maxJobAttempts: 3,
+    },
     output: {
       storage: 'local', dir: './output',
       s3: { endpoint: '', bucket: '', region: 'us-east-1', accessKey: '', secretKey: '', publicUrl: '' },

@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import cortexDb from '../../db/cortex.js';
 import { embedOrThrow } from '../../ingestion/embedder.js';
-import { prompt as llmPrompt } from '../../lib/llm.js';
+import { promptJson } from '../../lib/llm.js';
 import { pgHalfvecColumn, pgHalfvecParam, pgVector } from '../../lib/vectors.js';
 import { maskSecrets } from '../../hooks/secret-mask.js';
 import config from '../../config.js';
@@ -13,117 +13,285 @@ import { inferVisibility, normalizeVisibility, VISIBILITIES } from '../visibilit
 
 const AUDM_PROMPT_PATH = path.join(PROMPTS_DIR, 'audm-decision.md');
 
-// Paraphrased content with nomic-embed-text typically lands 0.75-0.88.
-const SKIP_THRESHOLD = config.memory.skipThreshold;
-const AMBIGUOUS_THRESHOLD = config.memory.ambiguousThreshold;
-// Supersession scan casts a wider (lower) net than dedup — the LLM judge gates
-// precision, so embedding only needs recall when hunting stale facts to retire.
-const SUPERSEDE_THRESHOLD = config.memory.supersedeThreshold;
-const SUPERSEDE_SCAN_LIMIT = config.memory.supersedeScanLimit;
+// Read thresholds at operation time. Settings are editable while the daemon is
+// running; freezing them at module import made the dashboard controls lie until
+// the next restart. `thresholds()` is deliberately tiny and side-effect free so
+// tests can change config between calls too.
+function thresholds() {
+  return {
+    skip: Number(config.memory.skipThreshold),
+    ambiguous: Number(config.memory.ambiguousThreshold),
+    supersede: Number(config.memory.supersedeThreshold),
+    scanLimit: Number(config.memory.supersedeScanLimit),
+  };
+}
 
 /**
  * AUDM pipeline: Add, Update, Delete (contradict), or Merge.
  * For each fact, checks similarity against existing facts and decides what to do.
  */
-async function saveFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding: precomputed, visibility }, db = cortexDb) {
-  // Defense-in-depth secret masking for any caller that reaches saveFact
-  // without going through the ingest pipeline's choke point. Masking BEFORE
-  // the embed fallback keeps secrets out of the embedding API on this path
-  // too. Idempotent — already-masked content is unchanged.
-  content = maskSecrets(content);
-  const embedding = precomputed || await embedOrThrow(content);
-  // Scan at the (lower) supersession floor so facet-shifted stale facts surface
-  // as candidates; the AUDM judge decides which are actually invalidated.
-  const similar = await findSimilar(embedding, { namespace, threshold: SUPERSEDE_THRESHOLD, limit: SUPERSEDE_SCAN_LIMIT }, db);
-
-  // AUDM telemetry attached to every return for the trace log: the similarity
-  // that drove the decision, candidate count, and the thresholds in effect —
-  // so the Activity log can explain *why* a fact was added vs deduped vs
-  // superseded. Purely additive; existing callers ignore `audm`.
-  const thresholds = { skip: SKIP_THRESHOLD, ambiguous: AMBIGUOUS_THRESHOLD, supersede: SUPERSEDE_THRESHOLD };
-
-  if (!similar.length) {
-    const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding, visibility }, db);
-    return { action: 'ADD', fact, audm: { topSimilarity: null, matchCount: 0, decision: 'no-match', thresholds } };
-  }
-
-  const topMatch = similar[0];
-  const audmBase = {
-    topSimilarity: Number(topMatch.similarity),
-    matchCount: similar.length,
-    existingId: topMatch.id,
-    existingContent: topMatch.content,
-    thresholds,
-  };
-
-  // Near-exact duplicate of an existing active fact → skip; don't store a redundant row.
-  if (topMatch.similarity >= SKIP_THRESHOLD) {
-    return { action: 'SKIP', existing: topMatch, audm: { ...audmBase, decision: 'skip-duplicate' } };
-  }
-
-  // Cluster-aware supersession. A single real-world change ("migrated to
-  // Postgres") decomposes into several stale facts — primary store, session
-  // state, a dated event — that are NOT all the new fact's single nearest
-  // neighbor. So we compare the new fact against EVERY active neighbor in the
-  // ambiguous band [AMBIGUOUS, SKIP) and retire each one the (temperature-0,
-  // deterministic) AUDM judge marks UPDATE/CONTRADICT — not just topMatch.
-  // findSimilar already filters to >= AMBIGUOUS, so we only exclude near-dups.
-  const candidates = similar.filter((s) => s.similarity < SKIP_THRESHOLD);
-
-  if (!candidates.length) {
-    const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding, visibility }, db);
-    return { action: 'ADD', fact, audm: { ...audmBase, decision: 'below-ambiguous' } };
-  }
-
-  // Insert the new version once, then retire each invalidated neighbor against
-  // it. Old facts become separate superseded/contradicted rows (full history
-  // preserved) rather than being overwritten in place.
-  const fact = await insertFact({ content, category, confidence, importance, namespace, sourceDocumentIds, sourceSection, embedding, visibility }, db);
-  const retired = [];
-  for (const cand of candidates) {
-    const decision = await audmDecide(content, cand.content);
-    if (decision === 'UPDATE') {
-      await markSuperseded(cand.id, fact.id, db);
-      await recordHistory({ targetType: 'fact', targetId: cand.id, event: 'UPDATE', oldContent: cand.content, newContent: content, triggeredBy: `audm:sim=${cand.similarity.toFixed(3)}` }, db);
-      retired.push({ id: cand.id, decision: 'UPDATE', similarity: Number(cand.similarity) });
-    } else if (decision === 'CONTRADICT') {
-      await markContradicted(cand.id, fact.id, db);
-      await recordHistory({ targetType: 'fact', targetId: cand.id, event: 'CONTRADICT', oldContent: cand.content, newContent: content, triggeredBy: `audm:sim=${cand.similarity.toFixed(3)}` }, db);
-      retired.push({ id: cand.id, decision: 'CONTRADICT', similarity: Number(cand.similarity) });
-    }
-    // ADD → the neighbor is genuinely distinct; leave it active.
-  }
-
-  // Headline action reflects what actually happened (UPDATE wins over CONTRADICT
-  // for back-compat counting; ADD when nothing was retired). `retired` carries
-  // the full per-neighbor detail; supersededId/contradictedId stay populated for
-  // existing callers that read the single-id contract.
-  const action = retired.some((r) => r.decision === 'UPDATE') ? 'UPDATE'
-    : retired.some((r) => r.decision === 'CONTRADICT') ? 'CONTRADICT'
-      : 'ADD';
-  return {
-    action,
-    fact,
-    supersededId: retired.find((r) => r.decision === 'UPDATE')?.id ?? null,
-    contradictedId: retired.find((r) => r.decision === 'CONTRADICT')?.id ?? null,
-    retired,
-    audm: { ...audmBase, decision: retired.length ? `llm:${action}×${retired.length}` : 'llm:ADD' },
-  };
+async function saveFact(spec, db = cortexDb) {
+  const prepared = await prepareFactBatch([spec], { db });
+  // A caller that explicitly supplied a transaction retains atomicity, but the
+  // expensive preparation above has already finished before we write anything.
+  // Normal callers get a short transaction containing SQL only.
+  const apply = (trx) => applyPreparedFactBatch(prepared, { db: trx });
+  const results = db.isTransaction ? await apply(db) : await db.transaction(apply);
+  return results[0];
 }
 
-async function audmDecide(newContent, existingContent) {
+/**
+ * Prepare every fact in one batch: embeddings are supplied by the ingestion
+ * layer, similarity reads happen without a write transaction, and every AUDM
+ * pair is adjudicated in ONE structured model call. No writes occur here.
+ */
+async function prepareFactBatch(specs, { db = cortexDb } = {}) {
+  const t = thresholds();
+  const prepared = [];
+  const offeredPairs = [];
+
+  const normalized = await Promise.all(specs.map(async (raw) => {
+    const content = maskSecrets(raw.content);
+    const embedding = raw.embedding || await embedOrThrow(content);
+    return { ...raw, content, embedding };
+  }));
+  // Server Postgres can run these ANN reads concurrently. Embedded PGlite's
+  // max-1 pool naturally serializes them without changing semantics.
+  const candidateSets = await Promise.all(normalized.map((spec) => findSimilar(spec.embedding, {
+    namespace: spec.namespace,
+    threshold: t.supersede,
+    limit: t.scanLimit,
+  }, db)));
+
+  for (let index = 0; index < normalized.length; index++) {
+    const raw = normalized[index];
+    const { content, embedding } = raw;
+    const dbCandidates = candidateSets[index];
+
+    // Preserve within-batch dedup without inserting one fact at a time. Earlier
+    // incoming facts are real candidates too; cosine is deterministic and local.
+    const batchCandidates = prepared
+      .map((p, priorIndex) => ({
+        candidateKey: `input:${priorIndex}`,
+        inputIndex: priorIndex,
+        content: p.spec.content,
+        category: p.spec.category,
+        similarity: cosineSimilarity(embedding, p.spec.embedding),
+      }))
+      .filter((c) => c.similarity >= t.supersede);
+
+    const candidates = [
+      ...dbCandidates.map((c) => ({ ...c, candidateKey: `fact:${c.id}` })),
+      ...batchCandidates,
+    ]
+      .sort((a, b) => Number(b.similarity) - Number(a.similarity))
+      .slice(0, t.scanLimit);
+    const top = candidates[0] || null;
+    const duplicate = top && Number(top.similarity) >= t.skip ? top : null;
+
+    // `ambiguousThreshold` is the gate that decides whether the model is asked.
+    // Once a strong cluster match exists, include lower-similarity members down
+    // to the supersede floor so one real-world change can retire the whole stale
+    // cluster in the same call.
+    const judged = !duplicate && top && Number(top.similarity) >= t.ambiguous
+      ? candidates.filter((c) => Number(c.similarity) < t.skip)
+      : [];
+
+    for (const candidate of judged) {
+      offeredPairs.push({
+        inputIndex: index,
+        candidateKey: candidate.candidateKey,
+        newContent: content,
+        existingContent: candidate.content,
+        similarity: Number(candidate.similarity),
+      });
+    }
+
+    prepared.push({
+      spec: { ...raw, content, embedding },
+      candidates,
+      duplicate,
+      judged,
+      decisions: new Map(),
+      thresholds: t,
+    });
+  }
+
+  const decisions = await audmDecideBatch(offeredPairs);
+  for (const pair of offeredPairs) {
+    prepared[pair.inputIndex].decisions.set(
+      pair.candidateKey,
+      decisions.get(`${pair.inputIndex}|${pair.candidateKey}`) || 'ADD',
+    );
+  }
+  return prepared;
+}
+
+/** Apply a prepared batch. SQL only: safe to call inside a short transaction. */
+async function applyPreparedFactBatch(prepared, { db = cortexDb } = {}) {
+  const results = [];
+
+  for (let index = 0; index < prepared.length; index++) {
+    const plan = prepared[index];
+    const top = plan.candidates[0] || null;
+    const audmBase = {
+      topSimilarity: top ? Number(top.similarity) : null,
+      matchCount: plan.candidates.length,
+      existingId: top?.id ?? null,
+      existingContent: top?.content ?? null,
+      thresholds: {
+        skip: plan.thresholds.skip,
+        ambiguous: plan.thresholds.ambiguous,
+        supersede: plan.thresholds.supersede,
+      },
+    };
+
+    // Preparation runs concurrently outside the write lock. Revalidate exact
+    // content under the short commit transaction so two callers that prepared
+    // the same unseen fact cannot both insert it. Semantic near-duplicates were
+    // already handled by the batched AUDM pass; this is the optimistic race
+    // guard for the common identical-input case.
+    const concurrentExact = await findActiveExact(plan.spec, db);
+    if (concurrentExact) {
+      const existing = await mergeFactSourceDocuments(concurrentExact, plan.spec.sourceDocumentIds, db);
+      results.push({ action: 'SKIP', existing, audm: { ...audmBase, decision: 'skip-concurrent-exact' } });
+      continue;
+    }
+
+    if (plan.duplicate) {
+      let existing = resolvePreparedCandidate(plan.duplicate, results);
+      if (existing) {
+        existing = await mergeFactSourceDocuments(existing, plan.spec.sourceDocumentIds, db);
+        results.push({ action: 'SKIP', existing, audm: { ...audmBase, decision: 'skip-duplicate' } });
+        continue;
+      }
+    }
+
+    const fact = await insertFact(plan.spec, db);
+    const retired = [];
+    const retiredIds = new Set();
+    for (const candidate of plan.judged) {
+      const decision = plan.decisions.get(candidate.candidateKey) || 'ADD';
+      if (decision === 'ADD') continue;
+      const existing = resolvePreparedCandidate(candidate, results);
+      if (!existing?.id || existing.id === fact.id || retiredIds.has(existing.id)) continue;
+
+      if (decision === 'UPDATE') await markSuperseded(existing.id, fact.id, db);
+      else if (decision === 'CONTRADICT') await markContradicted(existing.id, fact.id, db);
+      else continue;
+      await recordHistory({
+        targetType: 'fact', targetId: existing.id, event: decision,
+        oldContent: existing.content, newContent: plan.spec.content,
+        triggeredBy: `audm:sim=${Number(candidate.similarity).toFixed(3)}`,
+      }, db);
+      retiredIds.add(existing.id);
+      retired.push({ id: existing.id, decision, similarity: Number(candidate.similarity) });
+    }
+
+    const action = retired.some((r) => r.decision === 'UPDATE') ? 'UPDATE'
+      : retired.some((r) => r.decision === 'CONTRADICT') ? 'CONTRADICT'
+        : 'ADD';
+    results.push({
+      action,
+      fact,
+      supersededId: retired.find((r) => r.decision === 'UPDATE')?.id ?? null,
+      contradictedId: retired.find((r) => r.decision === 'CONTRADICT')?.id ?? null,
+      retired,
+      audm: {
+        ...audmBase,
+        decision: retired.length ? `llm:${action}×${retired.length}`
+          : plan.judged.length ? 'llm:ADD' : top ? 'below-ambiguous' : 'no-match',
+      },
+    });
+  }
+
+  return results;
+}
+
+async function findActiveExact({ content, namespace }, db) {
+  return db('fact')
+    .where({ namespace, status: 'active', content })
+    .whereRaw('md5(content) = md5(?)', [content])
+    .first();
+}
+
+function resolvePreparedCandidate(candidate, results) {
+  if (candidate.inputIndex == null) return candidate;
+  const prior = results[candidate.inputIndex];
+  return prior?.fact || prior?.existing || null;
+}
+
+async function mergeFactSourceDocuments(existing, sourceDocumentIds, db) {
+  const incoming = (sourceDocumentIds || []).map(Number).filter(Number.isFinite);
+  if (!existing?.id || !incoming.length) return existing;
+  const current = Array.isArray(existing.sourceDocumentIds) ? existing.sourceDocumentIds.map(Number) : [];
+  const merged = [...new Set([...current, ...incoming])];
+  if (merged.length === current.length && merged.every((id, i) => id === current[i])) return existing;
+  await db('fact').where({ id: existing.id }).update({ sourceDocumentIds: merged });
+  return { ...existing, sourceDocumentIds: merged };
+}
+
+async function audmDecideBatch(pairs) {
+  if (!pairs.length) return new Map();
   const systemPrompt = await readFile(AUDM_PROMPT_PATH, 'utf8');
+  const cases = pairs.map((p) => ({
+    input_index: p.inputIndex,
+    candidate_key: p.candidateKey,
+    existing_fact: p.existingContent,
+    new_fact: p.newContent,
+    similarity: Number(p.similarity.toFixed(4)),
+  }));
+  const input = `${systemPrompt}\n\nDecide every case below independently. Return one decision per offered pair.\n\n${JSON.stringify(cases)}`;
+  const schema = {
+    type: 'object', additionalProperties: false,
+    properties: {
+      decisions: {
+        type: 'array',
+        items: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            input_index: { type: 'integer' },
+            candidate_key: { type: 'string' },
+            action: { type: 'string', enum: ['ADD', 'UPDATE', 'CONTRADICT'] },
+          },
+          required: ['input_index', 'candidate_key', 'action'],
+        },
+      },
+    },
+    required: ['decisions'],
+  };
+  const parsed = await promptJson(input, {
+    model: config.llm.decisionModel,
+    caller: 'audm-batch',
+    temperature: 0,
+    schema,
+  });
 
-  const input = `${systemPrompt}\n\n**EXISTING FACT:** ${existingContent}\n\n**NEW FACT:** ${newContent}`;
-  // temperature: 0 — AUDM is a classification, not a creative call. A pinned
-  // temperature makes verdicts reproducible run-to-run (the same fact pair must
-  // always resolve the same way; otherwise stale-fact retirement is a coin toss).
-  const text = await llmPrompt(input, { model: config.llm.decisionModel, caller: 'audm', temperature: 0 });
+  const offered = new Set(pairs.map((p) => `${p.inputIndex}|${p.candidateKey}`));
+  const out = new Map();
+  for (const d of Array.isArray(parsed?.decisions) ? parsed.decisions : []) {
+    const key = `${d.input_index}|${d.candidate_key}`;
+    if (!offered.has(key)) continue;
+    if (!['ADD', 'UPDATE', 'CONTRADICT'].includes(d.action)) continue;
+    out.set(key, d.action);
+  }
+  if (out.size !== offered.size) {
+    throw new Error(`AUDM judge returned ${out.size}/${offered.size} required decisions`);
+  }
+  return out;
+}
 
-  const upper = text.trim().toUpperCase();
-  if (upper.includes('UPDATE')) return 'UPDATE';
-  if (upper.includes('CONTRADICT')) return 'CONTRADICT';
-  return 'ADD';
+function cosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || !a.length) return -1;
+  let dot = 0;
+  let aa = 0;
+  let bb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    aa += a[i] * a[i];
+    bb += b[i] * b[i];
+  }
+  return aa && bb ? dot / Math.sqrt(aa * bb) : -1;
 }
 
 // ── Core CRUD ───────────────────────────────────────────────────────────────
@@ -209,6 +377,20 @@ async function listByDocument(documentId, db = cortexDb) {
     .orderBy('createdAt', 'desc');
 }
 
+async function countActiveByDocuments(documentIds, db = cortexDb) {
+  const ids = [...new Set((documentIds || []).map(Number).filter(Number.isFinite))];
+  if (!ids.length) return new Map();
+  const { rows } = await db.raw(`
+    SELECT requested.document_id AS "documentId", COUNT(f.id)::int AS count
+    FROM unnest(?::bigint[]) AS requested(document_id)
+    LEFT JOIN fact f
+      ON f.status = 'active'
+     AND requested.document_id = ANY(f.source_document_ids)
+    GROUP BY requested.document_id
+  `, [ids]);
+  return new Map(rows.map((row) => [Number(row.documentId), Number(row.count)]));
+}
+
 async function markContradicted(factId, contradictedById, db = cortexDb) {
   await db('fact')
     .where({ id: factId })
@@ -281,7 +463,8 @@ async function supersedeStaleDocFacts(documentId, keptFactIds = [], db = cortexD
   return { superseded: toSupersede.length, dissociated: toDissociate.length };
 }
 
-async function findSimilar(embedding, { namespace, threshold = AMBIGUOUS_THRESHOLD, limit = 5 }, db = cortexDb) {
+async function findSimilar(embedding, { namespace, threshold = null, limit = 5 }, db = cortexDb) {
+  const resolvedThreshold = threshold ?? thresholds().ambiguous;
   const vec = pgVector(embedding);
   const embeddingDistance = `${pgHalfvecColumn('embedding')} <=> ${pgHalfvecParam()}`;
 
@@ -301,7 +484,7 @@ async function findSimilar(embedding, { namespace, threshold = AMBIGUOUS_THRESHO
         AND 1 - (${embeddingDistance}) >= ?
       ORDER BY ${embeddingDistance}
       LIMIT ?
-    `, [vec, namespace, vec, threshold, vec, limit]);
+    `, [vec, namespace, vec, resolvedThreshold, vec, limit]);
     return rows;
   };
   // When called inside an ingest transaction, run on THAT transaction — so
@@ -482,11 +665,16 @@ async function deleteNamespace(namespace) {
 
 export {
   saveFact,
+  prepareFactBatch,
+  applyPreparedFactBatch,
+  audmDecideBatch,
+  cosineSimilarity,
   insertFact,
   findByUid,
   listFacts,
   listByCategory,
   listByDocument,
+  countActiveByDocuments,
   markContradicted,
   markSuperseded,
   supersedeStaleDocFacts,

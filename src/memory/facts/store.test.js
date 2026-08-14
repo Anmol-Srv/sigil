@@ -8,12 +8,15 @@ const { mockRaw, mockChain, mockFact } = vi.hoisted(() => {
     insert: vi.fn(),
     where: vi.fn(),
     whereIn: vi.fn(),
+    whereRaw: vi.fn(),
+    first: vi.fn(),
     update: vi.fn(),
     returning: vi.fn(),
   };
   Object.values(mockChain).forEach((fn) => fn.mockReturnValue(mockChain));
   mockChain.returning.mockResolvedValue([mockFact]);
   mockChain.update.mockResolvedValue(1);
+  mockChain.first.mockResolvedValue(null);
 
   const mockRaw = vi.fn();
 
@@ -33,19 +36,26 @@ vi.mock('../../lib/llm.js', () => ({
   parseJson: vi.fn(),
 }));
 
-vi.mock('../../db/cortex.js', () => ({
+vi.mock('../../db/cortex.js', () => {
+  const trx = Object.assign(vi.fn(() => mockChain), {
+    raw: mockRaw,
+    fn: { now: () => 'NOW()' },
+    isTransaction: true,
+  });
+  return {
   default: Object.assign(vi.fn(() => mockChain), {
     raw: mockRaw,
     fn: { now: () => 'NOW()' },
     // findSimilar wraps its query in a transaction (SET LOCAL hnsw.ef_search = 40).
     // The transaction passes a `trx` object that exposes raw — route it back to the
     // shared mockRaw so existing test fixtures keep working.
-    transaction: vi.fn(async (callback) => callback({ raw: mockRaw })),
+    transaction: vi.fn(async (callback) => callback(trx)),
   }),
-}));
+  };
+});
 
 import { embedOrThrow } from '../../ingestion/embedder.js';
-import { prompt as llmPrompt } from '../../lib/llm.js';
+import { promptJson } from '../../lib/llm.js';
 import { saveFact } from './store.js';
 
 // EMBEDDING_DIM is 1024; the precomputed-embedding path serializes through
@@ -58,6 +68,7 @@ beforeEach(() => {
   Object.values(mockChain).forEach((fn) => fn.mockReturnValue(mockChain));
   mockChain.returning.mockResolvedValue([mockFact]);
   mockChain.update.mockResolvedValue(1);
+  mockChain.first.mockResolvedValue(null);
   embedOrThrow.mockResolvedValue(FAKE_VEC);
 });
 
@@ -103,7 +114,25 @@ describe('saveFact — AUDM decision branches', () => {
 
     const result = await saveFact(baseArgs);
     expect(result.action).toBe('SKIP');
-    expect(llmPrompt).not.toHaveBeenCalled();
+    expect(promptJson).not.toHaveBeenCalled();
+  });
+
+  it('revalidates exact content at commit so concurrent prepares do not duplicate', async () => {
+    mockRaw
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    mockChain.first.mockResolvedValueOnce({
+      id: 22,
+      uid: 'fact-raced',
+      content: baseArgs.content,
+      namespace: 'default',
+      status: 'active',
+      sourceDocumentIds: [9],
+    });
+
+    const result = await saveFact(baseArgs);
+    expect(result).toMatchObject({ action: 'SKIP', existing: { id: 22 } });
+    expect(result.audm.decision).toBe('skip-concurrent-exact');
   });
 
   it('weak match below the supersede floor → ADD without LLM call', async () => {
@@ -117,7 +146,7 @@ describe('saveFact — AUDM decision branches', () => {
 
     const result = await saveFact(baseArgs);
     expect(result.action).toBe('ADD');
-    expect(llmPrompt).not.toHaveBeenCalled();
+    expect(promptJson).not.toHaveBeenCalled();
   });
 
   it('similarity in [0.78, 0.88) + LLM says UPDATE → UPDATE (new fact inserted, old superseded)', async () => {
@@ -127,13 +156,13 @@ describe('saveFact — AUDM decision branches', () => {
         rows: [{ id: 2, uid: 'fact-old', content: 'I like apples', similarity: 0.82, status: 'active' }],
       })
       .mockResolvedValueOnce({ rows: [] }); // search_vector for inserted fact
-    llmPrompt.mockResolvedValueOnce('DECISION: UPDATE — new fact extends existing');
+    promptJson.mockResolvedValueOnce({ decisions: [{ input_index: 0, candidate_key: 'fact:2', action: 'UPDATE' }] });
 
     const result = await saveFact(baseArgs);
     expect(result.action).toBe('UPDATE');
     expect(result.supersededId).toBe(2);
     expect(result.fact).toBeDefined();
-    expect(llmPrompt).toHaveBeenCalledTimes(1);
+    expect(promptJson).toHaveBeenCalledTimes(1);
   });
 
   it('similarity in [0.78, 0.88) + LLM says CONTRADICT → CONTRADICT', async () => {
@@ -143,7 +172,7 @@ describe('saveFact — AUDM decision branches', () => {
         rows: [{ id: 3, uid: 'fact-stale', content: 'We use MySQL', similarity: 0.80, status: 'active' }],
       })
       .mockResolvedValueOnce({ rows: [] });
-    llmPrompt.mockResolvedValueOnce('CONTRADICT — directly contradicts existing fact');
+    promptJson.mockResolvedValueOnce({ decisions: [{ input_index: 0, candidate_key: 'fact:3', action: 'CONTRADICT' }] });
 
     const result = await saveFact(baseArgs);
     expect(result.action).toBe('CONTRADICT');
@@ -158,7 +187,7 @@ describe('saveFact — AUDM decision branches', () => {
         rows: [{ id: 4, uid: 'fact-4', content: 'old content', similarity: 0.81, status: 'active' }],
       })
       .mockResolvedValueOnce({ rows: [] });
-    llmPrompt.mockResolvedValueOnce('This is a CONTRADICTION of the existing fact');
+    promptJson.mockResolvedValueOnce({ decisions: [{ input_index: 0, candidate_key: 'fact:4', action: 'CONTRADICT' }] });
 
     const result = await saveFact(baseArgs);
     expect(result.action).toBe('CONTRADICT');
@@ -171,9 +200,20 @@ describe('saveFact — AUDM decision branches', () => {
         rows: [{ id: 5, uid: 'fact-5', content: 'related but different', similarity: 0.79, status: 'active' }],
       })
       .mockResolvedValueOnce({ rows: [] });
-    llmPrompt.mockResolvedValueOnce('These are separate facts, add as new');
+    promptJson.mockResolvedValueOnce({ decisions: [{ input_index: 0, candidate_key: 'fact:5', action: 'ADD' }] });
 
     const result = await saveFact(baseArgs);
     expect(result.action).toBe('ADD');
+  });
+
+  it('rejects an incomplete AUDM batch instead of silently defaulting it to ADD', async () => {
+    mockRaw
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [{ id: 6, uid: 'fact-6', content: 'possibly stale', similarity: 0.80, status: 'active' }],
+      });
+    promptJson.mockResolvedValueOnce({ decisions: [] });
+
+    await expect(saveFact(baseArgs)).rejects.toThrow('0/1 required decisions');
   });
 });

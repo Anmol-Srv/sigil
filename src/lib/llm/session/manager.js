@@ -40,6 +40,7 @@ const DEFAULTS = {
   poolSize: 1,
   tokenBudget: 60_000,        // recycle a worker once it has processed ~this many tokens
   taskTimeoutMs: 120_000,     // dead-man timeout per task → fallback + recycle
+  queueTimeoutMs: 45_000,     // queued but undispatched → fallback (never hang)
   // Boot handshake window: re-nudge once, then recycle. A cold `claude` needs
   // ~10s just to render its TUI before the pane accepts keys, then a turn to
   // call get_task — measured at 20-30s end to end. 10s recycled every worker
@@ -89,6 +90,7 @@ export class SessionManager {
     this.pools = { ...(deps.pools || {}) };
     this.tokenBudget = deps.tokenBudget ?? DEFAULTS.tokenBudget;
     this.taskTimeoutMs = deps.taskTimeoutMs ?? DEFAULTS.taskTimeoutMs;
+    this.queueTimeoutMs = deps.queueTimeoutMs ?? DEFAULTS.queueTimeoutMs;
     this.firstTaskTimeoutMs = deps.firstTaskTimeoutMs ?? DEFAULTS.firstTaskTimeoutMs;
     this.bootNudgeIntervalMs = deps.bootNudgeIntervalMs ?? DEFAULTS.bootNudgeIntervalMs;
     this.maxBootFailures = deps.maxBootFailures ?? DEFAULTS.maxBootFailures;
@@ -165,9 +167,16 @@ export class SessionManager {
 
   // ── Public API used by the provider ────────────────────────────────────────
 
-  /** Are there any workers (booting/ready/busy) for this source type? */
+  /** Are there any workers that can eventually serve this source type? */
   hasWorkers(sourceType) {
     for (const w of this.workers.values()) if (w.sourceType === sourceType) return true;
+    return false;
+  }
+
+  hasUsableWorkers(sourceType) {
+    for (const w of this.workers.values()) {
+      if (w.sourceType === sourceType && w.state !== STATE.UNHEALTHY) return true;
+    }
     return false;
   }
 
@@ -181,12 +190,16 @@ export class SessionManager {
     const reqId = randomUUID();
     const task = { reqId, sourceType, prompt, model, schema, caller: caller ?? null, enqueuedAt: this.now() };
 
-    if (!this.hasWorkers(sourceType)) {
+    if (!this.hasUsableWorkers(sourceType)) {
       return this.runFallback(task, 'no-workers');
     }
 
     return new Promise((resolve, reject) => {
-      this.pending.set(reqId, { task, resolve, reject, timer: null, workerId: null, settled: false });
+      // Deadline starts at ENQUEUE, not dispatch. A pool that is booting, fully
+      // busy, or unhealthy can no longer strand a task forever without ever
+      // arming the per-worker dead-man timer.
+      const timer = this.timers.set(this.queueTimeoutMs, () => this.onTimeout(reqId));
+      this.pending.set(reqId, { task, resolve, reject, timer, workerId: null, settled: false });
       this.enqueue(task);
       this.dispatch(sourceType);
     });
@@ -235,6 +248,7 @@ export class SessionManager {
       viaFallback: false,
       workerId,
       reqId,
+      queuedMs: p.task.queuedMs ?? 0,
     });
 
     const w = this.workers.get(workerId);
@@ -243,6 +257,7 @@ export class SessionManager {
       session: this.sessionNameOf(workerId), inputTokens, outputTokens,
       tokensUsed: w ? w.tokensUsed + inputTokens + outputTokens : null,
       durationMs: p.task.dispatchedAt ? this.now() - p.task.dispatchedAt : null,
+      queuedMs: p.task.queuedMs ?? 0,
     });
 
     if (w) {
@@ -285,10 +300,12 @@ export class SessionManager {
       w.currentReqId = task.reqId;
       p.workerId = w.id;
       task.dispatchedAt = this.now();
+      task.queuedMs = Math.max(0, task.dispatchedAt - task.enqueuedAt);
+      if (p.timer) this.timers.clear(p.timer);
       p.timer = this.timers.set(this.taskTimeoutMs, () => this.onTimeout(task.reqId));
       this.emit({
         type: 'dispatch', workerId: w.id, reqId: task.reqId, sourceType,
-        caller: task.caller, session: this.sessionNameOf(w),
+        caller: task.caller, session: this.sessionNameOf(w), queuedMs: task.queuedMs,
       });
 
       // The awake worker is already mid-poll; get_task returns this task to it.
@@ -310,6 +327,7 @@ export class SessionManager {
     if (!p || p.settled) return;
 
     const w = p.workerId ? this.workers.get(p.workerId) : null;
+    if (!w) this.removeQueuedTask(p.task);
     if (w) {
       // Surface WHY for the daemon log — a wedged auth/trust dialog vs a silent miss.
       const driver = this.safeDriver(w.sourceType);
@@ -320,12 +338,18 @@ export class SessionManager {
       w.state = STATE.UNHEALTHY;
     }
 
+    const reason = w ? 'timeout' : 'queue-timeout';
     this.emit({
-      type: 'fallback', reqId, reason: 'timeout', sourceType: p.task.sourceType,
+      type: 'fallback', reqId, reason, sourceType: p.task.sourceType,
       caller: p.task.caller, workerId: w ? w.id : null, session: w ? this.sessionNameOf(w) : null,
+      queuedMs: p.task.queuedMs ?? Math.max(0, this.now() - p.task.enqueuedAt),
     });
-    const fb = await this.runFallbackRaw(p.task);
-    if (!p.settled) this.settle(p, fb);
+    try {
+      const fb = await this.runFallbackRaw(p.task);
+      if (!p.settled) this.settle(p, fb);
+    } catch (err) {
+      if (!p.settled) this.rejectPending(p, err);
+    }
     if (w) {
       this.emit({ type: 'recycle', workerId: w.id, sourceType: w.sourceType, reason: 'timeout', session: this.sessionNameOf(w) });
       await this.recycle(w);
@@ -359,6 +383,21 @@ export class SessionManager {
     p.resolve(result);
   }
 
+  rejectPending(p, err) {
+    if (p.settled) return;
+    p.settled = true;
+    if (p.timer) { this.timers.clear(p.timer); p.timer = null; }
+    this.pending.delete(p.task.reqId);
+    p.reject(err);
+  }
+
+  removeQueuedTask(task) {
+    const queue = this.queues.get(task.sourceType);
+    if (!queue?.length) return;
+    const index = queue.findIndex((queued) => queued.reqId === task.reqId);
+    if (index >= 0) queue.splice(index, 1);
+  }
+
   /** Return a worker to READY, or recycle it if it has burned its token budget. */
   releaseWorker(w) {
     w.currentReqId = null;
@@ -385,7 +424,10 @@ export class SessionManager {
   /** Spawn one warm worker for a source type. Stays BOOTING until it handshakes. */
   async spawnWorker(sourceType) {
     const driver = this.getDriver(sourceType);
-    const id = `${sourceType}-${this.seq++}`;
+    // Source types may be lanes (`claude:interactive`). tmux treats `:` as a
+    // target separator, so keep the routing key on the worker but sanitize the
+    // process/session identifier.
+    const id = `${String(sourceType).replace(/[^a-zA-Z0-9_-]/g, '-')}-${this.seq++}`;
     const worker = { id, sourceType, state: STATE.BOOTING, currentReqId: null, tokensUsed: 0, bootTimer: null, bootNudgesLeft: 0 };
     this.workers.set(id, worker);
 
@@ -495,7 +537,7 @@ export class SessionManager {
         this.settle(p, await this.runFallbackRaw(task));
       } catch (err) {
         // The caller is awaiting this promise; a silent swallow is the hang.
-        if (!p.settled) { p.settled = true; this.pending.delete(task.reqId); p.reject(err); }
+        if (!p.settled) this.rejectPending(p, err);
       }
     }));
   }
@@ -521,6 +563,7 @@ export class SessionManager {
       // No warm worker produced this result — the call took the one-shot path.
       workerId: null,
       reqId: task.reqId,
+      queuedMs: task.queuedMs ?? Math.max(0, this.now() - task.enqueuedAt),
     };
   }
 

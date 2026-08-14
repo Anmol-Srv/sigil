@@ -89,9 +89,16 @@ export async function initSessionManager({ config, log = () => {} } = {}) {
   log(`managed-session: workspace trust for ${SIGIL_HOME}: ${await ensureFolderTrusted(SIGIL_HOME)}`);
 
   const pools = {};
-  for (const sourceType of supportedSourceTypes()) {
-    pools[sourceType] = ms.poolSize;
-    if (config.llm.cliModel) pools[`${sourceType}:model`] = config.llm.cliModel;
+  for (const driverType of supportedSourceTypes()) {
+    // Isolation matters more than raw FIFO throughput: a long relation naming
+    // batch must never sit in front of query routing or a live Stop-hook save.
+    // The configured pool size applies to ingest; interactive and maintenance
+    // each get one bounded worker of their own.
+    for (const [lane, size] of [['interactive', 1], ['ingest', ms.poolSize], ['maintenance', 1]]) {
+      const sourceType = `${driverType}:${lane}`;
+      pools[sourceType] = size;
+      if (config.llm.cliModel) pools[`${sourceType}:model`] = config.llm.cliModel;
+    }
   }
 
   // Resolve the worker MCP server entry. PKG_ROOT is bundle-stable; prefer the
@@ -107,7 +114,7 @@ export async function initSessionManager({ config, log = () => {} } = {}) {
 
   const manager = new SessionManager({
     tmux,
-    getDriver,
+    getDriver: (sourceType) => getDriver(String(sourceType).split(':')[0]),
     fallback: fallbackFor,
     scratchDir: join(SIGIL_HOME, 'sessions'),
     workerCwd: SIGIL_HOME,
@@ -115,6 +122,7 @@ export async function initSessionManager({ config, log = () => {} } = {}) {
     workerServer,
     tokenBudget: ms.tokenBudget,
     taskTimeoutMs: ms.taskTimeoutMs,
+    queueTimeoutMs: ms.queueTimeoutMs,
     firstTaskTimeoutMs: ms.firstTaskTimeoutMs,
     log,
     onEvent: makeEngineRecorder(),
@@ -128,7 +136,7 @@ export async function initSessionManager({ config, log = () => {} } = {}) {
   healthTimer = setInterval(() => { manager.probeHealth().catch(() => {}); }, ms.healthProbeMs);
   healthTimer.unref?.();
 
-  log(`managed-session: started (${supportedSourceTypes().join(',')} × ${ms.poolSize}, budget=${ms.tokenBudget})`);
+  log(`managed-session: started (${supportedSourceTypes().join(',')} lanes: interactive=1, ingest=${ms.poolSize}, maintenance=1; budget=${ms.tokenBudget})`);
   return manager;
 }
 

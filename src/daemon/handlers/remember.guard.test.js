@@ -13,7 +13,12 @@ let registry;
 beforeAll(async () => {
   // The handler pulls in the ingest pipeline lazily; the guard rejects before
   // any of that runs, so a stub is enough to keep the import graph off the DB.
-  vi.doMock('../../ingestion/pipeline.js', () => ({ ingestDocument: vi.fn() }));
+  vi.doMock('../../ingestion/pipeline.js', () => ({
+    ingestAtomicFacts: vi.fn(async ({ facts }) => ({
+      counts: { total: facts.length, added: 0, updated: 0, contradicted: 0, skipped: facts.length },
+      results: facts.map(() => ({ action: 'SKIP_DOCUMENT' })),
+    })),
+  }));
   vi.doMock('../../config.js', () => ({ default: { defaults: { namespace: 'default' } } }));
 
   const { registerRemember } = await import('./remember.js');

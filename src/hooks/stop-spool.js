@@ -9,10 +9,12 @@
  * healthy — at daemon boot and from `sigil doctor`/`sigil repair`. Without this,
  * a provider outage silently dropped every memorable turn with no recovery.
  *
- * Format: one JSON object per line (JSONL). Append-only on write; rewritten
- * (tmp + rename) on drain to drop the entries that succeeded.
+ * Format: one JSON object per line (JSONL), plus an append-only acknowledgement
+ * sidecar. Neither replay nor capacity trimming rewrites the live spool, so a
+ * concurrent Stop hook append cannot be erased by a rename race.
  */
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, appendFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, appendFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
 
 import { SIGIL_STOP_SPOOL } from '../lib/paths.js';
@@ -21,6 +23,8 @@ import { maskSecrets } from './secret-mask.js';
 // Cap the spool so a long outage can't grow it unbounded. Oldest entries are
 // dropped first (a very old un-replayable message is the least valuable).
 const MAX_SPOOL_ENTRIES = 500;
+const REPLAY_BATCH_SIZE = 20;
+const ACK_PATH = `${SIGIL_STOP_SPOOL}.acked`;
 
 /**
  * Append a failed turn to the spool. Best-effort and synchronous — the hook is
@@ -32,6 +36,7 @@ function appendSpool({ message, sessionId = null, cwd = null, transcriptPath = n
   try {
     mkdirSync(dirname(SIGIL_STOP_SPOOL), { recursive: true });
     const entry = {
+      uid: `stop-${randomUUID()}`,
       message: maskSecrets(message),
       sessionId,
       cwd,
@@ -47,27 +52,44 @@ function appendSpool({ message, sessionId = null, cwd = null, transcriptPath = n
 function readSpool() {
   if (!existsSync(SIGIL_STOP_SPOOL)) return [];
   try {
+    const acked = readAcked();
     return readFileSync(SIGIL_STOP_SPOOL, 'utf8')
       .split('\n')
       .filter(Boolean)
       .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter((entry) => !acked.has(entryKey(entry)));
   } catch {
     return [];
   }
 }
 
-function writeSpool(entries) {
-  const tmp = `${SIGIL_STOP_SPOOL}.tmp`;
-  const body = entries.map((e) => JSON.stringify(e)).join('\n');
-  writeFileSync(tmp, body ? `${body}\n` : '', 'utf8');
-  renameSync(tmp, SIGIL_STOP_SPOOL);
+function entryKey(entry) {
+  if (entry.uid) return entry.uid;
+  return `legacy-${createHash('sha256').update(JSON.stringify(entry)).digest('hex').slice(0, 24)}`;
+}
+
+function readAcked() {
+  if (!existsSync(ACK_PATH)) return new Set();
+  try {
+    return new Set(readFileSync(ACK_PATH, 'utf8').split('\n').filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+function acknowledge(entries) {
+  if (!entries.length) return;
+  appendFileSync(ACK_PATH, `${entries.map(entryKey).join('\n')}\n`, 'utf8');
 }
 
 function trimSpool() {
   const entries = readSpool();
   if (entries.length > MAX_SPOOL_ENTRIES) {
-    writeSpool(entries.slice(entries.length - MAX_SPOOL_ENTRIES));
+    // Logically discard the oldest entries through the same append-only ACK
+    // path used by replay. Rewriting the spool here would reintroduce the exact
+    // cross-process race the ACK design removed from drainStopSpool().
+    acknowledge(entries.slice(0, entries.length - MAX_SPOOL_ENTRIES));
   }
 }
 
@@ -89,29 +111,31 @@ async function drainStopSpool() {
   const entries = readSpool();
   if (!entries.length) return { drained: 0, remaining: 0, replayed: 0 };
 
-  const { classifyTurn, saveFacts } = await import('./stop-classify.js');
+  const { classifyTurns, saveFacts } = await import('./stop-classify.js');
 
-  const survivors = [];
   let drained = 0;
   let replayed = 0;
 
-  for (const entry of entries) {
+  for (let offset = 0; offset < entries.length; offset += REPLAY_BATCH_SIZE) {
+    const batch = entries.slice(offset, offset + REPLAY_BATCH_SIZE);
     try {
-      const facts = await classifyTurn(entry.message);
+      const classified = await classifyTurns(batch.map((entry) => entry.message));
+      const facts = classified.flat();
       if (facts.length) {
         await saveFacts(facts, { podUids: [], throwOnError: true });
         replayed += facts.length;
       }
-      // Success (saved, or genuinely not memorable) → drop from spool.
-      drained++;
+      // Append-only acknowledgements avoid the old read→rewrite race where a
+      // live hook appended a new turn between those steps and the drain's rename
+      // silently erased it.
+      acknowledge(batch);
+      drained += batch.length;
     } catch {
-      // Still failing (provider/DB down) → keep for the next drain.
-      survivors.push(entry);
+      // Still failing (provider/DB down) → leave every entry unacknowledged.
     }
   }
 
-  writeSpool(survivors);
-  return { drained, remaining: survivors.length, replayed };
+  return { drained, remaining: readSpool().length, replayed };
 }
 
 export { appendSpool, drainStopSpool, spoolCount };

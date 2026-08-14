@@ -8,7 +8,12 @@ import { contextualizeChunks } from './contextualizer.js';
 import * as documentStore from '../memory/documents/store.js';
 import * as chunkStore from '../memory/chunks/store.js';
 import { extractFactsFromChunks } from '../memory/facts/extractor.js';
-import { saveFact, supersedeStaleDocFacts } from '../memory/facts/store.js';
+import {
+  prepareFactBatch,
+  applyPreparedFactBatch,
+  supersedeStaleDocFacts,
+  countActiveByDocuments,
+} from '../memory/facts/store.js';
 import { DEFAULT_CATEGORIES, PERSONAL_CATEGORIES } from '../memory/facts/categories.js';
 import { classifyInput } from '../memory/cognitive/input-classifier.js';
 import { linkDocumentEntities } from '../memory/entities/linker.js';
@@ -20,6 +25,8 @@ import { maskSecrets } from '../hooks/secret-mask.js';
 import config from '../config.js';
 import { getConfig } from '../setup/config-store.js';
 import { PROMPTS_DIR } from '../lib/paths.js';
+import { withWriteLock } from '../daemon/write-queue.js';
+import { queueEntityEnrichment, kickIngestionJobRunner } from './jobs/runner.js';
 
 const DEFAULT_PROMPT_PATH = join(PROMPTS_DIR, 'default-extraction.md');
 
@@ -64,6 +71,14 @@ async function ingestDocument({
   entities,
   skipFacts = false,
   skipEntities = false,
+  // Core ingestion ends once chunks/facts are searchable. Entity and relation
+  // work is a durable follow-up job by default; diagnostics/tests can opt into
+  // synchronous enrichment explicitly.
+  deferEntities = true,
+  // Durable-job retries use this after an interrupted attempt may already have
+  // admitted the content hash. Reprocessing is idempotent: chunks replace the
+  // prior set and facts exact-dedupe at commit.
+  force = false,
   skipContextualization = false,
   classify = true,
   // The caller guarantees `content` is ONE short, self-contained fact, so the
@@ -109,42 +124,64 @@ async function ingestDocument({
       process.stderr.write('  Skipped — classified as noise.' + "\n");
       return { documentId: null, title: finalTitle, skipped: true, route: 'noise' };
     }
+  } else if (atomic) {
+    // The caller already produced one durable fact (Stop hook, spool replay,
+    // explicit atomic API). Re-running a classifier or sending it through the
+    // document extractor is both redundant and slow; preserve it verbatim.
+    classification = {
+      route: 'thought',
+      facts: [{
+        content: content.trim(),
+        category: 'domain_knowledge',
+        confidence: 'high',
+        importance: 'supplementary',
+      }],
+      entities: [],
+      reasoning: 'Caller asserted atomic fact',
+    };
   }
 
   // Step 1: Hash for change detection (before parsing — skip early if unchanged)
   process.stderr.write('[1/6] Checking for changes...' + "\n");
   const contentHash = createHash('sha256').update(content).digest('hex');
   const effectiveSourcePath = sourcePath || `thought:${contentHash}`;
-  const { doc, changed } = await documentStore.upsert({
-    sourcePath: effectiveSourcePath,
-    sourceType,
-    title: finalTitle,
-    contentHash,
-    namespace: ns,
-    // Keep the original text on the row so the document can be handed back
-    // whole later. Chunks alone can't do that: they overlap at every seam.
-    content,
+  // Admission is the first short write section. The old daemon-wide handler
+  // lock wrapped classification, extraction and graph inference too; placing
+  // the lock at the actual mutation boundary lets other ingests prepare in
+  // parallel while PGlite still sees one writer at a time.
+  const admitted = await withWriteLock(async () => {
+    const upserted = await documentStore.upsert({
+      sourcePath: effectiveSourcePath,
+      sourceType,
+      title: finalTitle,
+      contentHash,
+      namespace: ns,
+      // Keep the original text on the row so the document can be handed back
+      // whole later. Chunks alone can't do that: they overlap at every seam.
+      content,
+    });
+
+    const incomplete = !upserted.changed
+      && upserted.doc.chunkCount === 0
+      && upserted.doc.factCount === 0;
+    if (!upserted.changed && !force && !incomplete) return { ...upserted, podAttachments: [] };
+
+    // Persist metadata + pod membership as part of admission. These are short
+    // indexed writes; no model/provider work is allowed in this section.
+    if (metadata && (Object.keys(metadata).length || metadata.connection_id)) {
+      await documentStore.updateSourceMetadata(upserted.doc.id, metadata, metadata.connection_id ?? null);
+    }
+    const attachments = await resolvePodAttachments({ podUids, resolvePodsFrom, metadata, namespace: ns });
+    for (const { podId, role } of attachments) {
+      await podMembership.attachDocument(podId, upserted.doc.id, role);
+    }
+    return { ...upserted, changed: true, podAttachments: attachments };
   });
+  const { doc, changed, podAttachments } = admitted;
 
   if (!changed) {
     process.stderr.write('  Skipped — content unchanged.' + "\n");
     return { documentId: doc.id, documentUid: doc.uid, title: finalTitle, skipped: true };
-  }
-
-  // Persist the metadata payload now that the document row exists.
-  // Connector ingest carries source_metadata.connection_id for the FK;
-  // explicit hook callers usually don't.
-  if (metadata && (Object.keys(metadata).length || metadata.connection_id)) {
-    await documentStore.updateSourceMetadata(doc.id, metadata, metadata.connection_id ?? null);
-  }
-
-  // Resolve the set of pods this document (and its descendant facts) should
-  // attach to. Two sources are merged: explicit uids passed in by callers
-  // (hooks → active session pod) and connector-derived attachments from
-  // source_metadata. Both are no-ops when the inputs are empty.
-  const podAttachments = await resolvePodAttachments({ podUids, resolvePodsFrom, metadata, namespace: ns });
-  for (const { podId, role } of podAttachments) {
-    await podMembership.attachDocument(podId, doc.id, role);
   }
 
   // Step 2: Parse content into text + sections
@@ -155,15 +192,22 @@ async function ingestDocument({
   // Thought fast-path: store facts directly, skip chunking/extraction
   if (classification?.route === 'thought' && classification.facts.length) {
     process.stderr.write(`[thought] Storing ${classification.facts.length} facts directly...` + "\n");
+    try {
 
     // Embed OUTSIDE the tx; then store facts + pod-attach + supersede atomically.
     const thoughtEmbeddings = await embedBatchOrThrow(classification.facts.map((f) => f.content));
-    let thoughtResult = { counts: { total: 0, added: 0, skipped: 0, updated: 0, contradicted: 0 }, results: [] };
-    await cortexDb.transaction(async (trx) => {
-      thoughtResult = await storeFactsInBatches(classification.facts, {
-        documentId: doc.id, namespace: ns, embeddings: thoughtEmbeddings,
-        defaultConfidence: 'high', defaultImportance: 'supplementary', db: trx,
-      });
+    const preparedThoughts = await prepareFactBatch(buildFactSpecs(classification.facts, {
+      documentId: doc.id,
+      namespace: ns,
+      embeddings: thoughtEmbeddings,
+      defaultConfidence: 'high',
+      defaultImportance: 'supplementary',
+    }));
+    let thoughtResult = { counts: emptyFactCounts(), results: [] };
+    let stagedEntityJob = null;
+    await withWriteLock(() => cortexDb.transaction(async (trx) => {
+      const results = await applyPreparedFactBatch(preparedThoughts, { db: trx });
+      thoughtResult = summarizeFactResults(results);
       // Mirror the document's pod attachments down to its facts so a session
       // pod query surfaces the actual fact rows, not just the document.
       await attachFactsToPods(thoughtResult.results, podAttachments, trx);
@@ -174,14 +218,23 @@ async function ingestDocument({
         thoughtResult.results.map((r) => r.fact?.id ?? r.existing?.id).filter(Boolean),
         trx,
       );
-    });
-
-    await documentStore.updateCounts(doc.id, { chunkCount: 0, factCount: thoughtResult.counts.added });
+      const activeCounts = await countActiveByDocuments([doc.id], trx);
+      await documentStore.updateCounts(doc.id, { chunkCount: 0, factCount: activeCounts.get(Number(doc.id)) || 0 }, trx);
+      if (!skipEntities && deferEntities && thoughtResult.results.length) {
+        stagedEntityJob = await queueEntityEnrichment({
+          documentId: doc.id, namespace: ns, title: finalTitle,
+          sourceType, metadata, entities,
+        }, trx);
+      }
+    }));
 
     // Entities AFTER commit — additive graph enrichment, must not roll back facts.
     let entityResult = { entityCount: 0, relationCount: 0, factEntityLinks: 0, topics: [] };
     if (!skipEntities && thoughtResult.results.length) {
-      try {
+      if (deferEntities) {
+        kickIngestionJobRunner();
+        entityResult = queuedEntityResult(stagedEntityJob);
+      } else try {
         entityResult = await linkDocumentEntities(
           { title: finalTitle, sourceType, metadata },
           thoughtResult.results,
@@ -204,11 +257,19 @@ async function ingestDocument({
       facts: { ...thoughtResult.counts, verdicts: traceVerdicts(thoughtResult.results) },
       entities: entityResult,
     };
+    } catch (err) {
+      // A changed source may still have the previous version's non-zero fact
+      // count. Reset the newly-admitted hash so that retry cannot mistake that
+      // older completed version for this failed one.
+      await documentStore.resetHash(doc.id).catch(() => {});
+      throw err;
+    }
   }
 
   let chunks = [];
   let factResult = { counts: { total: 0, added: 0, skipped: 0, updated: 0, contradicted: 0 }, results: [] };
   let entityResult = { entityCount: 0, relationCount: 0, factEntityLinks: 0, topics: [] };
+  let stagedEntityJob = null;
 
   try {
     // Step 3: Chunk + contextualize + embed
@@ -216,46 +277,52 @@ async function ingestDocument({
     chunks = chunkSections(parsed.sections);
     process.stderr.write(`  ${chunks.length} chunks created` + "\n");
 
-    if (!skipContextualization && chunks.length) {
-      chunks = await contextualizeChunks(chunks, parsed.text, { title: finalTitle });
-    }
-
-    const texts = chunks.map((c) => {
-      const prefix = c.contextualPrefix;
-      return prefix ? `${prefix}\n${c.content}` : c.content;
-    });
-    const embeddings = await embedBatchOrThrow(texts);
-
-    const chunksWithEmbeddings = chunks.map((chunk, i) => ({
-      ...chunk,
-      embedding: embeddings[i],
-    }));
-
-    // Step 4: Extract facts (LLM) + embed them — done OUTSIDE the transaction
-    // so a pooled DB connection isn't held across multi-second LLM/embed calls.
-    let rawFacts = [];
-    let factEmbeddings = [];
+    // Context prefixes and fact extraction both read the same raw chunks and do
+    // not depend on each other. Run the two model calls together; then batch the
+    // two independent embedding sets together as well.
+    const contextualizePromise = !skipContextualization && chunks.length
+      ? contextualizeChunks(chunks, parsed.text, { title: finalTitle })
+      : Promise.resolve(chunks);
+    let extractPromise = Promise.resolve([]);
     if (!skipFacts && config.ingest.eagerExtract) {
       process.stderr.write('[4/6] Extracting facts...' + "\n");
-      rawFacts = await extractFactsFromChunks(chunks, { promptPath: prompt, categories: cats });
-      process.stderr.write(`  ${rawFacts.length} facts extracted from ${chunks.length} chunks` + "\n");
-      if (rawFacts.length) factEmbeddings = await embedBatchOrThrow(rawFacts.map((f) => f.content));
+      extractPromise = extractFactsFromChunks(chunks, { promptPath: prompt, categories: cats });
     } else if (!config.ingest.eagerExtract) {
       process.stderr.write('[4/6] Skipping fact extraction (SIGIL_EAGER_EXTRACT=false)' + "\n");
     }
 
-    // ATOMIC write region: chunks + facts + pod-attach + supersede commit
-    // together or roll back together — no orphaned chunks-without-facts, no
-    // facts missing their pod attachment. findSimilar runs on `trx` so
-    // within-batch AUDM dedup sees facts inserted earlier in this ingest.
-    // (AUDM's decide-call is the one LLM still inside — fires only for
-    // ambiguous-similarity facts, so the connection hold is bounded.)
-    await cortexDb.transaction(async (trx) => {
+    let rawFacts;
+    [chunks, rawFacts] = await Promise.all([contextualizePromise, extractPromise]);
+    if (!skipFacts && config.ingest.eagerExtract) {
+      process.stderr.write(`  ${rawFacts.length} facts extracted from ${chunks.length} chunks` + "\n");
+    }
+
+    const texts = chunks.map((c) => c.contextualPrefix ? `${c.contextualPrefix}\n${c.content}` : c.content);
+    const [embeddings, factEmbeddings] = await Promise.all([
+      embedBatchOrThrow(texts),
+      rawFacts.length ? embedBatchOrThrow(rawFacts.map((f) => f.content)) : Promise.resolve([]),
+    ]);
+    const chunksWithEmbeddings = chunks.map((chunk, i) => ({ ...chunk, embedding: embeddings[i] }));
+
+    // AUDM preparation (ANN reads + at most one batched judge call) remains
+    // outside the transaction.
+    let preparedFacts = [];
+    if (rawFacts.length) {
+      preparedFacts = await prepareFactBatch(buildFactSpecs(rawFacts, {
+        documentId: doc.id,
+        namespace: ns,
+        embeddings: factEmbeddings,
+      }));
+    }
+
+    // ATOMIC write region: SQL only. Chunks + prepared fact verdicts + pod
+    // attachment + stale retirement commit together; every model and embedding
+    // call finished before this lock was acquired.
+    await withWriteLock(() => cortexDb.transaction(async (trx) => {
       await chunkStore.insertChunks(doc.id, chunksWithEmbeddings, ns, trx);
-      if (rawFacts.length) {
-        factResult = await storeFactsInBatches(rawFacts, {
-          documentId: doc.id, namespace: ns, embeddings: factEmbeddings, db: trx,
-        });
+      if (preparedFacts.length) {
+        const results = await applyPreparedFactBatch(preparedFacts, { db: trx });
+        factResult = summarizeFactResults(results);
       }
       // Mirror the document's pod attachments down to its facts — inside the tx
       // so a fact and its pod membership commit atomically (no invisible-to-
@@ -268,20 +335,29 @@ async function ingestDocument({
         factResult.results.map((r) => r.fact?.id ?? r.existing?.id).filter(Boolean),
         trx,
       );
-    });
-
-    // After commit — cosmetic counts; a failure here can't orphan data.
-    await documentStore.updateCounts(doc.id, {
-      chunkCount: chunks.length,
-      factCount: factResult.counts.added + factResult.counts.updated + factResult.counts.contradicted,
-    });
+      const activeCounts = await countActiveByDocuments([doc.id], trx);
+      await documentStore.updateCounts(doc.id, {
+        chunkCount: chunks.length,
+        factCount: activeCounts.get(Number(doc.id)) || 0,
+      }, trx);
+      if (!skipEntities && deferEntities && factResult.results.length) {
+        stagedEntityJob = await queueEntityEnrichment({
+          documentId: doc.id, namespace: ns, title: finalTitle,
+          sourceType, metadata, entities,
+        }, trx);
+      }
+    }));
 
     // Step 5: Link entities — graph enrichment, AFTER facts are durably
     // committed. A linking failure must not roll back valid facts, so it's
     // caught here: the facts are already committed and a partial graph is fine.
     if (!skipEntities && factResult.results.length) {
       process.stderr.write('[5/6] Linking entities...' + "\n");
-      try {
+      if (deferEntities) {
+        kickIngestionJobRunner();
+        entityResult = queuedEntityResult(stagedEntityJob);
+        process.stderr.write(`  Entity enrichment queued${entityResult.jobUid ? ` (${entityResult.jobUid})` : ''}` + "\n");
+      } else try {
         entityResult = await linkDocumentEntities({
           title: finalTitle,
           sourceType,
@@ -317,6 +393,163 @@ async function ingestDocument({
   };
 }
 
+/**
+ * Fast lane for explicit atomic memories (`remember` and classified Stop-hook
+ * facts). The caller already decided these strings are durable facts, so there
+ * is no classifier, chunker, contextualizer, extractor, or synchronous graph
+ * work. All embeddings and AUDM comparisons are batched; SQL is confined to
+ * admission and one commit transaction.
+ */
+async function ingestAtomicFacts({ facts, namespace, podUids = [] }) {
+  assertEmbeddingReady();
+  const ns = namespace || config.defaults.namespace;
+  const sourceFacts = Array.isArray(facts) ? facts : [];
+  const inputs = sourceFacts
+    .map((content, originalIndex) => ({
+      content: maskSecrets(String(content || '').trim()),
+      originalIndex,
+    }))
+    .filter((input) => Boolean(input.content))
+    .map(({ content, originalIndex }) => ({
+      content,
+      originalIndex,
+      category: inferAtomicCategory(content),
+      confidence: 'high',
+      importance: 'supplementary',
+    }));
+  if (!inputs.length) {
+    return {
+      counts: { ...emptyFactCounts(sourceFacts.length), skipped: sourceFacts.length },
+      results: sourceFacts.map(() => ({ action: 'SKIP_EMPTY' })),
+      documents: [],
+    };
+  }
+
+  // Pod lookup is read-only and must not wait behind an unrelated writer.
+  const attachments = await resolvePodAttachments({
+    podUids,
+    resolvePodsFrom: null,
+    metadata: {},
+    namespace: ns,
+  });
+
+  const admissions = await withWriteLock(async () => {
+    const rows = [];
+    for (const input of inputs) {
+      const contentHash = createHash('sha256').update(input.content).digest('hex');
+      const admitted = await documentStore.upsert({
+        sourcePath: `thought:${contentHash}`,
+        sourceType: 'raw',
+        title: null,
+        contentHash,
+        namespace: ns,
+        content: input.content,
+      });
+      const changed = admitted.changed || (!admitted.changed && admitted.doc.factCount === 0);
+      if (changed) {
+        for (const { podId, role } of attachments) {
+          await podMembership.attachDocument(podId, admitted.doc.id, role);
+        }
+      }
+      rows.push({ ...admitted, changed, input, contentHash });
+    }
+    return rows;
+  });
+
+  const changed = admissions.filter((a) => a.changed);
+  if (!changed.length) {
+    const results = sourceFacts.map(() => ({ action: 'SKIP_EMPTY' }));
+    for (const admission of admissions) {
+      results[admission.input.originalIndex] = {
+        action: 'SKIP_DOCUMENT',
+        document: admission.doc,
+      };
+    }
+    return {
+      counts: { ...emptyFactCounts(sourceFacts.length), skipped: sourceFacts.length },
+      results,
+      documents: admissions.map((a) => a.doc),
+    };
+  }
+
+  try {
+    const embeddings = await embedBatchOrThrow(changed.map((a) => a.input.content));
+    const specs = changed.map((a, index) => ({
+      ...a.input,
+      namespace: ns,
+      sourceDocumentIds: [a.doc.id],
+      sourceSection: a.input.category,
+      embedding: embeddings[index],
+    }));
+    const prepared = await prepareFactBatch(specs);
+    let stored = [];
+    let stagedEntityJob = null;
+    await withWriteLock(() => cortexDb.transaction(async (trx) => {
+      stored = await applyPreparedFactBatch(prepared, { db: trx });
+      for (let index = 0; index < changed.length; index++) {
+        const admission = changed[index];
+        const result = stored[index];
+        await attachFactsToPods([result], attachments, trx);
+        const factId = result?.fact?.id ?? result?.existing?.id;
+        await supersedeStaleDocFacts(admission.doc.id, factId ? [factId] : [], trx);
+      }
+      const activeCounts = await countActiveByDocuments(changed.map((admission) => admission.doc.id), trx);
+      for (const admission of changed) {
+        await documentStore.updateCounts(admission.doc.id, {
+          chunkCount: 0,
+          factCount: activeCounts.get(Number(admission.doc.id)) || 0,
+        }, trx);
+      }
+      stagedEntityJob = await queueEntityEnrichment({
+        documentIds: changed.map((admission) => admission.doc.id),
+        namespace: ns,
+        title: null,
+        sourceType: 'raw',
+        metadata: {},
+      }, trx);
+    }));
+
+    // Preserve a strict one-result-per-input contract. Callers use this array
+    // to attribute AUDM verdicts back to the exact input, so changed results
+    // cannot simply be followed by unchanged-document sentinels.
+    const results = sourceFacts.map(() => ({ action: 'SKIP_EMPTY' }));
+    const storedByInput = new Map(changed.map((a, index) => [a.input.originalIndex, stored[index]]));
+    for (const admission of admissions) {
+      results[admission.input.originalIndex] = admission.changed
+        ? { ...storedByInput.get(admission.input.originalIndex), document: admission.doc }
+        : { action: 'SKIP_DOCUMENT', document: admission.doc };
+    }
+    const storedSummary = summarizeFactResults(results);
+    // Atomic callers commonly submit several independent facts at once. The
+    // single graph job was inserted in the fact transaction above, so the core
+    // commit and its enrichment outbox record are all-or-nothing.
+    kickIngestionJobRunner();
+    const queued = queuedEntityResult(stagedEntityJob);
+    const enrichmentJobs = queued.jobUid ? [queued.jobUid] : [];
+    return {
+      ...storedSummary,
+      documents: admissions.map((a) => a.doc),
+      unchanged: admissions.length - changed.length,
+      enrichmentJobs,
+    };
+  } catch (err) {
+    await Promise.all(changed.map((a) => documentStore.resetHash(a.doc.id).catch(() => {})));
+    throw err;
+  }
+}
+
+// Cheap category hints keep personal facts global on the fast lane. Richer
+// classification belongs to asynchronous enrichment, not write acceptance.
+function inferAtomicCategory(content) {
+  const s = content.toLowerCase();
+  if (/\b(prefers?|likes?|dislikes?|hates?|favo(?:u)?rs?)\b/.test(s)) return 'preference';
+  if (/\b(decided|decision|chose|picked|moved (?:to|off)|will use)\b/.test(s)) return 'decision';
+  if (/\b(must|cannot|can't|required?|constraint|blocked)\b/.test(s)) return 'business_rule';
+  if (/\b(bug|issue|failure|broken|risk|limitation)\b/.test(s)) return 'issue';
+  if (/\b(todo|follow[- ]?up|needs? to|should)\b/.test(s)) return 'action_item';
+  return 'domain_knowledge';
+}
+
 // Compact per-fact AUDM verdicts for the trace log: the action taken, the
 // fact text, and the similarity/decision telemetry from saveFact().
 function traceVerdicts(results) {
@@ -330,35 +563,46 @@ function traceVerdicts(results) {
   }));
 }
 
-async function storeFactsInBatches(facts, { documentId, namespace, embeddings, defaultConfidence = 'medium', defaultImportance = 'supplementary', db } = {}) {
-  const counts = { total: facts.length, added: 0, skipped: 0, updated: 0, contradicted: 0 };
-  const allResults = [];
+function emptyFactCounts(total = 0) {
+  return { total, added: 0, skipped: 0, updated: 0, contradicted: 0 };
+}
 
-  // Facts are stored sequentially to prevent AUDM race conditions.
-  // Two similar facts processed in parallel could both pass findSimilar
-  // before either is inserted, bypassing deduplication.
-  for (let a = 0; a < facts.length; a++) {
-    const raw = facts[a];
-    const result = await saveFact({
-      content: raw.content,
-      category: raw.category,
-      confidence: raw.confidence || defaultConfidence,
-      importance: raw.importance || defaultImportance,
-      namespace,
-      sourceDocumentIds: documentId ? [documentId] : [],
-      sourceSection: raw.sourceSection || raw.category,
-      embedding: embeddings[a],
-    }, db);
-    allResults.push(result);
+function buildFactSpecs(facts, {
+  documentId,
+  namespace,
+  embeddings,
+  defaultConfidence = 'medium',
+  defaultImportance = 'supplementary',
+} = {}) {
+  return facts.map((raw, index) => ({
+    content: raw.content,
+    category: raw.category,
+    confidence: raw.confidence || defaultConfidence,
+    importance: raw.importance || defaultImportance,
+    namespace,
+    sourceDocumentIds: documentId ? [documentId] : [],
+    sourceSection: raw.sourceSection || raw.category,
+    embedding: embeddings[index],
+    visibility: raw.visibility,
+  }));
+}
 
-    const action = result.action.toLowerCase();
+function summarizeFactResults(results) {
+  const counts = emptyFactCounts(results.length);
+  for (const result of results) {
+    const action = String(result?.action || '').toLowerCase();
     if (action === 'add') counts.added++;
-    else if (action === 'skip') counts.skipped++;
+    else if (action === 'skip' || action === 'skip_document' || action === 'skip_empty') counts.skipped++;
     else if (action === 'update') counts.updated++;
     else if (action === 'contradict') counts.contradicted++;
   }
+  return { counts, results };
+}
 
-  return { counts, results: allResults };
+function queuedEntityResult(queued) {
+  return queued
+    ? { queued: true, jobUid: queued.job.uid, entityCount: 0, relationCount: 0, factEntityLinks: 0, topics: [] }
+    : { queued: false, entityCount: 0, relationCount: 0, factEntityLinks: 0, topics: [] };
 }
 
 
@@ -422,4 +666,4 @@ async function attachFactsToPods(results, attachments, db) {
 }
 
 
-export { ingestDocument };
+export { ingestDocument, ingestAtomicFacts, inferAtomicCategory };

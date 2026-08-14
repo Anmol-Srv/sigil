@@ -141,15 +141,17 @@ const config = {
     // ingest calls. Only meaningful on a host with `tmux` and the `claude` CLI.
     managedSession: {
       get enabled() { return store().llm.managedSession?.enabled === true; },
-      // Workers per source type. 1 = strictly serial per engine (matches the
-      // "one session per source type" model); raise to lift the serial-latency
-      // ceiling. Bounded RAM = poolSize × live agent processes per type.
-      get poolSize() { return Math.max(1, Number(store().llm.managedSession?.poolSize ?? 1) || 1); },
+      // Workers in the ingest lane. Interactive and maintenance each have a
+      // separate worker; two ingest workers lift the old global serial ceiling.
+      get poolSize() { return Math.max(1, Number(store().llm.managedSession?.poolSize ?? 2) || 2); },
       // Recycle a worker once it has processed ~this many tokens (the "context
       // cap" / budget-window reset). Caps cross-task context bleed + memory creep.
       get tokenBudget() { return Number(store().llm.managedSession?.tokenBudget ?? 60000) || 60000; },
       // Dead-man timeout per task → one-shot fallback + recycle.
       get taskTimeoutMs() { return Number(store().llm.managedSession?.taskTimeoutMs ?? 120000) || 120000; },
+      // Deadline for work that never reaches a worker. taskTimeoutMs starts
+      // only after dispatch; without this a booting/busy pool could strand it.
+      get queueTimeoutMs() { return Number(store().llm.managedSession?.queueTimeoutMs ?? 45000) || 45000; },
       // Boot handshake window: how long to wait for a freshly-spawned worker's
       // first get_task before re-nudging once, then recycling. Must clear a cold
       // `claude` TUI render (~10s) PLUS one agent turn — measured 20-30s. At the
