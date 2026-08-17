@@ -1380,7 +1380,7 @@ The <id> can be any of:
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
   const client = await connectOrStartDaemon();
   try {
-    const { data } = await client.call('forgetFact', { id: idArg });
+    const { data } = await client.call('forgetFact', { uid: idArg });
     if (data.notFound) {
       console.error(`No fact matches: ${idArg}`);
       process.exit(1);

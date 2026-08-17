@@ -7,9 +7,9 @@ export function registerForgetFact(registry) {
     const { deleteFact } = await import('../../memory/facts/store.js');
     const { default: cortexDb } = await import('../../db/cortex.js');
 
-    const idArg = String(params.id ?? '').trim();
+    const idArg = String(params.uid ?? '').trim();
     if (!idArg) {
-      const err = new Error('forgetFact: params.id required');
+      const err = new Error('forgetFact: params.uid required');
       err.code = 'invalid_params';
       throw err;
     }
