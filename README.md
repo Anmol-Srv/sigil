@@ -289,7 +289,44 @@ Use cases this unlocks:
 
 - **Laptop + desktop.** Same memory across both, no manual sync.
 - **Local dev + cloud agent.** Your laptop's Claude Code and a Sentry-triage agent running on a VPS share one brain. The agent writes "fixed prod issue X by patching Y"; your morning prompt sees it.
-- **Multi-agent workflows.** Claude Code + Hermes + Codex all hitting the same memory. Each pod kind keeps writes attributed; agents in 0.11.0+ get their own `agent:<name>` pod for write attribution.
+- **Multi-agent workflows.** Claude Code + Hermes + Codex all hitting the same memory. Every fact records the device and agent that wrote it (`created_by_device_id` / `created_by_agent`), so writes are attributed at the data layer even though that provenance isn't surfaced in the CLI/MCP output yet. See [Multi-user and shared-project memory](#multi-user-and-shared-project-memory) for what attribution does and doesn't enforce today.
+
+> **Note:** "cross-machine" here means *one owner running Sigil on several machines* that point at the same Postgres. It is not multi-person collaboration — there is no per-user read filtering. See [Multi-user and shared-project memory](#multi-user-and-shared-project-memory).
+
+---
+
+## Multi-user and shared-project memory
+
+This section documents how Sigil's memory is actually scoped today, so you don't assume isolation that isn't there. Accuracy first: several fields exist in the schema as forward-looking contracts but are not yet enforced.
+
+### The data model: namespace × pod × kind × visibility × writePolicy × attribution
+
+| Concept | What it is | Enforced today? |
+|---|---|---|
+| **namespace** | Top-level partition for reads. Set once per install via `DEFAULT_NAMESPACE` (defaults to `default`). `sigil search --namespace <ns>` filters reads to one namespace. | **Yes**, at read time. But it is effectively *single per install* — there is no per-project or per-user namespace assignment. |
+| **pod** | A typed container of facts. Project pods are keyed on the **absolute local path** of the project root (`git rev-parse --show-toplevel`, else cwd). | Identity is path-based, so the *same repo on two machines or two checkout paths is two different project pods*. |
+| **kind** | The pod's contract (`claude_session`, `project`, `person`, `playbook`, `vital`): identity field, decay, hot-context budget, and the `visibility` / `writePolicy` defaults below. | Drives retrieval/hot-context behavior. |
+| **visibility** (`private` / `shared` / `public`) | Declared per kind: `claude_session` + `person` = private, `project` + `playbook` = shared, `vital` = public. | **Not enforced at read time.** There is no owner/device filtering in search. `visibility` only weights hot-context blending. |
+| **writePolicy** (`origin-only` / `shared-allowlist` / `open`) | Declared per kind and validated when a kind registers. | **Not enforced anywhere** — it is currently a dead contract. |
+| **attribution** | Every fact stores `created_by_device_id` and `created_by_agent`. | **Stored** (and selected in search SQL), but **not surfaced** in CLI/MCP output and **not used to filter** results. |
+
+What this means in practice:
+
+- A single install is effectively one namespace shared by everything on the machine. Pods partition *retrieval scope* (which facts are "active" right now), not *access*.
+- Because project identity is the absolute path, moving or re-cloning a repo creates a fresh project pod rather than continuing the old one.
+- Nothing today restricts who can read or write a pod based on `visibility` or `writePolicy`. Treat them as the *intended* model, not a security boundary.
+- Pairing/sync (`sigil pair` / `sigil join`, backed by the `device` and `pairing_code` tables) is **single-owner multi-device**: it links your own machines to one master install. It is not multi-person collaboration.
+
+### Where this is going
+
+The fields above (path-based identity, `visibility`, `writePolicy`, attribution columns) are the scaffolding for a model where a **shared project memory and a private personal memory can live in one namespace** without leaking into each other. The following companion changes implement that path:
+
+- **P1 — stable project identity** (`feat/p1-project-identity`): make a project pod identifiable independent of its absolute local path, so the same repo on different machines/checkouts resolves to one project pod.
+- **P2 — owner-scoped private reads** (`feat/p2-owner-scoped-read`): actually enforce per-owner scoping at read time, so `private` pods stop being globally visible.
+- **P3 — per-project namespace marker** (`feat/p3-project-namespace`): give a project a stable namespace marker so its shared memory is addressable as a unit.
+- **P4 — attribution UX** (`feat/p4-attribution-ux`): surface the existing `created_by_device_id` / `created_by_agent` provenance in the CLI/MCP output instead of hiding it in the schema.
+
+Together these turn the currently-declarative `visibility` / `writePolicy` / attribution fields into an enforced model: shared-project facts that the whole team's installs can read, alongside owner-private facts that stay scoped to one person — all in a single namespace.
 
 ---
 
@@ -415,7 +452,12 @@ A: It depends on your providers. Memory storage is your own Postgres. Embeddings
 A: `sigil export --format=json --output=backup.json` exports facts, entities, pods, and documents. Or take a Postgres dump (`pg_dump sigil > sigil.sql`). To restore on a new machine: `pg_restore` then `sigil migrate` then `sigil init` (to set up the env).
 
 **Q: Multi-user / team support?**
-A: Single-user for now. Multiple installs sharing one Postgres works (see [Cross-machine memory](#cross-machine-memory)) but write attribution and ACLs (each pod is private / shared / public) land in 0.11.0+ along with the `agent` kind.
+A: Single-user today. Multiple installs sharing one Postgres works (see [Cross-machine memory](#cross-machine-memory)), but that is *one owner on several machines*, not collaboration between people. Two important nuances often get conflated:
+
+- **Attribution exists; ACLs don't (yet).** Every fact already records `created_by_device_id` and `created_by_agent`, so the data layer knows who wrote what. But the `visibility` (`private`/`shared`/`public`) and `writePolicy` (`origin-only`/`shared-allowlist`/`open`) fields declared on each pod kind are **not enforced at read or write time** — searches return facts regardless of owner or device. `visibility` only influences hot-context blending; `writePolicy` is currently an unenforced contract.
+- **Pairing/sync is single-owner.** `sigil pair` / `sigil join` link your *own* devices to one master install. They do not grant another person scoped access.
+
+See [Multi-user and shared-project memory](#multi-user-and-shared-project-memory) for the full data model and the planned path to real shared-project + private-personal memory.
 
 **Q: What happens if a hook crashes?**
 A: Your prompt still goes through. Every hook wraps in a top-level try/catch that fails silently, Sigil's invariant is **a broken memory layer must never block a working prompt.** Errors append to `~/.sigil/.hook-errors.log`; `sigil doctor` surfaces them. After 5 unacked errors in 24h, `sigil doctor` exits with code 1 so CI / scripts can catch it.
