@@ -19,29 +19,35 @@
  * `restart: true` means the value is read once at daemon boot. Everything else
  * is read through config's live getters and takes effect on the next call.
  *
- * `tier` splits the surface in two. General is what someone changes because
- * they decided something about how they work; Advanced changes how retrieval
- * and ranking behave, where a wrong value degrades recall quietly rather than
- * failing loudly. Forty-five controls in one list is a wall — this is the
- * progressive disclosure the rest of the dashboard already practises.
+ * `tier` groups sections by WHAT THEY ARE ABOUT, not by how dangerous they
+ * are. The old split was General vs Advanced, which put Ingestion in one half
+ * and Memory & deduplication — the next stage of the same pipeline — in the
+ * other, and separated Search from the co-retrieval weights that reorder its
+ * results. Difficulty is a property of an individual knob, not a place to
+ * file it; the `restart` marker and each setting's help already carry that.
+ * Grouping by domain means the rail answers "where would this live?" instead
+ * of "did whoever wrote it think this was hard?". Forty-five controls in one
+ * list is still a wall — the rail is the progressive disclosure.
  */
 
 export const SETTINGS_SECTIONS = [
   {
-    id: 'identity',
-    tier: 'general',
-    title: 'Identity',
-    help: 'Who this knowledge base belongs to. The owner is a real entity in the graph — facts written as "User prefers…" attach to this name.',
+    id: 'general',
+    tier: 'workspace',
+    title: 'General',
+    help: 'Who this knowledge base belongs to and what it assumes when a caller says nothing. The owner is a real entity in the graph — facts written as "User prefers…" attach to this name.',
     settings: [
       { path: 'identity.name', label: 'Your name', type: 'text', placeholder: 'Anmol',
         help: 'Used to resolve the knowledge-base owner. Changing it re-points new owner facts; existing ones keep their entity.' },
       { path: 'defaults.namespace', label: 'Default namespace', type: 'text', placeholder: 'default',
         help: 'Namespace used when a caller does not name one.' },
+      { path: 'preferences.noUpdateCheck', label: 'Skip update checks', type: 'boolean',
+        help: 'Sigil checks the release branch in the background and tells you when an update is available.' },
     ],
   },
   {
     id: 'ingest',
-    tier: 'general',
+    tier: 'pipeline',
     title: 'Ingestion',
     help: 'What happens when a fact or document is written.',
     settings: [
@@ -57,8 +63,8 @@ export const SETTINGS_SECTIONS = [
   },
   {
     id: 'memory',
-    tier: 'advanced',
-    title: 'Memory & deduplication',
+    tier: 'pipeline',
+    title: 'Deduplication',
     help: 'AUDM decides whether an incoming fact is new, an update, or a duplicate. These are cosine-similarity cutoffs between 0 and 1.',
     settings: [
       { path: 'memory.skipThreshold', label: 'Skip as duplicate above', type: 'number', min: 0, max: 1, step: 0.01,
@@ -69,17 +75,18 @@ export const SETTINGS_SECTIONS = [
         help: 'Below this, a fact is never considered a replacement for an existing one.' },
       { path: 'memory.supersedeScanLimit', label: 'Supersede scan limit', type: 'number', min: 1, max: 50, step: 1,
         help: 'How many similar facts to weigh when deciding what a new one replaces.' },
-      { path: 'memory.minFactSimilarity', label: 'Minimum search similarity', type: 'number', min: 0, max: 1, step: 0.01,
-        help: 'Facts below this never reach results at all.' },
-      { path: 'memory.injectionFloor', label: 'Auto-injection floor', type: 'number', min: 0, max: 1, step: 0.01,
-        help: 'The precision gate for unprompted recall injected into agent prompts. Higher means quieter but surer.' },
     ],
   },
   {
     id: 'search',
-    tier: 'general',
+    tier: 'pipeline',
     title: 'Search',
+    help: 'What comes back when something asks, and how sure it has to be first.',
     settings: [
+      { path: 'memory.minFactSimilarity', label: 'Minimum similarity', type: 'number', min: 0, max: 1, step: 0.01,
+        help: 'Facts below this never reach results at all.' },
+      { path: 'memory.injectionFloor', label: 'Auto-injection floor', type: 'number', min: 0, max: 1, step: 0.01,
+        help: 'The precision gate for unprompted recall injected into agent prompts. Higher means quieter but surer.' },
       { path: 'search.synthesize', label: 'Synthesize an answer', type: 'boolean',
         help: 'Compose a written answer from the retrieved facts. Costs one model call per search.' },
       { path: 'search.synthesizeModel', label: 'Synthesis model', type: 'text', placeholder: '(provider default)',
@@ -88,7 +95,7 @@ export const SETTINGS_SECTIONS = [
   },
   {
     id: 'engine',
-    tier: 'advanced',
+    tier: 'system',
     title: 'LLM engine',
     help: 'Warm workers keep `claude` alive in tmux so calls skip process startup. Pool changes need a daemon restart — the pool is built once at boot.',
     settings: [
@@ -120,7 +127,7 @@ export const SETTINGS_SECTIONS = [
   },
   {
     id: 'hebbian',
-    tier: 'advanced',
+    tier: 'pipeline',
     title: 'Co-retrieval learning',
     help: 'Entities retrieved together get a link that strengthens with use and decays with time, so the graph learns what actually goes together.',
     settings: [
@@ -140,17 +147,8 @@ export const SETTINGS_SECTIONS = [
     ],
   },
   {
-    id: 'updates',
-    tier: 'general',
-    title: 'Updates',
-    settings: [
-      { path: 'preferences.noUpdateCheck', label: 'Skip update checks', type: 'boolean',
-        help: 'Sigil checks the release branch in the background and tells you when an update is available.' },
-    ],
-  },
-  {
     id: 'server',
-    tier: 'advanced',
+    tier: 'system',
     title: 'Server',
     help: 'The local HTTP surface this dashboard is served from. Changes need a daemon restart.',
     settings: [
@@ -162,7 +160,7 @@ export const SETTINGS_SECTIONS = [
   },
   {
     id: 'output',
-    tier: 'advanced',
+    tier: 'system',
     title: 'Output',
     help: 'Where generated artifacts are written.',
     settings: [
@@ -178,8 +176,10 @@ export const SETTINGS_SECTIONS = [
 
 /** Flat path → definition, for validating a write. */
 export const SETTINGS_TIERS = [
-  { id: 'general', label: 'General', help: 'Everyday choices about how Sigil works for you.' },
-  { id: 'advanced', label: 'Advanced', help: 'Retrieval, ranking and engine internals. A wrong value here degrades recall quietly rather than failing loudly.' },
+  { id: 'workspace', label: 'Workspace', help: 'Who this knowledge base belongs to and how it behaves day to day.' },
+  { id: 'pipeline', label: 'Memory pipeline', help: 'The path a fact takes from arriving to being recalled: what gets extracted, what counts as a duplicate, what comes back. A wrong value here degrades recall quietly rather than failing loudly.' },
+  { id: 'system', label: 'System', help: 'The providers, processes and endpoints Sigil runs on.' },
+  { id: 'admin', label: 'Maintenance', help: 'Internals and irreversible actions. Nothing here is needed for normal use.' },
 ];
 
 export const SETTINGS_BY_PATH = new Map(

@@ -8,13 +8,21 @@
  * The shape is deliberate. Forty-five controls in one scroll is the drift
  * DESIGN.md warns about — the rest of the dashboard reveals one section at a
  * time. Navigation is a rail: search at the top, then categories grouped by
- * tier, with Advanced collapsed by default. Nine categories outgrow horizontal
- * tabs (they cramp and then wrap); a vertical list has room for a label per row
- * and stays readable as the schema grows. General is eight settings someone
- * might actually change; Advanced holds the thirty-seven that alter retrieval
- * and ranking. They are separated, not hidden — everything stays one click
- * away, with the heading telling you which half you are in. Search cuts across
- * both.
+ * tier. Ten categories outgrow horizontal tabs (they cramp and then wrap); a
+ * vertical list has room for a label per row and stays readable as the schema
+ * grows. Nothing is hidden — everything stays one click away, and search cuts
+ * across every group at once.
+ *
+ * `extras` is why the rail is the WHOLE page rather than a widget on it. The
+ * Settings view used to be a stack of hand-written panels (the provider
+ * readout, the config-file dump, the RPC catalog, the danger zone) with this
+ * schema-driven rail wedged in the middle — two competing organisations on one
+ * screen, so "where do I change X" had two different answers depending on
+ * which X. An extra is a category whose body is an existing DOM node instead
+ * of generated rows: same rail, same panel, same heading. The nodes are parked
+ * in a hidden holder between visits because this page re-renders itself with
+ * innerHTML, which would otherwise destroy markup and listeners it does not
+ * own.
  *
  * Controls are chosen by what the value IS, not by its JS type. A similarity
  * threshold is a position in a range, so it gets a slider you can feel plus a
@@ -23,13 +31,15 @@
  * borrowed from a form.
  */
 import { icon } from './icons.js';
+import { confirmDialog } from './components.js';
 
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const CATEGORY_ICON = {
-  identity: 'home', ingest: 'plus', memory: 'layers', search: 'search',
-  engine: 'cpu', hebbian: 'graph', server: 'monitor', output: 'doc',
+  general: 'home', ingest: 'plus', memory: 'layers', search: 'search',
+  hebbian: 'graph', providers: 'database', engine: 'cpu', server: 'monitor',
+  output: 'doc', developer: 'terminal', danger: 'alert',
 };
 
 /**
@@ -97,7 +107,7 @@ function row(d) {
   </div>`;
 }
 
-export function initSettings({ rpc, toast, mount }) {
+export function initSettings({ rpc, toast, mount, extras = [] }) {
   const host = typeof mount === 'string' ? document.querySelector(mount) : mount;
   if (!host) return { refresh: () => {} };
 
@@ -138,26 +148,51 @@ export function initSettings({ rpc, toast, mount }) {
   }
 
   function visibleCount(section) {
+    // An extra owns handwritten markup, so there are no rows to count and
+    // nothing for the search index to match; it stays listed but scores zero.
+    if (section.extra) return query ? 0 : 1;
     if (!query) return section.settings.length;
     return section.settings.filter((d) => (`${d.label} ${d.help || ''} ${d.path}`).toLowerCase().includes(query)).length;
   }
 
+  // Extras come first inside a tier so the concrete thing (which database, which
+  // provider) sits above the knobs that tune it.
+  const allSections = () => [...extras.map((x) => ({ ...x, extra: true })), ...schema.sections];
+
+  /**
+   * Put every extra back in its holder. Called before the rail re-renders,
+   * because render() replaces host.innerHTML — an extra still mounted in the
+   * body would be dropped on the floor along with its listeners.
+   */
+  function parkExtras() {
+    const holder = document.getElementById('settings-extras');
+    if (!holder) return;
+    for (const x of extras) {
+      const node = document.querySelector(x.node);
+      if (node && node.parentElement !== holder) holder.appendChild(node);
+    }
+  }
+
   function render() {
+    parkExtras();
     const grouped = schema.tiers.map((t) => ({
       ...t,
-      sections: schema.sections.filter((sec) => (sec.tier || 'advanced') === t.id),
+      sections: allSections().filter((sec) => (sec.tier || 'system') === t.id),
     })).filter((g) => g.sections.length);
+    // Rail order, not schema order: the fallback category has to be the row a
+    // reader's eye lands on, which is the first row of the first tier.
+    const sections = grouped.flatMap((g) => g.sections);
 
     // Follow the hits. Searching from a category with no matches used to render
     // "no setting matches" while the term hit rows in another group.
     if (query) {
-      const here = schema.sections.find((sec) => sec.id === active);
+      const here = sections.find((sec) => sec.id === active);
       if (!here || !visibleCount(here)) {
-        const hit = schema.sections.find((sec) => visibleCount(sec) > 0);
+        const hit = sections.find((sec) => visibleCount(sec) > 0);
         if (hit) active = hit.id;
       }
     }
-    if (!schema.sections.some((sec) => sec.id === active)) active = schema.sections[0]?.id ?? null;
+    if (!sections.some((sec) => sec.id === active)) active = sections[0]?.id ?? null;
 
     const railGroup = (g) => {
       const items = g.sections.map((sec) => {
@@ -173,11 +208,11 @@ export function initSettings({ rpc, toast, mount }) {
       </div>`;
     };
 
-    const sec = schema.sections.find((x) => x.id === active);
-    const rows = sec.settings
+    const sec = sections.find((x) => x.id === active);
+    const rows = sec.extra ? '' : sec.settings
       .filter((d) => !query || (`${d.label} ${d.help || ''} ${d.path}`).toLowerCase().includes(query))
       .map(row).join('');
-    const tierOf = schema.tiers.find((t) => t.id === (sec.tier || 'advanced'));
+    const tierOf = schema.tiers.find((t) => t.id === (sec.tier || 'system'));
 
     host.innerHTML = `
       <div class="set-shell">
@@ -194,20 +229,28 @@ export function initSettings({ rpc, toast, mount }) {
             ${sec.help ? `<p>${esc(sec.help)}</p>`
               : tierOf?.help ? `<p>${esc(tierOf.help)}</p>` : ''}
           </header>
-          <div class="set-body">
-            ${rows || `<div class="empty">No setting matches “${esc(query)}”. Try a different word, or clear the search.</div>`}
+          <div class="set-body${sec.extra ? ' set-body-extra' : ''}">
+            ${sec.extra ? '' : rows || `<div class="empty">No setting matches “${esc(query)}”. Try a different word, or clear the search.</div>`}
           </div>
         </div>
       </div>
-      <div class="set-bar" role="status">
+      ${sec.extra ? '' : `<div class="set-bar" role="status">
         <span class="set-bar-count"></span>
         <button class="btn" type="button" data-act="revert">Revert</button>
         <button class="btn primary" type="button" data-act="save">Save changes</button>
-      </div>`;
+      </div>`}`;
+
+    // An extra's body is a live node, not markup — mount it after the wipe.
+    if (sec.extra) {
+      const node = document.querySelector(sec.node);
+      if (node) el('.set-body').appendChild(node);
+      else el('.set-body').innerHTML = '<div class="empty">This section failed to mount.</div>';
+    }
     syncBar();
   }
 
   async function load() {
+    parkExtras();
     host.innerHTML = '<div class="empty">Loading settings…</div>';
     try {
       const { sections, tiers } = await rpc('settings.schema');
@@ -218,7 +261,8 @@ export function initSettings({ rpc, toast, mount }) {
         tiers: tiers?.length ? tiers : [{ id: 'advanced', label: 'All settings', help: null }],
         flat: new Map(sections.flatMap((s) => s.settings.map((d) => [d.path, d]))),
       };
-      if (!active || !sections.some((s) => s.id === active)) active = sections[0]?.id ?? null;
+      // render() picks the landing category in rail order; only clear a stale one.
+      if (active && ![...sections, ...extras].some((s) => s.id === active)) active = null;
       render();
     } catch (err) {
       host.innerHTML = `<div class="empty">Couldn’t load settings: ${esc(err.message)}</div>`;
@@ -230,7 +274,13 @@ export function initSettings({ rpc, toast, mount }) {
     const tab = e.target.closest('[data-cat]');
     if (tab) {
       // Switching category with unsaved edits would silently discard them.
-      if (Object.keys(dirty()).length && !window.confirm('Discard your unsaved changes?')) return;
+      if (Object.keys(dirty()).length && !(await confirmDialog({
+        title: 'Discard unsaved changes?',
+        message: 'You have edits on this page that have not been saved. Leaving this category throws them away.',
+        confirmLabel: 'Discard',
+        cancelLabel: 'Keep editing',
+        danger: true,
+      }))) return;
       active = tab.dataset.cat;
       render();
       return;

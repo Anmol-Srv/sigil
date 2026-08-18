@@ -828,6 +828,20 @@ table.trace-table td.audm-cell { font-size: var(--t-xs); color: var(--fg-2); whi
 }
 .modal-content form { background: transparent; border: none; padding: 0; }
 
+/* Confirm dialog — native <dialog>, reusing the .modal-* internals so it reads
+   as the same object as every other modal in the app. */
+.confirm-dlg {
+  border: none;
+  padding: 0;
+  background: transparent;
+  max-width: 440px;
+  width: calc(100% - var(--s-6));
+  margin: auto;
+}
+.confirm-dlg::backdrop { background: var(--bg-overlay); }
+.confirm-dlg .modal-body { animation: modal-pop 120ms ease-out; }
+.confirm-msg { margin: 0; color: var(--fg-2); line-height: 1.55; }
+
 /* Code result inside modal */
 .code-card {
   background: var(--bg-canvas);
@@ -2110,6 +2124,25 @@ kbd {
 .set-panel-head h3 { margin: 0; font-size: var(--t-xl); font-weight: 600; letter-spacing: -0.015em; color: var(--fg-1); }
 .set-panel-head p { margin: var(--s-2) 0 0; color: var(--fg-3); font-size: var(--t-sm); line-height: 1.55; max-width: 76ch; }
 .set-body { padding-bottom: var(--s-7); }
+
+/* An extra category's body is hand-written markup rather than generated rows,
+   so it gets the vertical rhythm .set-row would otherwise have supplied. */
+.set-extra-head {
+  margin: 0 0 var(--s-1);
+  font-size: var(--t-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg-1);
+}
+* + .set-extra-head { margin-top: var(--s-6); }
+.set-body-extra .table-wrap,
+.set-body-extra .methods-grid { margin-top: var(--s-3); }
+.danger-panel { border-color: var(--err); }
+
+/* Checkbox beside its label. `.field` is display:block, so the pattern this
+   replaces stacked the box above the text no matter what flex it asked for. */
+.check-row { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; }
+.check-row > span { color: var(--fg-2); font-size: var(--t-sm); }
 
 /* A settings row: what it is on the left, the control on the right. */
 .set-row {

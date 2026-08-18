@@ -35,7 +35,7 @@ export function registerSettings(registry) {
       tiers: SETTINGS_TIERS,
       sections: SETTINGS_SECTIONS.map((s) => ({
         id: s.id,
-        tier: s.tier || 'advanced',
+        tier: s.tier || 'system',
         title: s.title,
         help: s.help || null,
         settings: s.settings.map((d) => ({ ...d, value: readPath(cfg, d.path) ?? null })),

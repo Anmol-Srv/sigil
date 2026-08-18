@@ -1,6 +1,6 @@
 // Sigil GUI — vanilla JS. Onboarding wizard + dashboard.
 import { toast } from './toast.js';
-import { connectorCard , fieldControl } from './components.js';
+import { connectorCard , fieldControl, confirmDialog } from './components.js';
 import { initSetup } from './setup.js';
 import { icon, hydrateIcons } from './icons.js';
 import { initCmdk } from './cmdk.js';
@@ -495,7 +495,13 @@ function kbRenderFactDetail(ctx) {
 }
 
 async function kbForgetFact(uid) {
-  if (!window.confirm('Forget this fact? It will be removed from memory and stop being recalled.')) return;
+  const ok = await confirmDialog({
+    title: 'Forget this fact?',
+    message: 'It will be removed from memory and stop being recalled.',
+    confirmLabel: 'Forget',
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await rpc('forgetFact', { uid });
     toast({ variant: 'success', message: 'Fact forgotten.' });
@@ -1231,30 +1237,25 @@ $('#cfg-switch-apply')?.addEventListener('click', async () => {
 });
 
 // ── Settings: danger zone — factory reset ────────────────────────────
-$('#cfg-reset')?.addEventListener('click', () => {
-  const host = $('#reset-confirm');
-  if (!host) return;
+$('#cfg-reset')?.addEventListener('click', async (e) => {
   const wipeMemory = $('#reset-wipe-memory')?.checked !== false;
-  host.innerHTML = `
-    <div class="result err" style="margin:0;">
-      <strong>Reset Sigil?</strong>
-      <div class="muted" style="margin:6px 0;">Disconnects every agent${wipeMemory ? ', wipes all stored memory,' : ''} and clears your config. You'll go back to setup. (The database itself is kept — use <code>sigil reset</code> in a terminal for a full DB teardown.)</div>
-      <div class="flex-row" style="margin-top:8px;">
-        <button type="button" class="btn danger" data-reset-go>Yes, reset</button>
-        <button type="button" class="btn" data-reset-cancel>Cancel</button>
-      </div>
-    </div>`;
-  host.querySelector('[data-reset-cancel]').addEventListener('click', () => { host.innerHTML = ''; });
-  host.querySelector('[data-reset-go]').addEventListener('click', async (e) => {
-    e.target.disabled = true; e.target.textContent = 'Resetting…';
-    try {
-      const r = await rpc('setup.factoryReset', { wipeMemory });
-      toast({ variant: 'success', message: `Reset complete — disconnected ${r.disconnected?.length || 0} agent(s)${wipeMemory ? `, wiped ${r.tablesWiped || 0} tables` : ''}.` });
-      setTimeout(() => window.location.reload(), 800);
-    } catch (err) {
-      host.innerHTML = `<div class="result err" style="margin:0;">✗ ${escape(err.message)}</div>`;
-    }
+  const ok = await confirmDialog({
+    title: 'Reset Sigil?',
+    message: `Disconnects every agent${wipeMemory ? ', wipes all stored memory,' : ''} and clears your config. You'll go back to setup. The database itself is kept — run \`sigil reset\` in a terminal for a full teardown.`,
+    confirmLabel: 'Yes, reset',
+    danger: true,
   });
+  if (!ok) return;
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const r = await rpc('setup.factoryReset', { wipeMemory });
+    toast({ variant: 'success', message: `Reset complete — disconnected ${r.disconnected?.length || 0} agent(s)${wipeMemory ? `, wiped ${r.tablesWiped || 0} tables` : ''}.` });
+    setTimeout(() => window.location.reload(), 800);
+  } catch (err) {
+    toast({ variant: 'error', message: `Reset failed: ${err.message}` });
+    btn.disabled = false;
+  }
 });
 
 async function restartAndClose(out) {
@@ -1586,7 +1587,13 @@ $('#trace-agent-filters')?.addEventListener('click', (e) => {
 });
 $('#trace-refresh')?.addEventListener('click', (e) => withBusy(e.currentTarget, loadTraces));
 $('#trace-clear')?.addEventListener('click', async () => {
-  if (!confirm('Clear the entire trace log? This deletes persisted history.')) return;
+  const ok = await confirmDialog({
+    title: 'Clear the trace log?',
+    message: 'This deletes the persisted history for every agent. It cannot be undone.',
+    confirmLabel: 'Clear log',
+    danger: true,
+  });
+  if (!ok) return;
   try { await rpc('trace.clear'); } catch {}
   loadTraces();
 });
@@ -1944,7 +1951,21 @@ async function runLanding() {
 }
 
 hydrateIcons();
-const settingsPanel = initSettings({ rpc, toast, mount: '#settings-host' });
+// The hand-written halves of Settings, handed to the rail as categories so the
+// page has ONE organisation instead of a rail wedged between stacked panels.
+const SETTINGS_EXTRAS = [
+  { id: 'providers', tier: 'system', title: 'Providers',
+    help: 'The database, LLM and embedding model this memory runs on. Switching one restarts the daemon.',
+    node: '#settings-extra-providers' },
+  { id: 'developer', tier: 'admin', title: 'Developer',
+    help: 'The resolved config file and the RPC surface every client dispatches through. Read-only.',
+    node: '#settings-extra-developer' },
+  { id: 'danger', tier: 'admin', title: 'Danger zone',
+    help: 'Irreversible. Read the confirmation before you accept it.',
+    node: '#settings-extra-danger' },
+];
+
+const settingsPanel = initSettings({ rpc, toast, mount: '#settings-host', extras: SETTINGS_EXTRAS });
 
 /**
  * Ingest one or more documents from the machine.

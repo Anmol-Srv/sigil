@@ -2,8 +2,11 @@
  * Central toast feedback — the only channel for transient status/errors.
  * Design-system styled: a sharp surface-1 panel with a hairline border, a 7px
  * status square (red/green/amber/brand) and an optional mono error code.
- * Errors are sticky (no auto-dismiss); info/success fade. Replaces every
- * inline `out.textContent = …` / `alert()` in the old GUI.
+ * Everything auto-dismisses — errors linger longer because they carry more to
+ * read, but a toast nobody closes should not become permanent furniture. Pass
+ * `timeout: 0` for the rare case that must stay until code dismisses it (an
+ * in-flight "saving…" that its own callback clears). Replaces every inline
+ * `out.textContent = …` / `alert()` in the old GUI.
  */
 function host() {
   return document.getElementById('toasts');
@@ -52,7 +55,7 @@ export function toast({ variant = 'info', message = '', hint, code, timeout } = 
   el.append(sq, body, x);
   stack.appendChild(el);
 
-  const ttl = timeout != null ? timeout : (variant === 'error' ? 0 : 4000);
+  const ttl = timeout != null ? timeout : (variant === 'error' ? 9000 : 4000);
   if (ttl > 0) setTimeout(remove, ttl);
   return remove;
 }

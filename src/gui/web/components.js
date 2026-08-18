@@ -118,4 +118,37 @@ export function fieldControl(f, nameAttr) {
     + ` placeholder="${esc(f.placeholder || '')}" autocomplete="off">`;
 }
 
+/**
+ * The app's only "are you sure" — a native <dialog>, so the focus trap,
+ * backdrop and Escape-to-cancel come free and the browser's own confirm() (a
+ * chrome-coloured box with the origin printed on it) never appears. Cancel is
+ * first in DOM order, so it takes the default focus: a destructive action is
+ * never one stray Enter away. Resolves false on any dismissal.
+ */
+export function confirmDialog({
+  title = 'Are you sure?', message = '',
+  confirmLabel = 'Confirm', cancelLabel = 'Cancel', danger = false,
+} = {}) {
+  return new Promise((resolve) => {
+    const dlg = E('dialog', 'confirm-dlg');
+    dlg.innerHTML = `<form method="dialog" class="modal-body">
+      <div class="modal-header"><h3></h3></div>
+      <div class="modal-content"><p class="confirm-msg"></p></div>
+      <div class="modal-footer">
+        <button type="submit" class="btn ghost" value=""></button>
+        <button type="submit" class="btn" value="ok"></button>
+      </div>
+    </form>`;
+    dlg.querySelector('h3').textContent = title;
+    dlg.querySelector('.confirm-msg').textContent = message;
+    const [cancelBtn, okBtn] = dlg.querySelectorAll('.modal-footer button');
+    cancelBtn.textContent = cancelLabel;
+    okBtn.textContent = confirmLabel;
+    okBtn.classList.add(danger ? 'danger' : 'primary');
+    dlg.addEventListener('close', () => { dlg.remove(); resolve(dlg.returnValue === 'ok'); });
+    document.body.append(dlg);
+    dlg.showModal();
+  });
+}
+
 export { E };
