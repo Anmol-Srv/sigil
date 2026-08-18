@@ -620,12 +620,41 @@ async function deleteFact(idOrUid) {
   const isUid = typeof idOrUid === 'string' && idOrUid.length > 8;
   const where = isUid ? { uid: idOrUid } : { id: Number(idOrUid) };
 
-  // Clean up junction table first
   const fact = await cortexDb('fact').where(where).first();
   if (!fact) return null;
 
-  await cortexDb('fact_entity').where({ factId: fact.id }).del();
-  await cortexDb('fact').where({ id: fact.id }).del();
+  // A fact is the target of several foreign keys. Deleting the row without
+  // clearing them first throws — e.g. relation_source_fact_id_foreign (the
+  // fact is the source of a relation) or fact_superseded_by_id_foreign
+  // (another fact points at it via superseded_by_id). Cascade the cleanup in
+  // a single transaction so `forget` is atomic and never leaves dangling refs.
+  await cortexDb.transaction(async (trx) => {
+    // 1. Null self-referential pointers FROM other facts TO this one.
+    await trx('fact').where({ supersededById: fact.id }).update({ supersededById: null });
+    await trx('fact').where({ contradictedById: fact.id }).update({ contradictedById: null });
+
+    // 2. Delete rows that hard-reference the fact.
+    await trx('relation').where({ sourceFactId: fact.id }).del();
+    await trx('hebbian_edge').where({ factAId: fact.id }).orWhere({ factBId: fact.id }).del();
+    await trx('fact_entity').where({ factId: fact.id }).del();
+    await trx('fact_lifecycle').where({ factId: fact.id }).del();
+
+    // 3. Decrement each owning pod's fact counter, then detach memberships.
+    //    Done via a subquery (no rows read into JS) so it doesn't depend on
+    //    response key casing. Counter update must run before the delete.
+    await trx('pod')
+      .whereIn(
+        'id',
+        trx('pod_membership').where({ memberType: 'fact', memberId: fact.id }).select('podId'),
+      )
+      .where('memberFactCount', '>', 0)
+      .decrement('memberFactCount', 1);
+    await trx('pod_membership').where({ memberType: 'fact', memberId: fact.id }).del();
+
+    // 4. Finally remove the fact itself.
+    await trx('fact').where({ id: fact.id }).del();
+  });
+
   return fact;
 }
 
