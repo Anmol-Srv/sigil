@@ -309,6 +309,7 @@ const kb = {
   tab: 'facts',
   loaded: false,
   facts: [],          // full fetched set (cross-namespace)
+  factTotal: null,    // true total from the stat strip; null = not loaded yet
   factNs: null,       // active namespace filter (null = all)
   factCat: null,      // active category filter (null = all)
   factSearch: '',
@@ -348,6 +349,8 @@ async function kbLoadStats() {
   try {
     const d = await rpc('status', {});
     const ents = (d.entities?.documents || 0) + (d.entities?.people || 0) + (d.entities?.topics || 0);
+    kb.factTotal = d.facts ?? null;
+    if (kb.facts.length) kbRenderFacts();
     const stats = [
       ['Facts', d.facts], ['Entities', ents], ['Relations', d.relations],
       ['Documents', d.documents], ['Chunks', d.chunks],
@@ -376,11 +379,15 @@ function kbSetTab(name, { force = false } = {}) {
 }
 
 // ── Facts ────────────────────────────────────────────────────────────
+// The list is capped; the stat strip above it is not. Saying "200 of 203"
+// beats silently showing 200 and letting the two disagree on screen.
+const FACT_LIST_LIMIT = 200;
+
 async function kbLoadFacts() {
   const list = $('#kb-fact-list');
   list.innerHTML = kbSkeleton(7);
   try {
-    const { facts } = await rpc('listFacts', { limit: 200 });
+    const { facts } = await rpc('listFacts', { limit: FACT_LIST_LIMIT });
     kb.facts = facts || [];
     kbRenderFactFilters();
     kbRenderFacts();
@@ -417,7 +424,11 @@ function kbFilteredFacts() {
 function kbRenderFacts() {
   const list = $('#kb-fact-list');
   const facts = kbFilteredFacts();
-  $('#kb-fact-count').textContent = `${facts.length} fact${facts.length === 1 ? '' : 's'}`;
+  const total = kb.factTotal;
+  const capped = Number.isFinite(total) && kb.facts.length < total && facts.length === kb.facts.length;
+  $('#kb-fact-count').textContent = capped
+    ? `${facts.length} of ${total} facts`
+    : `${facts.length} fact${facts.length === 1 ? '' : 's'}`;
   if (!facts.length) {
     list.innerHTML = kb.facts.length
       ? `<div class="empty">No facts match this filter. Clear the search or pick a different category.</div>`

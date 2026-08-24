@@ -6,13 +6,15 @@
  * edge strengthened. Lex canonicalization (entity_a_id < entity_b_id) at the
  * row level guarantees one row per unordered pair.
  *
- * Update rule: capped increment with lazy decay.
- *   write  →  strength = LEAST(strength + eta, cap), last_seen_at = NOW()
+ * Update rule: capped increment over a decayed base.
+ *   write  →  strength = LEAST(strength * exp(-lambda * days_since_last_seen) + eta, cap)
+ *             last_seen_at = NOW()
  *   read   →  effective = strength * exp(-lambda * days_since_last_seen)
  *             where lambda = ln(2) / halfLifeDays
  *
- * Lazy decay (no background job) keeps the write path cheap. Decay is only
- * paid where the value is actually consumed for ranking or traversal.
+ * The write settles the decay accrued up to this touch; the read decays from
+ * the touch onwards. No background job, and no double-counting: each interval
+ * between touches is discounted exactly once.
  */
 
 import cortexDb from '../../db/cortex.js';
@@ -34,6 +36,7 @@ async function strengthenEntityEdges(entityIds, opts = {}) {
 
   const eta = opts.eta ?? config.hebbian.entity.eta;
   const cap = opts.cap ?? config.hebbian.entity.cap;
+  const lambda = lambdaFromHalfLife(opts.halfLifeDays ?? config.hebbian.entity.halfLifeDays);
 
   const ids = [...new Set(entityIds.filter((id) => Number.isInteger(id)))].sort((a, b) => a - b);
   if (ids.length < 2) return;
@@ -48,14 +51,21 @@ async function strengthenEntityEdges(entityIds, opts = {}) {
   const valuesSql = pairs.map(() => '(?, ?, ?, NOW(), NOW())').join(', ');
   const params = pairs.flatMap(([a, b]) => [a, b, eta]);
 
+  // Fold the elapsed decay into the stored value BEFORE incrementing. Reads
+  // decay from last_seen_at, which this resets to NOW() — so without settling
+  // it here, a single touch restored an edge's full historical strength and the
+  // half-life never actually cost anything.
   await cortexDb.raw(`
     INSERT INTO entity_hebbian_edge (entity_a_id, entity_b_id, strength, first_seen_at, last_seen_at)
     VALUES ${valuesSql}
     ON CONFLICT (entity_a_id, entity_b_id)
     DO UPDATE SET
-      strength = LEAST(entity_hebbian_edge.strength + ?, ?),
+      strength = LEAST(
+        entity_hebbian_edge.strength
+          * EXP(-1.0 * ?::float8 * EXTRACT(EPOCH FROM (NOW() - entity_hebbian_edge.last_seen_at)) / 86400.0)
+          + ?, ?),
       last_seen_at = NOW()
-  `, [...params, eta, cap]);
+  `, [...params, lambda, eta, cap]);
 }
 
 /**

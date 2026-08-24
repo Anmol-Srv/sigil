@@ -1,9 +1,12 @@
 export function registerListFacts(registry) {
   registry.register('listFacts', async (params) => {
     const { listFacts } = await import('../../memory/facts/store.js');
-    const { default: config } = await import('../../config.js');
 
-    const namespace = params.namespace || config.defaults.namespace;
+    // null, not config.defaults.namespace: `status` counts facts across every
+    // namespace when none is given, and the GUI calls both with no namespace.
+    // Defaulting to one namespace here made the stat card a superset the list
+    // below it could never render.
+    const namespace = params.namespace || null;
     const category = params.category || undefined;
     const limit = Number.isFinite(params.limit) ? params.limit : 20;
 

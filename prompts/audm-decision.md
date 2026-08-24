@@ -49,4 +49,8 @@ EXISTING: "Priya works as a backend engineer on the payments team"
 NEW: "Priya was promoted to engineering manager of the payments team"
 → **UPDATE** (same subject's role changed; she is no longer a backend engineer)
 
-Respond with exactly one of: UPDATE, ADD, or CONTRADICT.
+Respond with ONLY a JSON object, no prose and no markdown fences:
+{"decisions":[{"input_index":<integer>,"candidate_key":"<string>","action":"ADD"|"UPDATE"|"CONTRADICT"}]}
+
+Return exactly one entry per offered case, echoing that case's input_index and
+candidate_key verbatim. Never omit a case, never merge cases, never add cases.

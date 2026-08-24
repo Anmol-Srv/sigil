@@ -231,8 +231,7 @@ async function mergeFactSourceDocuments(existing, sourceDocumentIds, db) {
   return { ...existing, sourceDocumentIds: merged };
 }
 
-async function audmDecideBatch(pairs) {
-  if (!pairs.length) return new Map();
+async function askAudmBatch(pairs) {
   const systemPrompt = await readFile(AUDM_PROMPT_PATH, 'utf8');
   const cases = pairs.map((p) => ({
     input_index: p.inputIndex,
@@ -275,8 +274,21 @@ async function audmDecideBatch(pairs) {
     if (!['ADD', 'UPDATE', 'CONTRADICT'].includes(d.action)) continue;
     out.set(key, d.action);
   }
-  if (out.size !== offered.size) {
-    throw new Error(`AUDM judge returned ${out.size}/${offered.size} required decisions`);
+  return out;
+}
+
+async function audmDecideBatch(pairs) {
+  if (!pairs.length) return new Map();
+  const out = await askAudmBatch(pairs);
+  // A large batch occasionally drops one case from an otherwise well-formed
+  // answer. Re-asking only the missing pairs is far cheaper than failing the
+  // whole ingest, and keeps the all-or-nothing contract below intact.
+  const missing = pairs.filter((p) => !out.has(`${p.inputIndex}|${p.candidateKey}`));
+  if (missing.length && missing.length < pairs.length) {
+    for (const [key, action] of await askAudmBatch(missing)) out.set(key, action);
+  }
+  if (out.size !== pairs.length) {
+    throw new Error(`AUDM judge returned ${out.size}/${pairs.length} required decisions`);
   }
   return out;
 }
