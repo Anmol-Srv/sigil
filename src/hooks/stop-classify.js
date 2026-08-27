@@ -110,14 +110,17 @@ async function classifyTurns(userMessages, { caller = 'stop-spool' } = {}) {
  * stays spooled for the next attempt); the live hook keeps the legacy
  * best-effort behaviour (log + continue) so it never blocks Claude.
  */
-async function saveFacts(facts, { podUids = [], throwOnError = false } = {}) {
+async function saveFacts(facts, { podUids = [], namespace = null, throwOnError = false } = {}) {
   const { ingestAtomicFacts } = await import('../ingestion/pipeline.js');
   const config = (await import('../config.js')).default;
+  // Callers outside the Stop hook (the Hermes turn path) may target a specific
+  // namespace; everyone else keeps the configured default.
+  const ns = namespace || config.defaults.namespace;
 
   try {
     await ingestAtomicFacts({
       facts,
-      namespace: config.defaults.namespace,
+      namespace: ns,
       podUids,
     });
   } catch (err) {
@@ -128,7 +131,7 @@ async function saveFacts(facts, { podUids = [], throwOnError = false } = {}) {
   // Refresh hot-context so the new fact shows up at next session start
   try {
     const { updateContextSnapshot } = await import('../memory/facts/hot-context.js');
-    await updateContextSnapshot({ namespace: config.defaults.namespace });
+    await updateContextSnapshot({ namespace: ns });
   } catch { /* best effort */ }
 }
 

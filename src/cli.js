@@ -166,6 +166,7 @@ const commands = {
   uninstall: runUninstall,
   doctor: runDoctor,
   remember: runRemember,
+  'ingest-turn': runIngestTurn,
   ingest: runIngest,
   search: runSearch,
   context: runContext,
@@ -1431,6 +1432,10 @@ Examples:
   // DEFAULT_NAMESPACE into this subprocess's env has no effect on the daemon.
   const namespace = flags.find((f) => f.startsWith('--namespace='))?.split('=')[1] || undefined;
   const podArg = flags.find((f) => f.startsWith('--pod='))?.split('=')[1] || undefined;
+  // Agents with a profile rather than a cwd (Hermes) scope their explicit
+  // saves this way; it resolves-or-creates, where --pod requires an existing one.
+  const profileArg = flags.find((f) => f.startsWith('--profile='))?.split('=')[1] || undefined;
+  const hermesHomeArg = flags.find((f) => f.startsWith('--hermes-home='))?.split('=')[1] || undefined;
 
   // Collect facts: each positional arg is a separate fact
   let facts = textArgs.filter(Boolean);
@@ -1478,8 +1483,16 @@ Examples:
     // queued behind the still-running first attempt.
     // cwd scopes the save to this project's pod; --pod overrides it when the
     // fact is about something other than where you're standing.
+    // Same derivation as `ingest-turn`, so an agent only has to pass the one
+    // kwarg Hermes gives it and both write paths land in the same pod.
+    let profile = profileArg || null;
+    if (!profile && hermesHomeArg) {
+      const { deriveProfileName } = await import('./memory/pods/kinds/hermes_profile.js');
+      profile = deriveProfileName(hermesHomeArg);
+    }
     const { data } = await client.call('remember', {
       facts, namespace, cwd: process.cwd(), pod: podArg || null,
+      profile, hermesHome: hermesHomeArg || null,
     }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
     const parts = [];
     if (data.added)        parts.push(`${data.added} new`);
@@ -1633,6 +1646,87 @@ function getClaudeConfigPaths() {
 }
 
 // ─── Ingest ──────────────────────────────────────────────────────────────────
+
+/**
+ * `sigil ingest-turn` — the conversational write path for agents that have no
+ * hooks and no MCP (today: the Hermes memory-provider plugin).
+ *
+ * Claude Code classifies a turn in its Stop hook and Codex goes through MCP;
+ * Hermes is a Python plugin that can do neither, so it shells out here and the
+ * DAEMON classifies. Without this, Hermes' only option was `remember`, which is
+ * the atomic lane: it stores the string verbatim, skips extraction entirely,
+ * and rejects anything document-shaped — so a normal chat turn containing a
+ * markdown list was dropped on the floor.
+ */
+async function runIngestTurn(args) {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(`sigil ingest-turn — save a conversation turn as extracted facts
+
+Usage:
+  sigil ingest-turn --user "<message>" [options]
+
+Classifies the turn, extracts durable facts, and attaches them to the right
+pod — the same path Claude Code's Stop hook uses.
+
+Options:
+  --user <text>         The user's message (required).
+  --profile <name>      Agent profile that owns the write (Hermes: igris, xero…).
+  --hermes-home <path>  Hermes home; the profile is derived from it when
+                        --profile is absent.
+  --platform <name>     Origin platform (cli, telegram, imessage…) — recorded
+                        on the pod for display, never used for scoping.
+  --session <id>        Session id, for non-profile callers.
+  --namespace <ns>      Target namespace (default: the configured default).
+  --bg                  Return immediately; the daemon finishes the write.`);
+    process.exit(0);
+  }
+
+  const flag = (name) => {
+    const inline = args.find((a) => a.startsWith(`--${name}=`));
+    if (inline) return inline.slice(name.length + 3);
+    const i = args.indexOf(`--${name}`);
+    return i !== -1 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : undefined;
+  };
+
+  const userMessage = flag('user');
+  if (!userMessage || !userMessage.trim()) {
+    console.error('Provide the turn: sigil ingest-turn --user "<message>"');
+    process.exit(1);
+  }
+
+  const hermesHome = flag('hermes-home') || null;
+  let profile = flag('profile') || null;
+  if (!profile && hermesHome !== null) {
+    const { deriveProfileName } = await import('./memory/pods/kinds/hermes_profile.js');
+    profile = deriveProfileName(hermesHome);
+  }
+
+  const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
+  const client = await connectOrStartDaemon();
+  try {
+    const { data } = await client.call('ingestTurn', {
+      userMessage,
+      profile,
+      hermesHome,
+      platform: flag('platform') || null,
+      sessionId: flag('session') || null,
+      namespace: flag('namespace') || undefined,
+    }, { timeoutMs: WRITE_RPC_TIMEOUT_MS });
+
+    if (data.error === 'classify_failed') {
+      console.error('Classifier failed — turn not saved.');
+      process.exit(1);
+    }
+    console.log(data.saved
+      ? `Saved ${data.saved} fact${data.saved === 1 ? '' : 's'}${profile ? ` to hermes:${profile}` : ''}`
+      : 'Nothing memorable in this turn.');
+  } catch (err) {
+    console.error(`ingest-turn failed: ${err.message}`);
+    process.exit(1);
+  } finally {
+    client.close?.();
+  }
+}
 
 async function runIngest(args) {
   const flags = args.filter((a) => a.startsWith('--'));

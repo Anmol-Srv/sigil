@@ -1,41 +1,47 @@
 # Hermes integration
 
-Sigil ships as a [Hermes Agent](https://hermes.chat) memory provider plugin. The plugin source lives at [`plugin/`](./plugin), copy that directory into Hermes' plugin tree on whichever machine runs Hermes.
+Sigil ships as a [Hermes Agent](https://hermes.chat) memory provider plugin. Unlike the MCP clients (Claude Code, Cursor, Codex CLI, Kiro), Hermes has a first-class Python memory-provider plugin system, so integration means dropping a package into Hermes' plugin tree and setting one config key.
 
-## Quick deploy (manual)
+## Install
 
 ```bash
-# 1. From the Sigil repo root on your laptop:
-scp -r integrations/hermes/plugin/ \
-    claude@neutron:.hermes/hermes-agent/plugins/memory/sigil/
-
-# 2. On the server:
-ssh claude@neutron
-sigil --help                          # confirm sigil CLI is on PATH
-sigil init                            # configure DB + embedder + LLM (once)
-hermes config set memory.provider sigil
+sigil connect --clients hermes
 ```
 
-Restart Hermes. Verify with `hermes memory status` (or whatever Hermes' status command surfaces).
+That copies [`plugin/`](./plugin) into `$HERMES_HOME/plugins/sigil/` and sets `memory.provider: sigil` in **every** profile's `config.yaml` — the top-level `~/.hermes/config.yaml` plus each `~/.hermes/profiles/*/config.yaml`. Restart Hermes afterwards.
+
+On a remote host, run `sigil init` there first (the plugin needs a working local DB + embedder), then `sigil connect --clients hermes`.
+
+## One pod per profile
+
+Hermes runs several independent agents out of one install — `igris`, `xero`, `iron` — each with its own `$HERMES_HOME`. Sigil gives **each profile its own pod**, derived from the `hermes_home` kwarg Hermes passes to `initialize()`:
+
+```
+~/.hermes/profiles/xero  →  pod  hermes:xero
+~/.hermes                →  pod  hermes:<active_profile>
+```
+
+This is Hermes' own requirement, not a Sigil preference — its plugin contract states that storage paths *must* be scoped by `hermes_home`. Keying on the platform (cli/telegram/imessage) instead would have two profiles chatting on the same platform writing into one another's space.
+
+**Isolation here means ownership, not a wall.** Every profile writes to the `default` namespace and reads it unscoped, so `xero` can recall what `igris` learned, and both see what Claude Code wrote. The pod records *who* learned a fact; it does not gate who may know it.
 
 ## What the plugin does
 
 | Hermes hook | Sigil call | Why |
 |---|---|---|
-| `is_available()` | `which sigil` | Avoid network calls; just check the binary exists. |
-| `initialize(session_id, platform, ...)` | sets namespace = `hermes-<platform>` | Per-platform classification, see plugin/README.md. |
-| `prefetch(query)` | `sigil search <q> --namespace=hermes-<platform>,default --limit=5 --no-graph` | Fast cross-namespace recall = the shared brain. |
-| `sync_turn(user, assistant)` | `sigil remember --bg "<user>"` in a daemon thread | Non-blocking. Sigil's classifier decides what's worth keeping. |
-| `get_tool_schemas()` | `sigil_search`, `sigil_remember` | Lets the model explicitly drill down or save mid-turn. |
+| `is_available()` | `shutil.which("sigil")` | No network call — just check the binary is on PATH. |
+| `initialize(session_id, platform, hermes_home)` | — | Captures `hermes_home`; the profile is derived from it CLI-side. |
+| `prefetch(query)` | `sigil search <q> --namespace=default --limit=5 --no-graph --no-route --no-synthesize` | Unscoped read of the shared brain. |
+| `sync_turn(user, assistant)` | `sigil ingest-turn --user <text> --hermes-home <path>` in a daemon thread | Daemon **classifies and extracts facts**, then attaches them to the profile pod — the same path Claude Code's Stop hook uses. |
+| `get_tool_schemas()` | `sigil_search`, `sigil_remember` | Lets the model drill down or save one explicit fact mid-turn. |
 
-The contract Hermes expects is documented at `~/.hermes/hermes-agent/website/docs/developer-guide/memory-provider-plugin.md` on any Hermes install.
+`sync_turn` uses `ingest-turn`, not `remember`. `remember` is the **atomic lane**: it stores a string verbatim with no extraction and rejects anything document-shaped. A whole conversational turn is not a fact, and routing turns through `remember` meant any turn containing a markdown list was rejected and silently dropped. The explicit `sigil_remember` *tool* still uses `remember`, which is correct — there the model really is handing over one short fact.
 
-## Future: one-shot install via `sigil init`
-
-A `src/lib/clients/hermes.js` module (5th client alongside Claude Code / Cursor / Codex / Kiro) would let `sigil init` copy this plugin into `~/.hermes/hermes-agent/plugins/memory/sigil/` and flip `memory.provider: sigil` in `config.yaml` automatically. That lands when we're confident the manual deploy works end-to-end.
+The contract Hermes expects is documented at `$HERMES_HOME/hermes-agent/website/docs/developer-guide/memory-provider-plugin.md` on any Hermes install.
 
 ## Caveats
 
-- **Sigil CLI must be on `PATH`** on whichever machine runs Hermes. If `which sigil` returns nothing, `is_available()` returns false and Hermes silently falls back to its built-in memory.
-- **`~/.sigil/.env` must be configured**, run `sigil init` on the Hermes host before activating the plugin.
-- **The plugin shells out for every prefetch.** Latency is `sigil search` latency. The plugin keeps this path retrieval-only; if Hermes' per-turn budget is tighter, we could move to in-process via a Python<>Node bridge, out of scope for v0.1.
+- **`sigil` must be on `PATH`** for whatever user runs Hermes. If `which sigil` returns nothing, `is_available()` returns false and Hermes silently falls back to its built-in memory — no error, just no Sigil. Systemd units often have a minimal `PATH` that excludes `~/.sigil/bin`; check that first when memory seems inert on a server.
+- **Run `sigil init` on the Hermes host** before activating the plugin.
+- **The plugin shells out per turn.** Prefetch latency is `sigil search` latency (~0.4s locally). If Hermes' per-turn budget is tighter, an in-process Python↔Node bridge is the next step — out of scope for now.
+- **Install location matters.** The plugin goes in `$HERMES_HOME/plugins/`, the supported third-party location. Hermes' bundled `hermes-agent/plugins/memory/` tree is documented as closed to new providers and can be overwritten by a Hermes upgrade; `sigil connect` removes any stale copy it finds there.

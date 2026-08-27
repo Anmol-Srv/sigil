@@ -23,6 +23,7 @@ import ForceGraph2D from 'react-force-graph-2d';
 // d3 does gravity — forceCenter only translates the centroid, it does not pull
 // anything inward, which is why the graph drifted apart without them.
 import { forceX, forceY, forceCollide } from 'd3-force-3d';
+import { clusterGraph } from './cluster.js';
 
 /** Design tokens, read live so the graph can never drift from the stylesheet. */
 function readTokens() {
@@ -51,6 +52,20 @@ function alpha(hex, a) {
   if (!m) return `rgba(130,133,140,${a})`;
   const [r, g, b] = [1, 2, 3].map((i) => parseInt(m[i], 16));
   return `rgba(${r},${g},${b},${a})`;
+}
+
+/**
+ * Deterministic 32-bit string hash. Used only to scatter a cluster's nodes
+ * around their anchor — Math.random() would make the layout differ run to run,
+ * which is the thing cluster.js goes out of its way to avoid.
+ */
+function hash(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h);
 }
 
 /** Entities scale gently with connectivity; facts stay small dots. */
@@ -97,17 +112,38 @@ function GraphView({ api }) {
     api.current = {
       setData: (data) => {
         fitted.current = false;
+        // Communities first: every node carries its cluster's anchor, which is
+        // what the gravity forces below pull toward instead of a shared origin.
+        const { assignment, clusters } = clusterGraph(data.nodes, data.edges);
+        const anchors = new Map(clusters.map((c) => [c.id, c]));
         const seeded = {
           // Sorted by connectivity, descending. force-graph paints in array
           // order, and the label occlusion buffer is first-come-first-served —
           // so drawing hubs first is what makes the important labels win the
           // space instead of whichever node happened to be earlier in the JSON.
           nodes: data.nodes
-            .map((n) => ({ ...n, r: nodeRadius(n) }))
+            .map((n) => {
+              const anchor = anchors.get(assignment.get(n.id));
+              return {
+                ...n,
+                r: nodeRadius(n),
+                cluster: assignment.get(n.id),
+                clusterColor: anchor?.color ?? null,
+                // Seed the position at the anchor too, not just the target: a
+                // node that STARTS in its cluster settles there, instead of
+                // migrating across the canvas from a random origin and dragging
+                // its neighbours through every other cluster on the way.
+                cx: anchor?.x ?? 0,
+                cy: anchor?.y ?? 0,
+                x: (anchor?.x ?? 0) + (hash(n.id) % 40) - 20,
+                y: (anchor?.y ?? 0) + (hash(`${n.id}#`) % 40) - 20,
+              };
+            })
             .sort((a, b) => (b.degree || 0) - (a.degree || 0)),
           links: data.edges.map((e) => ({ ...e })),
         };
         nodesRef.current = seeded.nodes;
+        api.current?.onClusters?.(clusters);
         setGraph(seeded);
       },
       zoomBy: (f) => fgRef.current?.zoom(fgRef.current.zoom() * f, 200),
@@ -173,9 +209,12 @@ function GraphView({ api }) {
     // everything toward one mass without collapsing structure, because the
     // charge/link forces still set local spacing. Scaled down as the graph grows
     // so a big store doesn't get crushed into the middle.
+    // Toward each node's CLUSTER anchor, not a single shared origin. Same
+    // mechanism and same strengths as before — only the target moved. This is
+    // what stops 78 components from stacking on one point.
     const g = n > 400 ? 0.045 : n > 150 ? 0.07 : 0.09;
-    fg.d3Force('x', forceX(0).strength(g));
-    fg.d3Force('y', forceY(0).strength(g));
+    fg.d3Force('x', forceX((nd) => nd.cx ?? 0).strength(g));
+    fg.d3Force('y', forceY((nd) => nd.cy ?? 0).strength(g));
 
     // d3's quadtree collide — O(n log n) against the previous hand-rolled
     // O(n²) pass, and it is the implementation force-graph's own simulation
@@ -190,12 +229,13 @@ function GraphView({ api }) {
     ctx.beginPath();
     ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
     if (n.kind === 'entity') {
-      // Colour by kind first: entity blue, with person kept as the one
-      // sub-distinction the legend already promises. Documents and facts are
-      // their own kinds below.
-      ctx.fillStyle = n.entityType === 'person' ? tokens.person
-        : n.entityType === 'document' ? tokens.document
-        : tokens.topic;
+      // Colour carries CLUSTER, not entity type. On a real store the type
+      // channel was near-constant — 301 topics against 1 person and 4
+      // documents — so it spent the whole colour budget saying nothing.
+      // Cluster membership is the thing you actually need to see. Type still
+      // reads in the tooltip and the KB list, where it isn't competing with
+      // 500 dots. Clusters past the palette stay neutral by design.
+      ctx.fillStyle = n.clusterColor || tokens.fg4;
       ctx.fill();
       if (n.id === hover?.id) { ctx.lineWidth = 2 / scale; ctx.strokeStyle = tokens.fg1; ctx.stroke(); }
     } else if (n.kind === 'document') {
@@ -367,6 +407,7 @@ export function mountGraph(container) {
     fit: () => impl?.fit(),
     refit: () => impl?.refit(),
     onNodeClick: null,
+    onClusters: null,
   };
 
   // The component assigns its methods to `api.current`; this setter is where
@@ -377,6 +418,7 @@ export function mountGraph(container) {
       impl = v;
       if (!impl) return;
       impl.onNodeClick = (n) => handle.onNodeClick?.(n);
+      impl.onClusters = (c) => handle.onClusters?.(c);
       if (pending) { impl.setData(pending); pending = null; }
     },
   };

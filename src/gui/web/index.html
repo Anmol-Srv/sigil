@@ -265,12 +265,8 @@
 
       <div class="graph-stage" id="graph-stage">
         <div id="graph-canvas"></div><!-- the React graph island mounts here -->
-        <div class="graph-legend" id="graph-legend" aria-hidden="true">
-          <span class="gl-item"><span class="gl-dot entity person"></span>Person</span>
-          <span class="gl-item"><span class="gl-dot entity topic"></span>Topic</span>
-          <span class="gl-item"><span class="gl-dot entity document"></span>Document</span>
-          <span class="gl-item"><span class="gl-dot fact"></span>Fact</span>
-        </div>
+        <!-- Filled from the live clusters — colour means cluster now, not entity type. -->
+        <div class="graph-legend" id="graph-legend" aria-hidden="true"></div>
         <div class="graph-zoom" role="group" aria-label="Zoom">
           <button class="btn ghost small" id="graph-zoom-out" aria-label="Zoom out">−</button>
           <button class="btn ghost small" id="graph-zoom-fit" aria-label="Fit to view">Fit</button>

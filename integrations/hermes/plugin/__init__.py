@@ -100,8 +100,8 @@ class SigilProvider(MemoryProvider):
     def __init__(self) -> None:
         self._session_id: str = ""
         self._platform: str = "cli"
-        self._namespace: str = "hermes-cli"
-        self._search_namespaces: str = "hermes-cli,default"
+        self._namespace: str = "default"
+        self._search_namespaces: str = "default"
         self._hermes_home: str = ""
         self._sync_thread: Optional[threading.Thread] = None
 
@@ -118,14 +118,26 @@ class SigilProvider(MemoryProvider):
     def initialize(self, session_id: str, **kwargs: Any) -> None:
         self._session_id = session_id
         self._platform = kwargs.get("platform", "cli")
-        self._namespace = f"hermes-{self._platform}"
-        # Cross-namespace search: this platform's facts PLUS the default
-        # namespace where Claude Code writes from the user's other machines.
-        self._search_namespaces = f"{self._namespace},default"
+        # Profile isolation, per Hermes' plugin contract: storage MUST be scoped
+        # by hermes_home, never by platform. Two profiles chatting on the same
+        # platform are different agents and must not share a memory space.
+        # Sigil derives the profile name from this path CLI-side, where it is
+        # unit-tested; we just forward the kwarg verbatim.
         self._hermes_home = kwargs.get("hermes_home", "")
+        # ONE namespace, deliberately.
+        #
+        # This used to write to `hermes-<platform>` while reading
+        # `hermes-<platform>,default`, which had two consequences: the writes
+        # never arrived (the namespace was passed as an env var the daemon does
+        # not read), and had they arrived, each platform would have been blind
+        # to every other one. Isolation is the PROFILE POD's job — it records
+        # which agent learned a fact. The namespace is the shared brain, so
+        # xero can recall what igris learned and both see Claude Code's memory.
+        self._namespace = "default"
+        self._search_namespaces = "default"
         logger.info(
-            "Sigil provider initialised: namespace=%s session=%s platform=%s",
-            self._namespace, session_id, self._platform,
+            "Sigil provider initialised: session=%s platform=%s hermes_home=%s",
+            session_id, self._platform, self._hermes_home or "(unset)",
         )
 
     def shutdown(self) -> None:
@@ -192,34 +204,58 @@ class SigilProvider(MemoryProvider):
                   session_id: str = "") -> None:
         """Persist memorable content from the just-completed turn.
 
-        Sigil's `remember` command runs its own classifier + AUDM dedup, so
-        we don't try to be clever about what's "memorable" — just hand
-        the user message over and let Sigil decide.
+        Sends the raw turn to `sigil ingest-turn`, which classifies it in the
+        daemon and extracts durable facts — the same path Claude Code's Stop
+        hook uses.
 
-        Background thread is belt-and-braces: `sigil remember --bg` already
-        spawns a detached subprocess, but wrapping it in a daemon thread
-        means the .run() call itself can't block sync_turn.
+        This used to call `sigil remember`, which was wrong in three ways: it
+        is the ATOMIC lane (stores the string verbatim, no extraction), it
+        rejects anything document-shaped, so any turn with a markdown list was
+        discarded, and its namespace was passed as an env var the daemon never
+        reads.
+
+        Background thread is belt-and-braces so the .run() call can never block
+        the agent's turn.
         """
         text = (user_content or "").strip()
         if not text:
             return
 
-        # Sigil's CLI takes facts as positional args. We send the raw user
-        # message — its ingestion pipeline classifies, extracts, dedupes.
-        # Trimming to a sensible upper bound avoids enormous argv on long
-        # pasted content.
+        # Trim to a sane upper bound — the classifier wants a turn, not a novel.
         snippet = text[:4000]
+        session_id = self._session_id
+        hermes_home = self._hermes_home
+        platform = self._platform
 
         def _save() -> None:
+            cmd = [
+                "sigil", "ingest-turn",
+                "--user", snippet,
+                "--platform", platform,
+                "--namespace", "default",
+            ]
+            if hermes_home:
+                cmd += ["--hermes-home", hermes_home]
+            if session_id:
+                cmd += ["--session", session_id]
             try:
-                subprocess.run(
-                    ["sigil", "remember", "--bg", snippet],
-                    env={**os.environ, "DEFAULT_NAMESPACE": self._namespace},
+                result = subprocess.run(
+                    cmd,
                     timeout=_REMEMBER_TIMEOUT_S,
                     capture_output=True,
+                    text=True,
                 )
             except Exception as exc:  # noqa: BLE001
-                logger.warning("sigil remember failed: %s", exc)
+                logger.warning("sigil ingest-turn failed: %s", exc)
+                return
+            # A non-zero exit is NOT an exception, so the old code swallowed it
+            # in silence — which is exactly how every rejected turn went
+            # unnoticed. Log it.
+            if result.returncode != 0:
+                logger.warning(
+                    "sigil ingest-turn exit %s: %s",
+                    result.returncode, _clean_text(result.stderr)[:400],
+                )
 
         # If the previous turn's sync is still running, let it finish first
         # so we don't pile up zombie threads on chatty sessions.
@@ -314,9 +350,17 @@ class SigilProvider(MemoryProvider):
             return _err("fact is required")
 
         try:
+            # `remember` is right HERE — the model is handing over one short,
+            # self-contained fact, which is exactly the atomic lane's contract.
+            # (sync_turn uses ingest-turn instead, because a whole turn is not
+            # a fact.) --profile scopes it to this agent's pod, resolving or
+            # creating it; --namespace is a real flag, unlike the env var that
+            # used to be set here and was never read.
+            cmd = ["sigil", "remember", fact, "--namespace=default"]
+            if self._hermes_home:
+                cmd.append(f"--hermes-home={self._hermes_home}")
             result = subprocess.run(
-                ["sigil", "remember", "--bg", fact],
-                env={**os.environ, "DEFAULT_NAMESPACE": self._namespace},
+                cmd,
                 timeout=_REMEMBER_TIMEOUT_S,
                 capture_output=True,
                 text=True,

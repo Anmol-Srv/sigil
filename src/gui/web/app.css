@@ -1705,6 +1705,14 @@ footer .footer-inner {
 .gl-dot.entity.topic { background: var(--etype-topic); }
 .gl-dot.entity.document { background: var(--etype-document); }
 .gl-dot.fact { background: var(--etype-fact); width: 7px; height: 7px; }
+/* Graph legend now names clusters; --fg-4 is the neutral every uncoloured
+   cluster is painted in, so the "other" swatch has to match it exactly. */
+.gl-dot.other { background: var(--fg-4); }
+.gl-n { color: var(--fg-4); font-family: var(--font-mono); font-size: var(--t-xs); }
+.gl-k { color: var(--fg-3); }
+/* Swatches sit flush as one bar when several share a meaning. */
+.gl-item .gl-dot + .gl-dot { margin-left: -1px; }
+.gl-item .gl-dot:not(:last-of-type) { border-radius: 0; }
 
 .graph-zoom {
   position: absolute; right: var(--s-3); bottom: var(--s-3);

@@ -23,7 +23,7 @@
 
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { PKG_ROOT } from '../paths.js';
 
 import { safeWrite } from '../safe-write.js';
@@ -32,8 +32,15 @@ import { detectInstalled } from './detect.js';
 const HERMES_HOME = join(homedir(), '.hermes');
 const HERMES_AGENT_DIR = join(HERMES_HOME, 'hermes-agent');
 const HERMES_MEMORY_PLUGINS_DIR = join(HERMES_AGENT_DIR, 'plugins', 'memory');
-const HERMES_SIGIL_PLUGIN_DIR = join(HERMES_MEMORY_PLUGINS_DIR, 'sigil');
+// The BUNDLED tree. Hermes documents it as "Closed to new providers" and owns
+// it, so an upgrade can overwrite anything we leave here. We install to the
+// user tree below and clean this up if a previous version put a copy here.
+const HERMES_BUNDLED_PLUGIN_DIR = join(HERMES_MEMORY_PLUGINS_DIR, 'sigil');
+// The supported third-party location: `$HERMES_HOME/plugins/<name>/`, which is
+// per-profile by design.
+const HERMES_SIGIL_PLUGIN_DIR = join(HERMES_HOME, 'plugins', 'sigil');
 const HERMES_CONFIG_PATH = join(HERMES_HOME, 'config.yaml');
+const HERMES_PROFILES_DIR = join(HERMES_HOME, 'profiles');
 
 const PKG_DIR = PKG_ROOT; // bundle-safe package root (see claude-code.js)
 const PLUGIN_SOURCE_DIR = join(PKG_DIR, 'integrations', 'hermes', 'plugin');
@@ -130,12 +137,12 @@ async function copyPluginTree({ dryRun }) {
   return { action: 'create' };
 }
 
-async function writeConfigProvider({ dryRun, value }) {
+async function writeConfigProvider({ dryRun, value, path = HERMES_CONFIG_PATH }) {
   const fs = await import('node:fs/promises');
-  if (!existsSync(HERMES_CONFIG_PATH)) {
+  if (!existsSync(path)) {
     return { action: 'skip', detail: 'config.yaml not present — set memory.provider manually' };
   }
-  const before = await fs.readFile(HERMES_CONFIG_PATH, 'utf8');
+  const before = await fs.readFile(path, 'utf8');
   const { content: after, outcome } = setMemoryProviderInYaml(before, value);
   if (outcome === 'unchanged') {
     return { action: 'skip', detail: `memory.provider already '${value}'` };
@@ -147,13 +154,36 @@ async function writeConfigProvider({ dryRun, value }) {
   }
   // safeWrite drops a .sigil.bak before overwriting — the config.yaml is ~14KB
   // of the user's own settings, so a backup is non-negotiable.
-  await safeWrite(HERMES_CONFIG_PATH, after, { dryRun });
+  await safeWrite(path, after, { dryRun });
   return {
     action: 'modify',
     detail: outcome === 'inserted'
       ? `memory.provider: '${value}' added to the memory: block`
       : `memory.provider → '${value}'`,
   };
+}
+
+/**
+ * Every config.yaml that needs the provider flipped: the top-level one plus
+ * each profile's.
+ *
+ * Hermes runs several independent agents out of one install and EACH keeps its
+ * own `~/.hermes/profiles/<name>/config.yaml`. Flipping only the top-level file
+ * left every profile but the default with no memory provider at all — which is
+ * exactly what had happened here: `igris` was wired up while `iron` and `xero`
+ * had no `memory:` block.
+ */
+function configTargets() {
+  const targets = [];
+  if (existsSync(HERMES_CONFIG_PATH)) targets.push(HERMES_CONFIG_PATH);
+  if (existsSync(HERMES_PROFILES_DIR)) {
+    for (const entry of readdirSync(HERMES_PROFILES_DIR, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const cfg = join(HERMES_PROFILES_DIR, entry.name, 'config.yaml');
+      if (existsSync(cfg)) targets.push(cfg);
+    }
+  }
+  return targets;
 }
 
 async function install({ dryRun = false } = {}) {
@@ -166,14 +196,61 @@ async function install({ dryRun = false } = {}) {
     detail: 'plugin tree (__init__.py, plugin.yaml, README.md)',
   });
 
-  const cfgResult = await writeConfigProvider({ dryRun, value: 'sigil' });
-  actions.push({
-    action: cfgResult.action,
-    path: HERMES_CONFIG_PATH,
-    detail: cfgResult.detail,
-  });
+  // Retire a copy left in the bundled tree by an earlier version. Two
+  // providers registered under the same name is worse than none.
+  if (existsSync(HERMES_BUNDLED_PLUGIN_DIR)) {
+    if (!dryRun) {
+      const fs = await import('node:fs/promises');
+      await fs.rm(HERMES_BUNDLED_PLUGIN_DIR, { recursive: true, force: true });
+    }
+    actions.push({
+      action: 'delete',
+      path: HERMES_BUNDLED_PLUGIN_DIR,
+      detail: 'removed stale copy from Hermes\' bundled tree',
+    });
+  }
+
+  for (const target of configTargets()) {
+    let cfgResult = await writeConfigProvider({ dryRun, value: 'sigil', path: target });
+    // A partial profile config (xero's is 3 lines) has no `memory:` block at
+    // all, and does NOT inherit the top-level one — verified with
+    // `hermes config get memory.provider`, which comes back empty. Our targeted
+    // line edit can only replace an existing key, so hand the create case to
+    // Hermes' own CLI: it owns the file format, and guessing where to splice a
+    // new block into someone's config is how you corrupt it.
+    if (cfgResult.action === 'skip' && /no top-level `memory:` block/.test(cfgResult.detail || '')) {
+      const viaCli = await setProviderViaHermesCli({ configPath: target, dryRun });
+      if (viaCli) cfgResult = viaCli;
+    }
+    actions.push({ action: cfgResult.action, path: target, detail: cfgResult.detail });
+  }
 
   return { actions };
+}
+
+/**
+ * Create the `memory:` block through `hermes config set`, scoped to the profile
+ * that owns this config file. Returns null when the binary is unavailable, so
+ * the caller keeps the honest "add one, then re-run" skip.
+ */
+async function setProviderViaHermesCli({ configPath, dryRun }) {
+  const { dirname } = await import('node:path');
+  const home = dirname(configPath);
+  if (dryRun) {
+    return { action: 'modify', detail: "memory.provider → 'sigil' (via hermes config set)" };
+  }
+  try {
+    const { spawnSync } = await import('node:child_process');
+    const res = spawnSync('hermes', ['config', 'set', 'memory.provider', 'sigil'], {
+      env: { ...process.env, HERMES_HOME: home },
+      encoding: 'utf8',
+      timeout: 30_000,
+    });
+    if (res.status !== 0) return null;
+    return { action: 'modify', detail: "memory.provider → 'sigil' (created via hermes config set)" };
+  } catch {
+    return null;
+  }
 }
 
 async function uninstall({ dryRun = false } = {}) {

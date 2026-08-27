@@ -29,10 +29,25 @@ beforeEach(async () => {
 });
 
 describe('ensureActivePodsForHook — pod ownership', () => {
-  it('attaches to the PROJECT only, not the session, when both exist', async () => {
+  it('gives the project ownership and the session a mention, when both exist', async () => {
     const r = await dispatch({ sessionId: 's1', cwd: '/repo/mycohort-api' });
-    expect(r.podUids).toEqual([PROJECT.uid]);
-    expect(r.podUids).not.toContain(SESSION.uid);
+    expect(r.podUids).toEqual([
+      { uid: PROJECT.uid, role: 'primary' },
+      { uid: SESSION.uid, role: 'mention' },
+    ]);
+  });
+
+  it('never gives two pods ownership of the same write', async () => {
+    // The double-counting this guards against: one fact reading as "1 fact" in
+    // the project AND "1 fact" in the session.
+    const r = await dispatch({ sessionId: 's1', cwd: '/repo/mycohort-api' });
+    expect(r.podUids.filter((p) => p.role === 'primary')).toHaveLength(1);
+  });
+
+  it('does not mention the session twice when it is already the owner', async () => {
+    ensureProjectPod.mockResolvedValue(null);
+    const r = await dispatch({ sessionId: 's1', cwd: '/tmp' });
+    expect(r.podUids).toEqual([{ uid: SESSION.uid, role: 'primary' }]);
   });
 
   it('still returns the session pod object — it stays a session record', async () => {
@@ -47,12 +62,12 @@ describe('ensureActivePodsForHook — pod ownership', () => {
     // An agent invoked outside any repo: the session is the only real scope.
     ensureProjectPod.mockResolvedValue(null);
     const r = await dispatch({ sessionId: 's1', cwd: '/tmp' });
-    expect(r.podUids).toEqual([SESSION.uid]);
+    expect(r.podUids).toEqual([{ uid: SESSION.uid, role: 'primary' }]);
   });
 
   it('attaches to the project even with no session at all', async () => {
     const r = await dispatch({ sessionId: null, cwd: '/repo/mycohort-api' });
-    expect(r.podUids).toEqual([PROJECT.uid]);
+    expect(r.podUids).toEqual([{ uid: PROJECT.uid, role: 'primary' }]);
     expect(ensureActiveSession).not.toHaveBeenCalled();
   });
 
@@ -68,6 +83,6 @@ describe('ensureActivePodsForHook — pod ownership', () => {
   it('survives a throwing project resolver by falling back to the session', async () => {
     ensureProjectPod.mockRejectedValue(new Error('git not found'));
     const r = await dispatch({ sessionId: 's1', cwd: '/repo/x' });
-    expect(r.podUids).toEqual([SESSION.uid]);
+    expect(r.podUids).toEqual([{ uid: SESSION.uid, role: 'primary' }]);
   });
 });

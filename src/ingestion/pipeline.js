@@ -613,9 +613,21 @@ function queuedEntityResult(queued) {
 async function resolvePodAttachments({ podUids, resolvePodsFrom, metadata, namespace }) {
   const attachments = [];
 
-  for (const uid of podUids) {
+  // Entries are either a bare uid (primary, the long-standing shape) or
+  // { uid, role } — hooks use the latter to record a session mention alongside
+  // the project that owns the write.
+  for (const entry of podUids) {
+    const uid = typeof entry === 'string' ? entry : entry?.uid;
+    const role = typeof entry === 'string' ? 'primary' : (entry?.role || 'primary');
+    if (!uid) {
+      // Say so. Skipping in silence is how a caller that handed us
+      // `{pod, isNew}` instead of the pod row reported a successful save,
+      // attached to nothing, and left an empty pod behind.
+      console.error('[pipeline] pod attachment skipped: entry has no uid', JSON.stringify(entry));
+      continue;
+    }
     const pod = await podStore.findByUid(uid);
-    if (pod) attachments.push({ podId: pod.id, role: 'primary' });
+    if (pod) attachments.push({ podId: pod.id, role });
   }
 
   if (resolvePodsFrom === 'metadata') {
@@ -658,9 +670,13 @@ async function attachFactsToPods(results, attachments, db) {
     const category = r?.fact?.category ?? r?.existing?.category ?? null;
     if (category && PERSONAL_CATEGORIES.includes(category)) continue;
 
-    const role = r?.action === 'SKIP' ? 'mention' : 'primary';
-    for (const { podId } of attachments) {
-      await podMembership.attachFact(podId, factId, role, db);
+    // A re-mention downgrades to 'mention'; so does a pod that only ever
+    // wanted the mention. Take the weaker of the two — a pod never gets
+    // ownership it did not ask for.
+    const byAction = r?.action === 'SKIP' ? 'mention' : 'primary';
+    for (const { podId, role } of attachments) {
+      const effective = byAction === 'mention' || role === 'mention' ? 'mention' : 'primary';
+      await podMembership.attachFact(podId, factId, effective, db);
     }
   }
 }

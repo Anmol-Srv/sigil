@@ -946,6 +946,7 @@ async function loadGraph() {
     if (!graph.island) {
       graph.island = mountGraph($('#graph-canvas'));
       graph.island.onNodeClick = (n) => openGraphNode(n);
+      graph.island.onClusters = renderGraphLegend;
     }
     graph.island.setData(data);
     graph.loaded = true;
@@ -954,6 +955,24 @@ async function loadGraph() {
   }
 }
 
+
+// The legend is an ENCODING KEY, not a region list. Colour is generated per
+// region rank, so the honest thing to show is the set of hues in play plus what
+// grey means — too few links to be a region at all. Which region is which comes
+// from the hub label on canvas, not from memorising eleven swatches.
+function renderGraphLegend(clusters) {
+  const el = $('#graph-legend');
+  if (!el) return;
+  const regions = clusters.filter((c) => !c.minor && !c.unconnected);
+  if (!regions.length) { el.innerHTML = ''; return; }
+  const ramp = regions.map((c) => c.color).filter(Boolean);
+  const quiet = clusters.reduce((n, c) => (c.minor || c.unconnected ? n + c.size : n), 0);
+  el.innerHTML = [
+    `<span class="gl-item">${ramp.map((h) => `<span class="gl-dot" style="background:${escape(h)}"></span>`).join('')}`
+      + `<span class="gl-k">${regions.length} regions</span></span>`,
+    `<span class="gl-item"><span class="gl-dot other"></span><span class="gl-k">few links</span> <span class="gl-n">${quiet}</span></span>`,
+  ].join('');
+}
 
 // Primary: single graphSnapshot RPC. Fallback (older daemons without it):
 // compose from listFacts + per-fact getFactContext + searchEntity.

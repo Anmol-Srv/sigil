@@ -543,7 +543,11 @@ async function getHotFacts(namespace, { limit = 10, since } = {}) {
     .where('fl.access_count', '>', 0)
     .orderBy('fl.access_count', 'desc')
     .limit(limit)
-    .select('f.*');
+    // The lifecycle columns have to be SELECTED, not just joined and ordered
+    // on. Without them every caller read `accessCount` off a row that only
+    // carried `f.*`, so the "Most recalled" panel ranked correctly and then
+    // rendered every count as 0× — the one number the panel exists to show.
+    .select('f.*', 'fl.access_count', 'fl.last_accessed_at');
 
   if (namespace) query.where({ 'f.namespace': namespace });
   if (since) query.where('fl.last_accessed_at', '>=', since);

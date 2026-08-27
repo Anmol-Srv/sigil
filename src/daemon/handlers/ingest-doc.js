@@ -113,7 +113,8 @@ async function doIngest(params) {
     title: result.title ?? null,
     documentId: result.documentId ?? null,
     documentUid: result.documentUid ?? null,
-    pods: podUids,
+    // Plain uids on the wire: role is a write-path detail, not API surface.
+    pods: podUids.map((p) => (typeof p === 'string' ? p : p.uid)),
     chunkCount: result.chunkCount ?? 0,
     facts: result.facts ?? null,
     entities: result.entities || null,
@@ -175,7 +176,7 @@ export function registerIngestDoc(registry) {
         durable: true,
         jobUid: queued.job.uid,
         title: staged.title || null,
-        pods: staged.podUids,
+        pods: staged.podUids.map((p) => (typeof p === 'string' ? p : p.uid)),
       };
     }
 

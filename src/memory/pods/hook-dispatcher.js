@@ -67,16 +67,28 @@ export async function ensureActivePodsForHook({
   // It also made "which pod owns this fact" unanswerable.
   //
   // The project is the durable scope — it's what you come back to next week —
-  // so it owns the write. The session pod stays as a session RECORD (cwd, model,
-  // transcript, for `sigil session show`) and only receives facts when there is
-  // no project to own them: an agent invoked outside any repo, where the session
-  // is genuinely the only meaningful scope.
+  // so it OWNS the write ('primary'). The session records the same facts as
+  // 'mention': enough to answer "what happened in this session" without
+  // claiming them. The first cut of this fix dropped the session attachment
+  // entirely, which read as clean but quietly broke two things — session pods
+  // accumulated forever with 0 facts, and end-of-session synthesis, which reads
+  // the session pod's own fact members, never once fired for a session run
+  // inside a project.
   //
   // Nothing is lost at read time: hot-context blends kinds with content-level
   // dedup, so the duplicate session copy was already being discarded there, and
   // podScope:'auto' still unions every active kind.
   const owner = projectPod || sessionPod;
-  const podUids = owner ? [owner.uid] : [];
+  const podUids = owner ? [{ uid: owner.uid, role: 'primary' }] : [];
+
+  // The session ALSO records what passed through it, as a 'mention' — which
+  // does not bump the pod's counters, so nothing double-counts and ownership
+  // stays unambiguous. Without this the session pod was inert: end-of-session
+  // synthesis reads its own fact members and needs three, so for any session
+  // run inside a project it found zero and silently never produced a summary.
+  if (sessionPod && owner !== sessionPod) {
+    podUids.push({ uid: sessionPod.uid, role: 'mention' });
+  }
 
   return { sessionPod, projectPod, podUids };
 }

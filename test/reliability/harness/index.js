@@ -29,9 +29,32 @@ export async function createReliabilityContext() {
   // UPDATE/CONTRADICT override prompt() to return the verdict they're
   // exercising. Default 'ADD' keeps distinct seeds distinct.
   const llmPrompt = vi.fn(async () => 'ADD');
+
+  // AUDM's judge calls promptJson, NOT prompt, and expects the batch shape
+  // {decisions:[{input_index, candidate_key, action}]} — one entry per offered
+  // pair. The old stub returned {}, which every batch read as "0 of N
+  // decisions" and threw, so the verdict suites failed for a reason that had
+  // nothing to do with what they test. Synthesize a faithful answer from the
+  // cases carried in the prompt, still steered by llmPrompt so suites keep
+  // setting the verdict the way they always have.
+  const promptJson = vi.fn(async (input) => {
+    const tail = String(input).split('\n\n').pop();
+    let cases;
+    try { cases = JSON.parse(tail); } catch { return {}; }
+    if (!Array.isArray(cases)) return {};
+    const action = String(await llmPrompt()).trim().toUpperCase();
+    return {
+      decisions: cases.map((c) => ({
+        input_index: c.input_index,
+        candidate_key: c.candidate_key,
+        action,
+      })),
+    };
+  });
+
   vi.doMock('../../../src/lib/llm.js', () => ({
     prompt: llmPrompt,
-    promptJson: vi.fn(async () => ({})),
+    promptJson,
   }));
 
   // Import app code AFTER the mocks so the transitive cortex/llm imports hit
@@ -83,7 +106,7 @@ export async function createReliabilityContext() {
 
   return {
     db, pg,
-    store, search, podStore, membership, pipeline, hotContext, embed, llmPrompt,
+    store, search, podStore, membership, pipeline, hotContext, embed, llmPrompt, promptJson,
     seedPod, seedFact, doSearch,
     getHotFacts: (opts) => hotContext.getHotFacts(opts),
     async destroy() {

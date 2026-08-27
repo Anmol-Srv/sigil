@@ -15,6 +15,7 @@ import { register } from '../registry.js';
 
 import { claudeSessionKind } from './claude_session.js';
 import { directiveKind } from './directive.js';
+import { hermesProfileKind } from './hermes_profile.js';
 import { personKind } from './person.js';
 import { projectKind } from './project.js';
 import { playbookKind } from './playbook.js';
@@ -31,6 +32,7 @@ const BUILTINS = [
   projectKind,
   personKind,
   playbookKind,
+  hermesProfileKind,
   vitalKind,
 ];
 

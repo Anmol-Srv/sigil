@@ -14,21 +14,54 @@
  */
 export function registerIngestTurn(registry) {
   registry.register('ingestTurn', async (params = {}) => {
-    const facts = Array.isArray(params.facts) ? params.facts.filter(Boolean) : [];
-    if (facts.length === 0) return { saved: 0, podUids: 0 };
+    let facts = Array.isArray(params.facts) ? params.facts.filter(Boolean) : [];
+
+    // Two entry points, one save path.
+    //
+    // Claude Code's Stop hook classifies in the HOOK process (it already has
+    // the turn, and doing the LLM call there keeps the daemon free) and posts
+    // finished facts. Hermes is a Python plugin that cannot run our classifier,
+    // so it posts the raw turn and the daemon classifies. Both converge on the
+    // saveFacts call below — the alternative, a second write path for Hermes,
+    // is how `remember` ended up bypassing pods and extraction in the first
+    // place.
+    if (!facts.length && params.userMessage) {
+      const { classifyTurn } = await import('../../hooks/stop-classify.js');
+      try {
+        facts = (await classifyTurn(String(params.userMessage))) || [];
+      } catch (err) {
+        console.error(`[ingestTurn] classify failed: ${err.message}`);
+        return { saved: 0, podUids: 0, classified: 0, error: 'classify_failed' };
+      }
+    }
+
+    if (facts.length === 0) return { saved: 0, podUids: 0, classified: 0 };
 
     // Resolve the active pods (session + project today). Best-effort: if pod
     // dispatch fails, still save the facts to the namespace (attached to none)
     // rather than dropping memorable content.
     let podUids = [];
     try {
-      const { ensureActivePodsForHook } = await import('../../memory/pods/hook-dispatcher.js');
-      const dispatch = await ensureActivePodsForHook({
-        sessionId: params.sessionId || null,
-        cwd: params.cwd || null,
-        transcriptPath: params.transcriptPath || null,
-      });
-      podUids = dispatch.podUids || [];
+      // A Hermes profile is its own durable scope and has no cwd, so it does
+      // not go through the session/project dispatcher at all.
+      if (params.profile) {
+        const { ensureHermesProfilePod } = await import('../../memory/pods/kinds/hermes_profile.js');
+        const pod = await ensureHermesProfilePod({
+          profile: params.profile,
+          hermesHome: params.hermesHome || null,
+          platform: params.platform || null,
+          namespace: params.namespace || null,
+        });
+        podUids = pod ? [{ uid: pod.uid, role: 'primary' }] : [];
+      } else {
+        const { ensureActivePodsForHook } = await import('../../memory/pods/hook-dispatcher.js');
+        const dispatch = await ensureActivePodsForHook({
+          sessionId: params.sessionId || null,
+          cwd: params.cwd || null,
+          transcriptPath: params.transcriptPath || null,
+        });
+        podUids = dispatch.podUids || [];
+      }
     } catch (err) {
       // Surface in the daemon log; the save below still runs.
        
@@ -39,8 +72,8 @@ export function registerIngestTurn(registry) {
     // owns only short admission/commit locks. throwOnError lets the hook spool
     // the turn if embedding or persistence genuinely fails.
     const { saveFacts } = await import('../../hooks/stop-classify.js');
-    await saveFacts(facts, { podUids, throwOnError: true });
+    await saveFacts(facts, { podUids, namespace: params.namespace || null, throwOnError: true });
 
-    return { saved: facts.length, podUids: podUids.length };
+    return { saved: facts.length, podUids: podUids.length, classified: facts.length };
   });
 }

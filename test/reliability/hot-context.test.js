@@ -54,4 +54,23 @@ suite('hot-context composition (real embeddings)', () => {
     expect(rows.length).toBe(inPod.length);
     expect(rows.some((c) => c.includes('dosa'))).toBe(false);
   });
+
+  it('reports the real access count, not 0 — the number "Most recalled" exists to show', async () => {
+    const seeded = await ctx.seedFact({ content: 'The deploy gate lives in release.yml and force-pushes to the release branch.' });
+
+    // Three recalls through the real store path.
+    await ctx.store.recordAccess([seeded.factId]);
+    await ctx.store.recordAccess([seeded.factId]);
+    await ctx.store.recordAccess([seeded.factId]);
+
+    const hot = await ctx.store.getHotFacts(null, { limit: 10 });
+    const row = hot.find((f) => f.id === seeded.factId);
+
+    expect(row).toBeDefined();
+    // getHotFacts JOINs fact_lifecycle and ORDERs by access_count, so it is easy
+    // to leave the column out of the SELECT — which ranked correctly and then
+    // rendered every count as 0x in the GUI.
+    expect(row.accessCount).toBe(3);
+    expect(row.lastAccessedAt).toBeTruthy();
+  });
 });

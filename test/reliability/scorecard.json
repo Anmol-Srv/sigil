@@ -1,8 +1,8 @@
 {
-  "ts": "2026-05-29T13:53:38.969Z",
+  "ts": "2026-08-25T15:14:34.350Z",
   "commit": "local",
-  "model": "ollama:nomic-embed-text",
-  "precision": 0.833,
+  "model": "ollama:mxbai-embed-large",
+  "precision": 0.75,
   "recall": 1,
   "leakRate": 0,
   "cases": 6,
@@ -32,8 +32,8 @@
     },
     {
       "name": "paraphrase (inject)",
-      "surfaced": 1,
-      "precision": 1,
+      "surfaced": 2,
+      "precision": 0.5,
       "leaked": false
     },
     {

@@ -15,7 +15,12 @@ async function attach(podId, memberType, memberId, role = 'primary', db = cortex
     [podId, memberType, memberId, role],
   );
 
-  if (rowCount > 0) {
+  // Only a PRIMARY membership counts. A 'mention' records that a fact passed
+  // through this pod without claiming it, which is what lets a session pod keep
+  // a record of its own work while the project pod stays the single owner — the
+  // double-counting that made one fact read as "1 fact" in two different pods
+  // is exactly what the role is for.
+  if (rowCount > 0 && role === 'primary') {
     if (memberType === 'fact') await incrementCounters(podId, { facts: 1 }, db);
     else if (memberType === 'document') await incrementCounters(podId, { docs: 1 }, db);
   }

@@ -134,6 +134,25 @@ async function resolveRememberPods(params, namespace) {
     throw err;
   }
 
+  // A Hermes profile resolves-or-CREATES, unlike `pod`/`about` which must
+  // already exist. The first explicit save an agent makes would otherwise throw
+  // "no pod matches hermes:xero" simply because no turn had created it yet.
+  if (params.profile) {
+    try {
+      const { ensureHermesProfilePod } = await import('../../memory/pods/kinds/hermes_profile.js');
+      const pod = await ensureHermesProfilePod({
+        profile: params.profile,
+        hermesHome: params.hermesHome || null,
+        platform: params.platform || null,
+        namespace,
+      });
+      return pod ? [{ uid: pod.uid, role: 'primary' }] : [];
+    } catch (err) {
+      console.error(`[remember] profile pod resolution failed: ${err.message}`);
+      return [];
+    }
+  }
+
   if (!params.cwd && !params.sessionId) return [];
   try {
     const { ensureActivePodsForHook } = await import('../../memory/pods/hook-dispatcher.js');
