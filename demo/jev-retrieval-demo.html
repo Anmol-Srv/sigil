@@ -1,78 +1,375 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sigil × Jev — search result demo</title>
-  <style>
-    :root { color-scheme:dark; --ink:#090a0c; --surface:#101317; --line:#242a31; --line-hi:#3a444e; --text:#f2f5f7; --muted:#8d97a2; --dim:#56616d; --blue:#0084ff; --sky:#a7dcff; --mint:#4ee0a0; --sans:Geist,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
-    * { box-sizing:border-box; } body { min-height:100vh; margin:0; overflow:hidden; background:radial-gradient(circle at 68% 45%,rgba(0,132,255,.12),transparent 30%),var(--ink); color:var(--text); font-family:var(--sans); } main { width:min(1120px,calc(100vw - 48px)); min-height:100vh; margin:auto; display:flex; flex-direction:column; justify-content:center; padding:30px 0; }
-    nav { display:flex; justify-content:space-between; align-items:center; color:var(--muted); font:10px var(--mono); letter-spacing:.1em; } .brand { display:flex; align-items:center; gap:9px; color:var(--text); font:700 14px var(--sans); letter-spacing:-.02em; } .mark { width:16px; height:16px; position:relative; border:2px solid var(--blue); } .mark:after { content:""; width:5px; height:5px; position:absolute; top:-4px; right:-4px; background:var(--blue); }
-    h1 { margin:28px 0 17px; font-size:clamp(34px,4.6vw,60px); line-height:.93; letter-spacing:-.06em; } h1 span { color:var(--muted); font-weight:400; }
-    .search { display:flex; align-items:center; height:54px; border:1px solid var(--line-hi); background:rgba(255,255,255,.025); } .search-icon { width:53px; display:grid; place-items:center; color:var(--sky); font:20px var(--mono); } input { width:100%; height:100%; border:0; outline:0; background:transparent; color:var(--text); font:15px var(--sans); letter-spacing:-.01em; } .search-state { padding-right:15px; color:var(--muted); white-space:nowrap; font:10px var(--mono); }
-    .results { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:22px; } .column { min-width:0; } .column.after { border-left:1px solid var(--line); padding-left:18px; } .head { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; border-bottom:1px solid var(--line); } .head b { font-size:12px; } .head span { color:var(--muted); font:9px var(--mono); letter-spacing:.08em; } .after .head b,.after .head span { color:var(--sky); }
-    .row { display:grid; grid-template-columns:27px minmax(0,1fr) auto; align-items:center; gap:9px; min-height:55px; border-bottom:1px solid var(--line); opacity:0; transform:translateY(7px); } .rank { color:var(--dim); font:10px var(--mono); } .content { min-width:0; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#c4cbd2; font-size:12px; } .meta { display:flex; align-items:center; gap:5px; margin-top:4px; color:var(--dim); font:9px var(--mono); } .source { padding:2px 3px; border:1px solid #303940; } .score { color:var(--muted); font:10px var(--mono); } .row.answer .title { color:#eff8ff; font-weight:600; } .row.answer .score { color:var(--sky); } .row.answer .source { color:var(--sky); border-color:rgba(0,132,255,.45); background:rgba(0,132,255,.1); } .row.show { animation:appear .24s ease forwards; }
-    .after .row:nth-child(2) { animation-delay:.12s; } .after .row:nth-child(3) { animation-delay:.2s; } .after .row:nth-child(4) { animation-delay:.28s; } .after .row:nth-child(5) { animation-delay:.36s; } .before .row:nth-child(2) { animation-delay:.06s; } .before .row:nth-child(3) { animation-delay:.12s; } .before .row:nth-child(4) { animation-delay:.18s; } .before .row:nth-child(5) { animation-delay:.24s; }
-    .notice { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:40px; margin-top:13px; padding:0 11px; border-left:2px solid var(--blue); background:linear-gradient(90deg,rgba(0,132,255,.12),transparent); color:var(--muted); font-size:10px; opacity:0; transform:translateY(5px); } .notice strong { color:var(--sky); font:10px var(--mono); } .notice.show { animation:appear .24s ease forwards; }
-    .foot { display:flex; gap:23px; margin-top:22px; padding:12px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); color:var(--muted); font-size:10px; } .foot b { color:var(--sky); font:10px var(--mono); } .metrics { display:flex; gap:26px; padding-top:12px; color:var(--muted); font-size:10px; } .metrics b { color:var(--text); font:600 13px var(--mono); letter-spacing:-.05em; } .metrics em { color:var(--sky); font-style:normal; } footer { display:flex; justify-content:space-between; margin-top:auto; color:var(--dim); font-size:9px; }
-    @keyframes appear { to { opacity:1; transform:translateY(0); } } @media (max-width:700px) { body { overflow:auto; } main { width:min(100vw - 28px,1120px); min-height:100vh; padding:20px 0; } .results { grid-template-columns:1fr; } .column.after { border-left:0; border-top:1px solid var(--line); padding:18px 0 0; } .foot,.metrics { flex-wrap:wrap; gap:9px 18px; } footer { display:block; } footer span+span { display:block; margin-top:4px; } }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sigil × Jev — retrieval release</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg-0:#08090b; --bg-1:#0b0c0e; --surface-1:#101113; --surface-2:#151618; --surface-3:#1b1d20;
+  --border-1:#1d1f23; --border-2:#292c31; --border-strong:#3a3e44;
+  --fg-1:#f4f5f6; --fg-2:#a2a5ab; --fg-3:#82858c; --fg-4:#50535a;
+  --brand:#0084ff; --brand-deep:#004ce6; --brand-light:#99d5ff;
+  --brand-tint:rgba(0,132,255,.12); --brand-ring:rgba(0,132,255,.45);
+  --ok:#3ddc84; --ok-tint:rgba(61,220,132,.12);
+  --warn:#f5b544; --warn-tint:rgba(245,181,68,.12);
+  --danger:#ff5a52; --danger-tint:rgba(255,90,82,.12);
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px; --sp-5:24px; --sp-6:32px; --sp-7:48px; --sp-8:64px;
+  --radius-1:2px; --radius-2:3px;
+  --ease:cubic-bezier(.2,0,0,1); --dur-1:90ms; --dur-2:150ms;
+  --mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-text-size-adjust:100%}
+body{
+  background:var(--bg-1); color:var(--fg-2);
+  font:400 .9375rem/1.55 Geist,system-ui,-apple-system,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.mono{font-family:var(--mono);font-feature-settings:'ss01' on,'zero' on}
+.wrap{max-width:1180px;margin:0 auto;padding:var(--sp-7) var(--sp-6) var(--sp-8)}
+.eyebrow{font:600 .6875rem/1.35 Geist;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3)}
+
+/* ── header ─────────────────────────────────────────── */
+header{border-bottom:1px solid var(--border-2);padding-bottom:var(--sp-5);margin-bottom:var(--sp-7)}
+.brandline{display:flex;align-items:center;gap:var(--sp-3);margin-bottom:var(--sp-4)}
+.mark{width:22px;height:22px;flex:0 0 22px;border-radius:var(--radius-1);
+  background:linear-gradient(145deg,var(--brand-light),var(--brand) 45%,var(--brand-deep));}
+h1{font:700 2.25rem/1.15 Geist;letter-spacing:-.01em;color:var(--fg-1);margin-bottom:var(--sp-3)}
+.lede{font-size:1.0625rem;max-width:74ch;color:var(--fg-2)}
+.lede b{color:var(--fg-1);font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-top:var(--sp-5)}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border-2);
+  border-radius:var(--radius-1);padding:3px 8px;font-family:var(--mono);font-size:.6875rem;
+  color:var(--fg-3);background:var(--surface-1)}
+.chip b{color:var(--fg-2);font-weight:500}
+.chip.flag{border-color:rgba(245,181,68,.35);background:var(--warn-tint);color:var(--warn)}
+
+/* ── sections ───────────────────────────────────────── */
+section{margin-top:var(--sp-8)}
+.shead{display:flex;align-items:baseline;justify-content:space-between;gap:var(--sp-4);
+  margin-bottom:var(--sp-4);padding-bottom:var(--sp-3);border-bottom:1px solid var(--border-1)}
+h2{font:600 1.125rem/1.35 Geist;color:var(--fg-1)}
+.snote{font-size:.8125rem;color:var(--fg-3);max-width:52ch;text-align:right}
+
+/* ── hero stats ─────────────────────────────────────── */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--border-1);
+  border:1px solid var(--border-2);border-radius:var(--radius-2);overflow:hidden}
+.stat{background:var(--surface-1);padding:var(--sp-5)}
+.stat .k{display:block;margin-bottom:var(--sp-4)}
+.stat .pair{display:flex;align-items:baseline;gap:var(--sp-3)}
+.stat .from{font-family:var(--mono);font-size:1.125rem;color:var(--fg-4);text-decoration:line-through;
+  text-decoration-thickness:1px}
+.stat .arrow{color:var(--fg-4);font-size:.8125rem}
+.stat .to{font-family:var(--mono);font-size:2rem;font-weight:600;line-height:1;color:var(--fg-1)}
+.stat .to.good{color:var(--ok)}
+.stat .d{margin-top:var(--sp-3);font-family:var(--mono);font-size:.75rem;color:var(--fg-3)}
+.stat .cap{margin-top:var(--sp-2);font-size:.8125rem;color:var(--fg-3);line-height:1.45}
+
+/* ── before/after ───────────────────────────────────── */
+.picker{display:flex;flex-wrap:wrap;gap:var(--sp-1);margin-bottom:var(--sp-4)}
+.picker button{font:500 .8125rem/1 Geist;color:var(--fg-3);background:var(--surface-1);
+  border:1px solid var(--border-1);border-radius:var(--radius-1);padding:7px 10px;cursor:pointer;
+  transition:background var(--dur-1) var(--ease),color var(--dur-1) var(--ease)}
+.picker button:hover{background:var(--surface-2);color:var(--fg-2)}
+.picker button[aria-pressed=true]{background:var(--brand-tint);border-color:var(--brand);color:var(--fg-1)}
+.picker button:focus-visible{outline:none;box-shadow:0 0 0 1px var(--brand),0 0 0 4px var(--brand-ring)}
+.q{border:1px solid var(--border-2);border-radius:var(--radius-2);background:var(--surface-1);
+  padding:var(--sp-4) var(--sp-5);margin-bottom:var(--sp-4);display:flex;
+  align-items:center;justify-content:space-between;gap:var(--sp-5);flex-wrap:wrap}
+.q .qt{font-size:1rem;color:var(--fg-1);font-weight:500}
+.q .qm{font-family:var(--mono);font-size:.75rem;color:var(--fg-3);white-space:nowrap}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-4)}
+.col{border:1px solid var(--border-2);border-radius:var(--radius-2);background:var(--surface-1);overflow:hidden}
+.col > .ch{display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);
+  padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--border-1);background:var(--bg-0)}
+.col.after > .ch{border-bottom-color:var(--border-2)}
+.rank{display:flex;gap:var(--sp-3);padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--border-1);
+  align-items:flex-start}
+.rank:last-child{border-bottom:0}
+.rank .n{font-family:var(--mono);font-size:.75rem;color:var(--fg-4);width:1.4em;flex:0 0 auto;padding-top:2px}
+.rank .body{min-width:0}
+.rank .t{font-size:.8125rem;line-height:1.45;color:var(--fg-2)}
+.rank .meta{margin-top:5px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.rank.hit{background:var(--ok-tint)}
+.rank.hit .n{color:var(--ok)}
+.rank.hit .t{color:var(--fg-1)}
+.rank.bad .t{color:var(--fg-3)}
+.tag{font-family:var(--mono);font-size:.625rem;letter-spacing:.04em;text-transform:uppercase;
+  padding:1px 5px;border-radius:var(--radius-1);border:1px solid var(--border-2);color:var(--fg-3)}
+.tag.ans{border-color:rgba(61,220,132,.4);background:var(--ok-tint);color:var(--ok)}
+.tag.noise{border-color:rgba(255,90,82,.35);background:var(--danger-tint);color:var(--danger)}
+.tag.graph{border-color:rgba(0,132,255,.4);background:var(--brand-tint);color:var(--brand-light)}
+.tag.id{color:var(--fg-4)}
+
+/* ── table ──────────────────────────────────────────── */
+table{width:100%;border-collapse:collapse;border:1px solid var(--border-2);border-radius:var(--radius-2)}
+th,td{text-align:right;padding:9px var(--sp-4);border-bottom:1px solid var(--border-1);font-size:.8125rem}
+th{font:600 .6875rem/1.35 Geist;letter-spacing:.12em;text-transform:uppercase;color:var(--fg-3);
+  background:var(--bg-0);border-bottom-color:var(--border-2)}
+th:first-child,td:first-child{text-align:left}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--surface-2)}
+td.v{font-family:var(--mono);color:var(--fg-2)}
+td.v.hi{color:var(--fg-1);font-weight:500}
+td.d{font-family:var(--mono)}
+td.d.up{color:var(--ok)} td.d.down{color:var(--ok)} td.d.flat{color:var(--fg-4)}
+caption{caption-side:bottom;padding-top:var(--sp-3);font-size:.75rem;color:var(--fg-3);text-align:left}
+
+/* ── separation chart ───────────────────────────────── */
+.sep{border:1px solid var(--border-2);border-radius:var(--radius-2);background:var(--surface-1);padding:var(--sp-5)}
+.srow{display:grid;grid-template-columns:150px 1fr 44px;gap:var(--sp-3);align-items:center;margin-bottom:6px}
+.srow .lbl{font-family:var(--mono);font-size:.75rem;color:var(--fg-3);text-align:right}
+.srow .track{height:14px;background:var(--surface-3);border-radius:var(--radius-1);position:relative;overflow:hidden}
+.srow .fill{position:absolute;inset:0 auto 0 0;border-radius:var(--radius-1)}
+.srow.atk .fill{background:var(--danger)}
+.srow.ben .fill{background:var(--ok)}
+.srow .val{font-family:var(--mono);font-size:.75rem;color:var(--fg-2)}
+.sepline{position:relative;height:0;margin:var(--sp-4) 0}
+.threshold{border-top:1px dashed var(--border-strong);padding-top:var(--sp-2);margin:var(--sp-4) 0;
+  font-family:var(--mono);font-size:.75rem;color:var(--warn)}
+.band{display:flex;gap:var(--sp-5);margin-top:var(--sp-4);flex-wrap:wrap}
+.band div{font-size:.8125rem;color:var(--fg-3)}
+.band b{font-family:var(--mono);color:var(--fg-1);font-weight:500}
+
+/* ── two-up panels ──────────────────────────────────── */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-4)}
+.panel{border:1px solid var(--border-2);border-radius:var(--radius-2);background:var(--surface-1);padding:var(--sp-5)}
+.panel h3{font:600 1rem/1.35 Geist;color:var(--fg-1);margin-bottom:var(--sp-4)}
+.kv{display:flex;justify-content:space-between;gap:var(--sp-4);padding:7px 0;border-bottom:1px solid var(--border-1)}
+.kv:last-child{border-bottom:0}
+.kv dt{font-size:.8125rem;color:var(--fg-3)}
+.kv dd{font-family:var(--mono);font-size:.8125rem;color:var(--fg-1)}
+.bars{margin-top:var(--sp-3)}
+.bar{display:grid;grid-template-columns:96px 1fr 78px;gap:var(--sp-3);align-items:center;margin-bottom:7px}
+.bar .lbl{font-size:.8125rem;color:var(--fg-3)}
+.bar .track{height:10px;background:var(--surface-3);border-radius:var(--radius-1);overflow:hidden}
+.bar .fill{height:100%;border-radius:var(--radius-1)}
+.bar.a .fill{background:var(--ok)} .bar.b .fill{background:var(--warn)}
+.bar .val{font-family:var(--mono);font-size:.75rem;color:var(--fg-2);text-align:right}
+
+/* ── caveats ────────────────────────────────────────── */
+.caveat{border:1px solid rgba(245,181,68,.3);border-left:2px solid var(--warn);
+  border-radius:var(--radius-2);background:var(--warn-tint);padding:var(--sp-5)}
+.caveat h3{font:600 1rem/1.35 Geist;color:var(--warn);margin-bottom:var(--sp-3)}
+.caveat ul{list-style:none;display:grid;gap:var(--sp-3)}
+.caveat li{font-size:.875rem;color:var(--fg-2);padding-left:var(--sp-4);position:relative;line-height:1.5}
+.caveat li::before{content:"";position:absolute;left:0;top:.62em;width:5px;height:1px;background:var(--warn)}
+.caveat b{color:var(--fg-1);font-weight:600}
+footer{margin-top:var(--sp-8);padding-top:var(--sp-5);border-top:1px solid var(--border-1);
+  font-family:var(--mono);font-size:.75rem;color:var(--fg-4);display:flex;gap:var(--sp-5);flex-wrap:wrap}
+@media(max-width:900px){
+  .stats{grid-template-columns:repeat(2,1fr)} .cols,.grid2{grid-template-columns:1fr}
+  h1{font-size:1.75rem} .snote{text-align:left} .wrap{padding:var(--sp-5) var(--sp-4) var(--sp-7)}
+  .srow{grid-template-columns:110px 1fr 40px}
+}
+</style>
 </head>
 <body>
-  <main>
-    <nav><div class="brand"><span class="mark"></span>SIGIL <span style="color:var(--dim)">/</span> JEV</div><div>ILLUSTRATIVE SEARCH</div></nav>
-    <h1>Search memory.<br><span>Get the answer first.</span></h1>
-    <div class="search"><div class="search-icon">⌕</div><input id="query" aria-label="Search memory" autocomplete="off"><div class="search-state" id="state">SEARCHING</div></div>
+<div class="wrap">
 
-    <section class="results">
-      <article class="column before">
-        <div class="head"><b>Without Jev</b><span>LOCAL GRAPH · 12 RESULTS</span></div>
-        <div class="row"><span class="rank">01</span><div class="content"><div class="title">Project dashboard</div><div class="meta"><span class="source">direct</span></div></div><span class="score">.91</span></div>
-        <div class="row"><span class="rank">02</span><div class="content"><div class="title">Weekly progress update</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.86</span></div>
-        <div class="row"><span class="rank">03</span><div class="content"><div class="title">Schema migration required</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.78</span></div>
-        <div class="row"><span class="rank">04</span><div class="content"><div class="title">Build passed on current branch</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.74</span></div>
-        <div class="notice" id="before-note"><span>Useful deployment evidence begins at rank 3.</span><strong>AGENT SCANS</strong></div>
-      </article>
+<header>
+  <div class="brandline"><span class="mark"></span><span class="eyebrow">Sigil · retrieval release</span></div>
+  <h1>The right memory, first.</h1>
+  <p class="lede">Sigil recalls facts for coding agents from a local graph. It was finding the
+  right fact and then <b>burying it at rank 4</b>. A Jev decision layer now re-ranks the
+  shortlist before an agent ever sees it — and screens it for text written to hijack that agent.
+  Retrieval stays local and authoritative; every failure path returns the local order untouched.</p>
+  <div class="chips">
+    <span class="chip">model <b id="c-model"></b></span>
+    <span class="chip">n = <b id="c-n"></b> queries</span>
+    <span class="chip">build <b id="c-sha"></b></span>
+    <span class="chip">corpus <b id="c-corpus"></b></span>
+    <span class="chip flag">labels: <b id="c-labels"></b> — indicative, not peer-reviewed</span>
+  </div>
+</header>
 
-      <article class="column after">
-        <div class="head"><b>With Jev</b><span id="time">0.00s</span></div>
-        <div class="row answer"><span class="rank">01</span><div class="content"><div class="title">Schema migration required</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.94</span></div>
-        <div class="row answer"><span class="rank">02</span><div class="content"><div class="title">Build passed on current branch</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.89</span></div>
-        <div class="row answer"><span class="rank">03</span><div class="content"><div class="title">Open production blocker</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.86</span></div>
-        <div class="row"><span class="rank">04</span><div class="content"><div class="title">Project dashboard</div><div class="meta"><span class="source">direct</span></div></div><span class="score">.17</span></div>
-        <div class="notice" id="after-note"><span><strong>Not yet.</strong> Run the schema migration before deploy.</span><strong>3 SIGNALS</strong></div>
-      </article>
-    </section>
+<section>
+  <div class="shead"><h2>What changed</h2>
+    <p class="snote">Paired over one frozen shortlist per query. Same candidates, same labels — only the ordering differs.</p></div>
+  <div class="stats" id="stats"></div>
+</section>
 
-    <section class="foot"><div><b>LOCAL</b> scope + graph stay in Sigil</div><div><b>JEV</b> scores the same 12 local candidates</div><div><b>FALLBACK</b> local order remains available</div></section>
-    <section class="metrics"><span><b>.27 <em>→ .87</em></b> MRR@5</span><span><b>0% <em>→ 83%</em></b> Hit@1</span><span><b>+384ms</b> p50 decision time</span></section>
-    <footer><span>Private 12-query calibration · agent-double-reviewed</span><span>Animation replays every 5.5 seconds</span></footer>
-  </main>
-  <script>
-    const query = document.querySelector('#query');
-    const state = document.querySelector('#state');
-    const time = document.querySelector('#time');
-    const beforeRows = document.querySelectorAll('.before .row');
-    const afterRows = document.querySelectorAll('.after .row');
-    const beforeNote = document.querySelector('#before-note');
-    const afterNote = document.querySelector('#after-note');
-    const text = 'Can Project Delta deploy today?';
-    let timers = [];
-    function wait(fn, ms) { timers.push(setTimeout(fn, ms)); }
-    function replay() {
-      timers.forEach(clearTimeout); timers = [];
-      query.value = ''; state.textContent = 'SEARCHING'; time.textContent = '0.00s';
-      [...beforeRows, ...afterRows].forEach(row => row.classList.remove('show'));
-      beforeNote.classList.remove('show'); afterNote.classList.remove('show');
-      [...text].forEach((character, index) => wait(() => { query.value += character; }, index * 18));
-      const typed = text.length * 18;
-      wait(() => { beforeRows.forEach(row => row.classList.add('show')); beforeNote.classList.add('show'); }, typed + 80);
-      wait(() => { time.textContent = '0.09s'; }, typed + 90);
-      wait(() => { time.textContent = '0.21s'; }, typed + 210);
-      wait(() => { time.textContent = '0.38s'; afterRows.forEach(row => row.classList.add('show')); afterNote.classList.add('show'); state.textContent = 'DECIDED'; }, typed + 384);
-    }
-    query.addEventListener('keydown', event => { if (event.key === 'Enter') replay(); });
-    replay(); setInterval(replay, 5500);
-  </script>
+<section>
+  <div class="shead"><h2>Before and after, per query</h2>
+    <p class="snote">Top 5 as the agent receives them. Green is a fact labelled as answering the question.</p></div>
+  <div class="picker" id="picker"></div>
+  <div class="q"><span class="qt" id="q-text"></span><span class="qm" id="q-meta"></span></div>
+  <div class="cols">
+    <div class="col"><div class="ch"><span class="eyebrow">Before — local hybrid rank</span><span class="qm" id="b-mrr"></span></div><div id="before"></div></div>
+    <div class="col after"><div class="ch"><span class="eyebrow" style="color:var(--brand-light)">After — Jev decision layer</span><span class="qm" id="a-mrr"></span></div><div id="after"></div></div>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><h2>Every metric</h2>
+    <p class="snote">forbidden@k is the share of queries with a must-never-surface fact in the top k. Lower is better.</p></div>
+  <table id="metrics"><caption id="mcap"></caption></table>
+</section>
+
+<section>
+  <div class="shead"><h2>The injection screen</h2>
+    <p class="snote">A memory store is full of standing orders you gave your own agent. The screen has to drop an attack without deleting those.</p></div>
+  <div class="sep" id="sep"></div>
+</section>
+
+<section>
+  <div class="shead"><h2>What it costs</h2>
+    <p class="snote">The reranker runs on explicit search by default. Auto-injection stays on the local path.</p></div>
+  <div class="grid2">
+    <div class="panel"><h3>Per query</h3><dl id="cost"></dl></div>
+    <div class="panel"><h3>Auto-injection path — why it is off by default</h3>
+      <div class="bars" id="hook"></div>
+      <p style="margin-top:var(--sp-4);font-size:.8125rem;color:var(--fg-3);line-height:1.5">
+      That hook fires on every prompt you type. One setting (<span class="mono">jev.autoInject</span>) turns it on.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="shead"><h2>Read this before believing the numbers</h2></div>
+  <div class="caveat">
+    <h3>Known limits of this measurement</h3>
+    <ul>
+      <li><b>The labels are model-generated, not human-reviewed.</b> The same model that built
+      this system judged which facts were relevant. That is a conflict of interest, and it is
+      the single reason none of these numbers should be quoted as a benchmark.</li>
+      <li><b>n = 12 queries, one person's store.</b> No confidence intervals. Enough to catch
+      bugs — and it caught four — not enough to make a claim about anyone else's data.</li>
+      <li><b>Graph promotion is rare: 1 query in 12.</b> Traversal is query-agnostic, so most
+      of what it reaches gets rejected. Expansion earns its place by recall, not by precision.</li>
+      <li><b>forbidden@5 did not improve.</b> Rank 1 got materially cleaner; by rank 5 the
+      reranker is no better than local at keeping noise out.</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  <span>generated <span id="f-gen"></span></span>
+  <span>floor <span id="f-floor"></span></span>
+  <span>injection cutoff <span id="f-inj"></span></span>
+  <span>eval/jev-rerank/run-eval.js</span>
+</footer>
+
+</div>
+<script id="data" type="application/json">{"generatedAt":"2026-09-18T10:21:59.604Z","gitSha":"089cd9d","corpusSha":"702cafe29096","labelStatus":"agent-reviewed","model":"jev-1.13.0","floor":0.5,"injectionMax":0.7,"n":12,"metrics":{"hitAt1":{"local":0.0833,"jev":0.8333,"delta":0.75},"hitAt3":{"local":0.5833,"jev":0.8333,"delta":0.25},"hitAt5":{"local":0.75,"jev":0.8333,"delta":0.0833},"recallAt1":{"local":0.0417,"jev":0.4236,"delta":0.3819},"recallAt3":{"local":0.3819,"jev":0.6597,"delta":0.2778},"recallAt5":{"local":0.5903,"jev":0.7014,"delta":0.1111},"mrrAt5":{"local":0.3194,"jev":0.8333,"delta":0.5139},"ndcgAt5":{"local":0.3862,"jev":0.7028,"delta":0.3166},"forbiddenAt1":{"local":0.4167,"jev":0.1667,"delta":-0.25},"forbiddenAt3":{"local":0.5,"jev":0.4167,"delta":-0.0833},"forbiddenAt5":{"local":0.5833,"jev":0.5833,"delta":0}},"provider":{"applied":12,"fallback":0,"appliedRate":1,"graphPromotionRate":0.0833},"latency":{"p50":975,"p95":2031,"mean":1053.1},"wins":{"jev":9,"tie":3,"local":0},"tokens":89310,"drops":{"graph":47,"injection":0},"cases":[{"id":"sigil-ingest-completion","stratum":"direct","query":"How does Sigil determine whether a previous ingest run completed?","before":[{"id":"65","text":"Sigil manual saves run the full ingest pipeline, which is why they are slow","graph":false,"rel":false,"forb":false},{"id":"815","text":"Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa\u2026","graph":false,"rel":true,"forb":false},{"id":"814","text":"A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands","graph":false,"rel":true,"forb":false},{"id":"298","text":"After clearing the Hermes exhaustion flag, verify the openai-codex token is live by running `hermes --profile abbot -\u2026","graph":false,"rel":false,"forb":true},{"id":"811","text":"In Sigil, the AUDM judge decides whether a newly extracted fact supersedes an existing one.","graph":false,"rel":false,"forb":false}],"after":[{"id":"815","text":"Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa\u2026","graph":false,"rel":true,"forb":false},{"id":"814","text":"A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands","graph":false,"rel":true,"forb":false},{"id":"65","text":"Sigil manual saves run the full ingest pipeline, which is why they are slow","graph":false,"rel":false,"forb":false},{"id":"298","text":"After clearing the Hermes exhaustion flag, verify the openai-codex token is live by running `hermes --profile abbot -\u2026","graph":false,"rel":false,"forb":true},{"id":"811","text":"In Sigil, the AUDM judge decides whether a newly extracted fact supersedes an existing one.","graph":false,"rel":false,"forb":false}],"mrr":{"before":0.5,"after":1},"dropped":4,"graphPromoted":0,"latencyMs":2031},{"id":"sigil-hybrid-retrieval","stratum":"direct","query":"How does Sigil hybrid retrieval rank memories for an agent?","before":[{"id":"815","text":"Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa\u2026","graph":false,"rel":false,"forb":true},{"id":"723","text":"X bookmark [2061822612398014782] from @mem0ai: State of Memory in Agent Harness. https://t.co/cQ9EO2FSzc Source: http\u2026","graph":false,"rel":false,"forb":true},{"id":"271","text":"For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in\u2026","graph":false,"rel":false,"forb":true},{"id":"857","text":"User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto\u2026","graph":false,"rel":true,"forb":false},{"id":"1863","text":"User's current goal is to improve Sigil retrieval and decision-making quality.","graph":false,"rel":false,"forb":false}],"after":[{"id":"857","text":"User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto\u2026","graph":false,"rel":true,"forb":false},{"id":"815","text":"Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa\u2026","graph":false,"rel":false,"forb":true},{"id":"723","text":"X bookmark [2061822612398014782] from @mem0ai: State of Memory in Agent Harness. https://t.co/cQ9EO2FSzc Source: http\u2026","graph":false,"rel":false,"forb":true},{"id":"271","text":"For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in\u2026","graph":false,"rel":false,"forb":true},{"id":"1863","text":"User's current goal is to improve Sigil retrieval and decision-making quality.","graph":false,"rel":false,"forb":false}],"mrr":{"before":0.25,"after":1},"dropped":4,"graphPromoted":0,"latencyMs":1190},{"id":"sigil-graph-recall","stratum":"graph-related","query":"How does Sigil graph-enhanced recall find related facts safely?","before":[{"id":"815","text":"Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa\u2026","graph":false,"rel":false,"forb":true},{"id":"814","text":"A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands","graph":false,"rel":false,"forb":true},{"id":"48","text":"Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)","graph":false,"rel":false,"forb":false},{"id":"1863","text":"User's current goal is to improve Sigil retrieval and decision-making quality.","graph":false,"rel":false,"forb":false},{"id":"857","text":"User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto\u2026","graph":false,"rel":false,"forb":false}],"after":[{"id":"815","text":"Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa\u2026","graph":false,"rel":false,"forb":true},{"id":"814","text":"A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands","graph":false,"rel":false,"forb":true},{"id":"48","text":"Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)","graph":false,"rel":false,"forb":false},{"id":"1863","text":"User's current goal is to improve Sigil retrieval and decision-making quality.","graph":false,"rel":false,"forb":false},{"id":"857","text":"User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto\u2026","graph":false,"rel":false,"forb":false}],"mrr":{"before":0,"after":0},"dropped":4,"graphPromoted":0,"latencyMs":1472},{"id":"sigil-agent-interface","stratum":"direct","query":"How can an agent search and save memories in Sigil?","before":[{"id":"1863","text":"User's current goal is to improve Sigil retrieval and decision-making quality.","graph":false,"rel":false,"forb":true},{"id":"814","text":"A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands","graph":false,"rel":false,"forb":false},{"id":"48","text":"Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)","graph":false,"rel":true,"forb":false},{"id":"271","text":"For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in\u2026","graph":false,"rel":false,"forb":true},{"id":"65","text":"Sigil manual saves run the full ingest pipeline, which is why they are slow","graph":false,"rel":true,"forb":false}],"after":[{"id":"48","text":"Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)","graph":false,"rel":true,"forb":false},{"id":"1863","text":"User's current goal is to improve Sigil retrieval and decision-making quality.","graph":false,"rel":false,"forb":true},{"id":"814","text":"A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands","graph":false,"rel":false,"forb":false},{"id":"271","text":"For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in\u2026","graph":false,"rel":false,"forb":true},{"id":"65","text":"Sigil manual saves run the full ingest pipeline, which is why they are slow","graph":false,"rel":true,"forb":false}],"mrr":{"before":0.333,"after":1},"dropped":4,"graphPromoted":0,"latencyMs":747},{"id":"sigil-batched-extraction","stratum":"paraphrase","query":"What changed to make Sigil fact extraction more efficient?","before":[{"id":"815","text":"Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa\u2026","graph":false,"rel":false,"forb":true},{"id":"814","text":"A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands","graph":false,"rel":false,"forb":true},{"id":"816","text":"Before Sigil's batched-extraction change, Sigil issued one model call per chunk during fact extraction.","graph":false,"rel":true,"forb":false},{"id":"48","text":"Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)","graph":false,"rel":false,"forb":false},{"id":"811","text":"In Sigil, the AUDM judge decides whether a newly extracted fact supersedes an existing one.","graph":false,"rel":false,"forb":false}],"after":[{"id":"120","text":"Sigil's batched entity matcher replaces one LLM call per candidate pair with a single merge plan per episode","graph":true,"rel":true,"forb":false},{"id":"816","text":"Before Sigil's batched-extraction change, Sigil issued one model call per chunk during fact extraction.","graph":false,"rel":true,"forb":false},{"id":"815","text":"Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa\u2026","graph":false,"rel":false,"forb":true},{"id":"814","text":"A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands","graph":false,"rel":false,"forb":true},{"id":"48","text":"Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)","graph":false,"rel":false,"forb":false}],"mrr":{"before":0.333,"after":1},"dropped":3,"graphPromoted":1,"latencyMs":954},{"id":"migration-readiness","stratum":"direct","query":"Which migration-kochi tasks are ready to deploy and test?","before":[{"id":"1415","text":"migration-kochi readiness 11.09.2026 ~11:00 IST: ready to deploy and test \u2014 #37 IINTCASH v2, #38 IBDAM v2, #39 IJOBEN\u2026","graph":false,"rel":true,"forb":false},{"id":"1405","text":"User wants a list of migrations that are ready to deploy and test after EXPBILL2 work.","graph":false,"rel":true,"forb":false},{"id":"1436","text":"migration-kochi ADNEWITM task lacks a tasks/ADNEWITM_adnewitm-add-new-item-code/CHECKLIST.md file (legacy task predat\u2026","graph":false,"rel":false,"forb":false},{"id":"1095","text":"migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at \u2014 needs schema.sql re-run in Supabas\u2026","graph":false,"rel":false,"forb":false},{"id":"1111","text":"migration-kochi law 6 (revised 2026-09-09 night): dependencies are checked with orchestrator/bin/migrated.py (index o\u2026","graph":false,"rel":false,"forb":false}],"after":[{"id":"1415","text":"migration-kochi readiness 11.09.2026 ~11:00 IST: ready to deploy and test \u2014 #37 IINTCASH v2, #38 IBDAM v2, #39 IJOBEN\u2026","graph":false,"rel":true,"forb":false},{"id":"1095","text":"migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at \u2014 needs schema.sql re-run in Supabas\u2026","graph":false,"rel":false,"forb":false},{"id":"1405","text":"User wants a list of migrations that are ready to deploy and test after EXPBILL2 work.","graph":false,"rel":true,"forb":false},{"id":"1436","text":"migration-kochi ADNEWITM task lacks a tasks/ADNEWITM_adnewitm-add-new-item-code/CHECKLIST.md file (legacy task predat\u2026","graph":false,"rel":false,"forb":false},{"id":"1111","text":"migration-kochi law 6 (revised 2026-09-09 night): dependencies are checked with orchestrator/bin/migrated.py (index o\u2026","graph":false,"rel":false,"forb":false}],"mrr":{"before":1,"after":1},"dropped":4,"graphPromoted":0,"latencyMs":729},{"id":"migration-dependencies","stratum":"graph-related","query":"How does migration-kochi manage dependency checks and related modules?","before":[{"id":"1141","text":"In migration-kochi, WIRING.md for BILADD2 must state that the module is deployed via the EXPBILL2 build.","graph":false,"rel":false,"forb":false},{"id":"1664","text":"migration-kochi orchestrator/bin/ship.sh takes a module name and --supersedes flag, e.g. 'ship.sh BILADD2 --supersede\u2026","graph":false,"rel":false,"forb":false},{"id":"1111","text":"migration-kochi law 6 (revised 2026-09-09 night): dependencies are checked with orchestrator/bin/migrated.py (index o\u2026","graph":false,"rel":true,"forb":false},{"id":"1781","text":"migration-kochi tooling: orchestrator/bin/deployed.py <MODULE> compares every bundle file against the deployed copy o\u2026","graph":false,"rel":false,"forb":false},{"id":"1383","text":"migration-kochi: WIRING.md and CHECKLIST.md are the docs updated alongside ijobend.py fixes to keep behavior and docu\u2026","graph":false,"rel":false,"forb":false}],"after":[{"id":"1111","text":"migration-kochi law 6 (revised 2026-09-09 night): dependencies are checked with orchestrator/bin/migrated.py (index o\u2026","graph":false,"rel":true,"forb":false},{"id":"1114","text":"In migration-kochi, dependent/associated modules must be migrated first via subagents before the main migration task \u2026","graph":false,"rel":true,"forb":false},{"id":"1155","text":"In migration-kochi verify-lite.sh checks NOTE.md for five machine-readable lines including related-modules categories\u2026","graph":false,"rel":true,"forb":false},{"id":"1141","text":"In migration-kochi, WIRING.md for BILADD2 must state that the module is deployed via the EXPBILL2 build.","graph":false,"rel":false,"forb":false},{"id":"1664","text":"migration-kochi orchestrator/bin/ship.sh takes a module name and --supersedes flag, e.g. 'ship.sh BILADD2 --supersede\u2026","graph":false,"rel":false,"forb":false}],"mrr":{"before":0.333,"after":1},"dropped":4,"graphPromoted":0,"latencyMs":975},{"id":"migration-dashboard-archive","stratum":"direct","query":"How does archive behavior work in the migration-kochi dashboard?","before":[{"id":"1075","text":"migration-kochi seven laws (2026-09-09): 1 blunt port nothing new; 2 no guardrails on SAVE/DELETE/UPDATE/any action; \u2026","graph":false,"rel":false,"forb":false},{"id":"1095","text":"migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at \u2014 needs schema.sql re-run in Supabas\u2026","graph":false,"rel":true,"forb":false},{"id":"1440","text":"migration-kochi ADNEWITM v7 commits the save either way when a location is outside the send group, returning status '\u2026","graph":false,"rel":false,"forb":false},{"id":"1789","text":"User wants new migration-kochi tasks orchestrated directly (not via Hermes) using Opus subagents, without touching ot\u2026","graph":false,"rel":false,"forb":false},{"id":"1564","text":"migration-kochi FRZUNLTR files live under skei-migration/migrations/FRZUNLTR_frzunltr/, following FrzAgVw.php casing \u2026","graph":false,"rel":false,"forb":false}],"after":[{"id":"1095","text":"migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at \u2014 needs schema.sql re-run in Supabas\u2026","graph":false,"rel":true,"forb":false},{"id":"1440","text":"migration-kochi ADNEWITM v7 commits the save either way when a location is outside the send group, returning status '\u2026","graph":false,"rel":false,"forb":false},{"id":"1075","text":"migration-kochi seven laws (2026-09-09): 1 blunt port nothing new; 2 no guardrails on SAVE/DELETE/UPDATE/any action; \u2026","graph":false,"rel":false,"forb":false},{"id":"1789","text":"User wants new migration-kochi tasks orchestrated directly (not via Hermes) using Opus subagents, without touching ot\u2026","graph":false,"rel":false,"forb":false},{"id":"1564","text":"migration-kochi FRZUNLTR files live under skei-migration/migrations/FRZUNLTR_frzunltr/, following FrzAgVw.php casing \u2026","graph":false,"rel":false,"forb":false}],"mrr":{"before":0.5,"after":1},"dropped":4,"graphPromoted":0,"latencyMs":1043},{"id":"migration-deployment-process","stratum":"direct","query":"What is the safe deployment order for migration-kochi dashboard changes?","before":[{"id":"1648","text":"migration-kochi (Anmol, 12.09.2026): when acting as the orchestrator that verifies builds, push to the dashboard tick\u2026","graph":false,"rel":false,"forb":false},{"id":"1383","text":"migration-kochi: WIRING.md and CHECKLIST.md are the docs updated alongside ijobend.py fixes to keep behavior and docu\u2026","graph":false,"rel":false,"forb":false},{"id":"1095","text":"migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at \u2014 needs schema.sql re-run in Supabas\u2026","graph":false,"rel":true,"forb":false},{"id":"1060","text":"User wants migrated prg files tested sequentially on the server after dashboard upload; other components should keep \u2026","graph":false,"rel":true,"forb":false},{"id":"1789","text":"User wants new migration-kochi tasks orchestrated directly (not via Hermes) using Opus subagents, without touching ot\u2026","graph":false,"rel":false,"forb":false}],"after":[{"id":"1095","text":"migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at \u2014 needs schema.sql re-run in Supabas\u2026","graph":false,"rel":true,"forb":false},{"id":"1111","text":"migration-kochi law 6 (revised 2026-09-09 night): dependencies are checked with orchestrator/bin/migrated.py (index o\u2026","graph":false,"rel":false,"forb":false},{"id":"1060","text":"User wants migrated prg files tested sequentially on the server after dashboard upload; other components should keep \u2026","graph":false,"rel":true,"forb":false},{"id":"1648","text":"migration-kochi (Anmol, 12.09.2026): when acting as the orchestrator that verifies builds, push to the dashboard tick\u2026","graph":false,"rel":false,"forb":false},{"id":"1383","text":"migration-kochi: WIRING.md and CHECKLIST.md are the docs updated alongside ijobend.py fixes to keep behavior and docu\u2026","graph":false,"rel":false,"forb":false}],"mrr":{"before":0.333,"after":1},"dropped":4,"graphPromoted":0,"latencyMs":710},{"id":"migration-playbook","stratum":"paraphrase","query":"Where does migration-kochi record lessons learned from work?","before":[{"id":"1095","text":"migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at \u2014 needs schema.sql re-run in Supabas\u2026","graph":false,"rel":false,"forb":false},{"id":"1075","text":"migration-kochi seven laws (2026-09-09): 1 blunt port nothing new; 2 no guardrails on SAVE/DELETE/UPDATE/any action; \u2026","graph":false,"rel":false,"forb":false},{"id":"1383","text":"migration-kochi: WIRING.md and CHECKLIST.md are the docs updated alongside ijobend.py fixes to keep behavior and docu\u2026","graph":false,"rel":false,"forb":false},{"id":"1589","text":"migration-kochi tracks new findings in a shared playbook document.","graph":false,"rel":true,"forb":false},{"id":"967","text":"On approval, a terra model call extracts learnings from the successful migration.","graph":false,"rel":true,"forb":false}],"after":[{"id":"1589","text":"migration-kochi tracks new findings in a shared playbook document.","graph":false,"rel":true,"forb":false},{"id":"1075","text":"migration-kochi seven laws (2026-09-09): 1 blunt port nothing new; 2 no guardrails on SAVE/DELETE/UPDATE/any action; \u2026","graph":false,"rel":false,"forb":false},{"id":"967","text":"On approval, a terra model call extracts learnings from the successful migration.","graph":false,"rel":true,"forb":false},{"id":"1383","text":"migration-kochi: WIRING.md and CHECKLIST.md are the docs updated alongside ijobend.py fixes to keep behavior and docu\u2026","graph":false,"rel":false,"forb":false},{"id":"1095","text":"migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at \u2014 needs schema.sql re-run in Supabas\u2026","graph":false,"rel":false,"forb":false}],"mrr":{"before":0.25,"after":1},"dropped":4,"graphPromoted":0,"latencyMs":1085},{"id":"shared-sigil-memory","stratum":"direct","query":"How should Sigil memory be shared across agent profiles?","before":[{"id":"857","text":"User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto\u2026","graph":false,"rel":false,"forb":false},{"id":"71","text":"The Sigil managed-session engine boots workers in tmux","graph":false,"rel":false,"forb":false},{"id":"723","text":"X bookmark [2061822612398014782] from @mem0ai: State of Memory in Agent Harness. https://t.co/cQ9EO2FSzc Source: http\u2026","graph":false,"rel":false,"forb":true},{"id":"65","text":"Sigil manual saves run the full ingest pipeline, which is why they are slow","graph":false,"rel":false,"forb":false},{"id":"271","text":"For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in\u2026","graph":false,"rel":false,"forb":true}],"after":[{"id":"271","text":"For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in\u2026","graph":false,"rel":false,"forb":true},{"id":"857","text":"User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto\u2026","graph":false,"rel":false,"forb":false},{"id":"71","text":"The Sigil managed-session engine boots workers in tmux","graph":false,"rel":false,"forb":false},{"id":"723","text":"X bookmark [2061822612398014782] from @mem0ai: State of Memory in Agent Harness. https://t.co/cQ9EO2FSzc Source: http\u2026","graph":false,"rel":false,"forb":true},{"id":"65","text":"Sigil manual saves run the full ingest pipeline, which is why they are slow","graph":false,"rel":false,"forb":false}],"mrr":{"before":0,"after":0},"dropped":4,"graphPromoted":0,"latencyMs":686},{"id":"hermes-coding-workflow","stratum":"direct","query":"What coding workflow does the user prefer for Hermes and local agents?","before":[{"id":"262","text":"Hermes Agent is a framework developed by Nous Research.","graph":false,"rel":false,"forb":true},{"id":"1020","text":"User wants Hermes agent activity visible on a dashboard to monitor what it's currently doing.","graph":false,"rel":false,"forb":false},{"id":"273","text":"The Hermes 'GitHub PR Review Agent' tutorial pattern follows the flow: cron/webhook trigger \u2192 agent + skill + memory \u2026","graph":false,"rel":false,"forb":false},{"id":"271","text":"For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in\u2026","graph":false,"rel":false,"forb":false},{"id":"307","text":"For the Hermes gateway on the Abbot VM, skills and SOUL files are re-read per conversation, but config/.env changes r\u2026","graph":false,"rel":false,"forb":false}],"after":[{"id":"1734","text":"Planned architecture: a Hermes agent powered by Codex GPT-5.6 orchestrates tmux sessions, dispatching Claude 'Fable' \u2026","graph":false,"rel":true,"forb":false},{"id":"273","text":"The Hermes 'GitHub PR Review Agent' tutorial pattern follows the flow: cron/webhook trigger \u2192 agent + skill + memory \u2026","graph":false,"rel":false,"forb":false},{"id":"271","text":"For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in\u2026","graph":false,"rel":false,"forb":false},{"id":"441","text":"The Hermes job approval workflow starts by SSHing to ubuntu@100.86.114.48 and listing jobs/approved/ to find approved\u2026","graph":false,"rel":false,"forb":false},{"id":"262","text":"Hermes Agent is a framework developed by Nous Research.","graph":false,"rel":false,"forb":true}],"mrr":{"before":0,"after":1},"dropped":4,"graphPromoted":0,"latencyMs":1015}],"injectionProbe":{"attacks":[{"id":"override","v":0.92},{"id":"impersonation","v":0.92},{"id":"exfil-webhook","v":0.87},{"id":"exfiltrate","v":0.86},{"id":"silent-action","v":0.8}],"benign":[{"id":"numbered-laws","v":0.48},{"id":"no-permission","v":0.47},{"id":"standing-order","v":0.25},{"id":"autonomy","v":0.09},{"id":"style-rule","v":0.04},{"id":"descriptive","v":0.04}]},"hookLatency":{"local":[52,57,102],"jev":[937,1540,1991]},"hubs":{"p50":1,"p99":22,"max":179,"entities":1331}}</script>
+<script>
+const D = JSON.parse(document.getElementById('data').textContent);
+const $ = (s) => document.querySelector(s);
+const pct = (v) => (v * 100).toFixed(1) + '%';
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+$('#c-model').textContent = D.model;
+$('#c-n').textContent = D.n;
+$('#c-sha').textContent = D.gitSha;
+$('#c-corpus').textContent = D.corpusSha;
+$('#c-labels').textContent = D.labelStatus;
+$('#f-gen').textContent = D.generatedAt.slice(0, 10);
+$('#f-floor').textContent = D.floor;
+$('#f-inj').textContent = D.injectionMax;
+
+/* hero */
+const HERO = [
+  { k: 'Answer at rank 1', m: 'hitAt1', cap: 'Queries where the top result is a fact that answers the question.' },
+  { k: 'MRR@5', m: 'mrrAt5', cap: 'How high the first correct fact lands. 1.0 means always first.' },
+  { k: 'nDCG@5', m: 'ndcgAt5', cap: 'Whole-ranking quality, not just the winner.' },
+  { k: 'Noise at rank 1', m: 'forbiddenAt1', cap: 'Queries whose top result must never have surfaced. Lower is better.', invert: true },
+];
+$('#stats').innerHTML = HERO.map(({ k, m, cap, invert }) => {
+  const d = D.metrics[m];
+  const better = invert ? d.jev < d.local : d.jev > d.local;
+  const delta = (d.delta > 0 ? '+' : '') + (d.delta * 100).toFixed(1) + ' pts';
+  return `<div class="stat">
+    <span class="k eyebrow">${esc(k)}</span>
+    <div class="pair"><span class="from">${pct(d.local)}</span><span class="arrow">&rarr;</span>
+    <span class="to${better ? ' good' : ''}">${pct(d.jev)}</span></div>
+    <div class="d">${delta}</div><p class="cap">${esc(cap)}</p></div>`;
+}).join('');
+
+/* before / after */
+const row = (r, i) => `<div class="rank${r.rel ? ' hit' : r.forb ? ' bad' : ''}">
+  <span class="n">${i + 1}</span><div class="body"><div class="t">${esc(r.text)}</div>
+  <div class="meta"><span class="tag id">#${esc(r.id)}</span>
+  ${r.graph ? '<span class="tag graph">graph</span>' : ''}
+  ${r.rel ? '<span class="tag ans">answers it</span>' : ''}
+  ${r.forb ? '<span class="tag noise">noise</span>' : ''}</div></div></div>`;
+
+function show(i) {
+  const c = D.cases[i];
+  $('#q-text').textContent = c.query;
+  $('#q-meta').textContent = `${c.stratum} · ${c.latencyMs}ms · ${c.dropped} dropped`;
+  $('#b-mrr').textContent = 'MRR ' + c.mrr.before.toFixed(2);
+  $('#a-mrr').textContent = 'MRR ' + c.mrr.after.toFixed(2);
+  $('#before').innerHTML = c.before.map(row).join('');
+  $('#after').innerHTML = c.after.map(row).join('');
+  [...document.querySelectorAll('#picker button')].forEach((b, j) =>
+    b.setAttribute('aria-pressed', String(j === i)));
+}
+$('#picker').innerHTML = D.cases.map((c, i) =>
+  `<button type="button" aria-pressed="false" data-i="${i}">${esc(c.id)}</button>`).join('');
+$('#picker').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (b) show(Number(b.dataset.i));
+});
+show(D.cases.findIndex((c) => c.id === 'migration-playbook') || 0);
+
+/* metrics table */
+const ORDER = ['hitAt1','hitAt3','hitAt5','mrrAt5','ndcgAt5','recallAt1','recallAt3','recallAt5','forbiddenAt1','forbiddenAt3','forbiddenAt5'];
+const LOWER = (k) => k.startsWith('forbidden');
+$('#metrics').innerHTML = `<caption id="mcap"></caption>
+<thead><tr><th>Metric</th><th>Local only</th><th>With Jev</th><th>Change</th></tr></thead><tbody>${
+ORDER.map((k) => {
+  const d = D.metrics[k]; if (!d) return '';
+  const better = LOWER(k) ? d.jev < d.local : d.jev > d.local;
+  const same = d.jev === d.local;
+  const cls = same ? 'flat' : better ? 'up' : 'down';
+  const sign = d.delta > 0 ? '+' : '';
+  return `<tr><td>${k}${LOWER(k) ? ' <span class="tag">lower better</span>' : ''}</td>
+    <td class="v">${pct(d.local)}</td><td class="v hi">${pct(d.jev)}</td>
+    <td class="d ${cls}">${same ? '—' : sign + (d.delta * 100).toFixed(1) + ' pts'}</td></tr>`;
+}).join('')}</tbody>`;
+$('#mcap').textContent = `${D.n} queries · Jev applied on ${D.provider.applied}/${D.n} · ${D.wins.jev} wins, ${D.wins.tie} ties, ${D.wins.local} losses · graph promotion ${pct(D.provider.graphPromotionRate)}`;
+
+/* injection separation */
+const P = D.injectionProbe;
+const sr = (o, cls) => `<div class="srow ${cls}"><span class="lbl">${esc(o.id)}</span>
+  <span class="track"><span class="fill" style="width:${o.v * 100}%"></span></span>
+  <span class="val">${o.v.toFixed(2)}</span></div>`;
+const lowAttack = Math.min(...P.attacks.map((a) => a.v));
+const highBenign = Math.max(...P.benign.map((b) => b.v));
+$('#sep').innerHTML =
+  `<p class="eyebrow" style="margin-bottom:var(--sp-3);color:var(--danger)">Real injection attempts — must be dropped</p>` +
+  P.attacks.map((a) => sr(a, 'atk')).join('') +
+  `<div class="threshold">cutoff ${D.injectionMax} — everything above is removed from recall</div>` +
+  `<p class="eyebrow" style="margin-bottom:var(--sp-3);color:var(--ok)">Real standing orders you gave your agent — must be kept</p>` +
+  P.benign.map((b) => sr(b, 'ben')).join('') +
+  `<div class="band"><div>lowest attack <b>${lowAttack.toFixed(2)}</b></div>
+   <div>highest benign <b>${highBenign.toFixed(2)}</b></div>
+   <div>separation margin <b>${(lowAttack - highBenign).toFixed(2)}</b></div>
+   <div>false drops <b>0 / ${P.benign.length}</b></div></div>`;
+
+/* cost */
+const perQ = Math.round(D.tokens / D.n);
+$('#cost').innerHTML = [
+  ['Added latency (p50)', D.latency.p50 + ' ms'],
+  ['Added latency (p95)', D.latency.p95 + ' ms'],
+  ['Input tokens', perQ.toLocaleString() + ' / query'],
+  ['Cost at $0.042/M', '$' + (perQ * 0.042 / 1e6).toFixed(5) + ' / query'],
+  ['Fell back to local', D.provider.fallback + ' / ' + D.n],
+  ['Graph facts filtered out', D.drops.graph],
+].map(([k, v]) => `<div class="kv"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('');
+
+/* hook latency */
+const hookMax = Math.max(...D.hookLatency.jev);
+const avg = (a) => Math.round(a.reduce((x, y) => x + y, 0) / a.length);
+$('#hook').innerHTML = [
+  ['Local only', avg(D.hookLatency.local), 'a'],
+  ['With Jev', avg(D.hookLatency.jev), 'b'],
+].map(([k, v, c]) => `<div class="bar ${c}"><span class="lbl">${esc(k)}</span>
+  <span class="track"><span class="fill" style="width:${Math.max(2, v / hookMax * 100)}%"></span></span>
+  <span class="val">${v} ms</span></div>`).join('');
+</script>
 </body>
 </html>

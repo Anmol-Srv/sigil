@@ -1,40 +1,1190 @@
 {
-  "kind": "synthetic illustrative visualization",
-  "purpose": "Show a graph-aware local candidate pool before and after Jev reranking without exposing private memory.",
-  "query": "Can Project Delta deploy today?",
-  "graph": {
-    "root": "Project Delta",
-    "connectedNodes": ["Deploy runbook", "Schema migration", "Build result", "Open blocker", "Dashboard", "Old discussion"],
-    "candidatePool": 12,
-    "scope": "local authorization and namespace filtering completed before reranking"
+  "generatedAt": "2026-09-18T10:21:59.604Z",
+  "gitSha": "089cd9d",
+  "corpusSha": "702cafe29096",
+  "labelStatus": "agent-reviewed",
+  "model": "jev-1.13.0",
+  "floor": 0.5,
+  "injectionMax": 0.7,
+  "n": 12,
+  "metrics": {
+    "hitAt1": {
+      "local": 0.0833,
+      "jev": 0.8333,
+      "delta": 0.75
+    },
+    "hitAt3": {
+      "local": 0.5833,
+      "jev": 0.8333,
+      "delta": 0.25
+    },
+    "hitAt5": {
+      "local": 0.75,
+      "jev": 0.8333,
+      "delta": 0.0833
+    },
+    "recallAt1": {
+      "local": 0.0417,
+      "jev": 0.4236,
+      "delta": 0.3819
+    },
+    "recallAt3": {
+      "local": 0.3819,
+      "jev": 0.6597,
+      "delta": 0.2778
+    },
+    "recallAt5": {
+      "local": 0.5903,
+      "jev": 0.7014,
+      "delta": 0.1111
+    },
+    "mrrAt5": {
+      "local": 0.3194,
+      "jev": 0.8333,
+      "delta": 0.5139
+    },
+    "ndcgAt5": {
+      "local": 0.3862,
+      "jev": 0.7028,
+      "delta": 0.3166
+    },
+    "forbiddenAt1": {
+      "local": 0.4167,
+      "jev": 0.1667,
+      "delta": -0.25
+    },
+    "forbiddenAt3": {
+      "local": 0.5,
+      "jev": 0.4167,
+      "delta": -0.0833
+    },
+    "forbiddenAt5": {
+      "local": 0.5833,
+      "jev": 0.5833,
+      "delta": 0
+    }
   },
-  "before": {
-    "label": "Local graph retrieval",
-    "description": "Same bounded graph-enabled candidate pool, sorted only by local retrieval signals.",
-    "topCandidates": [
-      {"title": "Project dashboard", "source": "direct", "localScore": ".91", "answersQuery": false},
-      {"title": "Weekly progress update", "source": "graph", "localScore": ".86", "answersQuery": false},
-      {"title": "Schema migration required before deploy", "source": "graph", "localScore": ".78", "answersQuery": true},
-      {"title": "Build passed on current branch", "source": "graph", "localScore": ".74", "answersQuery": true}
+  "provider": {
+    "applied": 12,
+    "fallback": 0,
+    "appliedRate": 1,
+    "graphPromotionRate": 0.0833
+  },
+  "latency": {
+    "p50": 975,
+    "p95": 2031,
+    "mean": 1053.1
+  },
+  "wins": {
+    "jev": 9,
+    "tie": 3,
+    "local": 0
+  },
+  "tokens": 89310,
+  "drops": {
+    "graph": 47,
+    "injection": 0
+  },
+  "cases": [
+    {
+      "id": "sigil-ingest-completion",
+      "stratum": "direct",
+      "query": "How does Sigil determine whether a previous ingest run completed?",
+      "before": [
+        {
+          "id": "65",
+          "text": "Sigil manual saves run the full ingest pipeline, which is why they are slow",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "815",
+          "text": "Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "814",
+          "text": "A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "298",
+          "text": "After clearing the Hermes exhaustion flag, verify the openai-codex token is live by running `hermes --profile abbot -…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "811",
+          "text": "In Sigil, the AUDM judge decides whether a newly extracted fact supersedes an existing one.",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "815",
+          "text": "Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "814",
+          "text": "A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "65",
+          "text": "Sigil manual saves run the full ingest pipeline, which is why they are slow",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "298",
+          "text": "After clearing the Hermes exhaustion flag, verify the openai-codex token is live by running `hermes --profile abbot -…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "811",
+          "text": "In Sigil, the AUDM judge decides whether a newly extracted fact supersedes an existing one.",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 0.5,
+        "after": 1
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 2031
+    },
+    {
+      "id": "sigil-hybrid-retrieval",
+      "stratum": "direct",
+      "query": "How does Sigil hybrid retrieval rank memories for an agent?",
+      "before": [
+        {
+          "id": "815",
+          "text": "Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "723",
+          "text": "X bookmark [2061822612398014782] from @mem0ai: State of Memory in Agent Harness. https://t.co/cQ9EO2FSzc Source: http…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "271",
+          "text": "For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "857",
+          "text": "User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1863",
+          "text": "User's current goal is to improve Sigil retrieval and decision-making quality.",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "857",
+          "text": "User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "815",
+          "text": "Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "723",
+          "text": "X bookmark [2061822612398014782] from @mem0ai: State of Memory in Agent Harness. https://t.co/cQ9EO2FSzc Source: http…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "271",
+          "text": "For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "1863",
+          "text": "User's current goal is to improve Sigil retrieval and decision-making quality.",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 0.25,
+        "after": 1
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 1190
+    },
+    {
+      "id": "sigil-graph-recall",
+      "stratum": "graph-related",
+      "query": "How does Sigil graph-enhanced recall find related facts safely?",
+      "before": [
+        {
+          "id": "815",
+          "text": "Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "814",
+          "text": "A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "48",
+          "text": "Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1863",
+          "text": "User's current goal is to improve Sigil retrieval and decision-making quality.",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "857",
+          "text": "User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "815",
+          "text": "Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "814",
+          "text": "A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "48",
+          "text": "Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1863",
+          "text": "User's current goal is to improve Sigil retrieval and decision-making quality.",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "857",
+          "text": "User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 0,
+        "after": 0
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 1472
+    },
+    {
+      "id": "sigil-agent-interface",
+      "stratum": "direct",
+      "query": "How can an agent search and save memories in Sigil?",
+      "before": [
+        {
+          "id": "1863",
+          "text": "User's current goal is to improve Sigil retrieval and decision-making quality.",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "814",
+          "text": "A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "48",
+          "text": "Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "271",
+          "text": "For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "65",
+          "text": "Sigil manual saves run the full ingest pipeline, which is why they are slow",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "48",
+          "text": "Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1863",
+          "text": "User's current goal is to improve Sigil retrieval and decision-making quality.",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "814",
+          "text": "A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "271",
+          "text": "For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "65",
+          "text": "Sigil manual saves run the full ingest pipeline, which is why they are slow",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 0.333,
+        "after": 1
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 747
+    },
+    {
+      "id": "sigil-batched-extraction",
+      "stratum": "paraphrase",
+      "query": "What changed to make Sigil fact extraction more efficient?",
+      "before": [
+        {
+          "id": "815",
+          "text": "Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "814",
+          "text": "A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "816",
+          "text": "Before Sigil's batched-extraction change, Sigil issued one model call per chunk during fact extraction.",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "48",
+          "text": "Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "811",
+          "text": "In Sigil, the AUDM judge decides whether a newly extracted fact supersedes an existing one.",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "120",
+          "text": "Sigil's batched entity matcher replaces one LLM call per candidate pair with a single merge plan per episode",
+          "graph": true,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "816",
+          "text": "Before Sigil's batched-extraction change, Sigil issued one model call per chunk during fact extraction.",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "815",
+          "text": "Sigil determines whether a prior ingest run finished by checking the ingest_completed_at timestamp, not the active fa…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "814",
+          "text": "A document in Sigil records an ingest_completed_at timestamp when its commit transaction lands",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "48",
+          "text": "Use `sigil ingest` for documents from file paths or URLs that are text-heavy (substantial documents)",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 0.333,
+        "after": 1
+      },
+      "dropped": 3,
+      "graphPromoted": 1,
+      "latencyMs": 954
+    },
+    {
+      "id": "migration-readiness",
+      "stratum": "direct",
+      "query": "Which migration-kochi tasks are ready to deploy and test?",
+      "before": [
+        {
+          "id": "1415",
+          "text": "migration-kochi readiness 11.09.2026 ~11:00 IST: ready to deploy and test — #37 IINTCASH v2, #38 IBDAM v2, #39 IJOBEN…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1405",
+          "text": "User wants a list of migrations that are ready to deploy and test after EXPBILL2 work.",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1436",
+          "text": "migration-kochi ADNEWITM task lacks a tasks/ADNEWITM_adnewitm-add-new-item-code/CHECKLIST.md file (legacy task predat…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1095",
+          "text": "migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at — needs schema.sql re-run in Supabas…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1111",
+          "text": "migration-kochi law 6 (revised 2026-09-09 night): dependencies are checked with orchestrator/bin/migrated.py (index o…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "1415",
+          "text": "migration-kochi readiness 11.09.2026 ~11:00 IST: ready to deploy and test — #37 IINTCASH v2, #38 IBDAM v2, #39 IJOBEN…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1095",
+          "text": "migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at — needs schema.sql re-run in Supabas…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1405",
+          "text": "User wants a list of migrations that are ready to deploy and test after EXPBILL2 work.",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1436",
+          "text": "migration-kochi ADNEWITM task lacks a tasks/ADNEWITM_adnewitm-add-new-item-code/CHECKLIST.md file (legacy task predat…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1111",
+          "text": "migration-kochi law 6 (revised 2026-09-09 night): dependencies are checked with orchestrator/bin/migrated.py (index o…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 1,
+        "after": 1
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 729
+    },
+    {
+      "id": "migration-dependencies",
+      "stratum": "graph-related",
+      "query": "How does migration-kochi manage dependency checks and related modules?",
+      "before": [
+        {
+          "id": "1141",
+          "text": "In migration-kochi, WIRING.md for BILADD2 must state that the module is deployed via the EXPBILL2 build.",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1664",
+          "text": "migration-kochi orchestrator/bin/ship.sh takes a module name and --supersedes flag, e.g. 'ship.sh BILADD2 --supersede…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1111",
+          "text": "migration-kochi law 6 (revised 2026-09-09 night): dependencies are checked with orchestrator/bin/migrated.py (index o…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1781",
+          "text": "migration-kochi tooling: orchestrator/bin/deployed.py <MODULE> compares every bundle file against the deployed copy o…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1383",
+          "text": "migration-kochi: WIRING.md and CHECKLIST.md are the docs updated alongside ijobend.py fixes to keep behavior and docu…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "1111",
+          "text": "migration-kochi law 6 (revised 2026-09-09 night): dependencies are checked with orchestrator/bin/migrated.py (index o…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1114",
+          "text": "In migration-kochi, dependent/associated modules must be migrated first via subagents before the main migration task …",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1155",
+          "text": "In migration-kochi verify-lite.sh checks NOTE.md for five machine-readable lines including related-modules categories…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1141",
+          "text": "In migration-kochi, WIRING.md for BILADD2 must state that the module is deployed via the EXPBILL2 build.",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1664",
+          "text": "migration-kochi orchestrator/bin/ship.sh takes a module name and --supersedes flag, e.g. 'ship.sh BILADD2 --supersede…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 0.333,
+        "after": 1
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 975
+    },
+    {
+      "id": "migration-dashboard-archive",
+      "stratum": "direct",
+      "query": "How does archive behavior work in the migration-kochi dashboard?",
+      "before": [
+        {
+          "id": "1075",
+          "text": "migration-kochi seven laws (2026-09-09): 1 blunt port nothing new; 2 no guardrails on SAVE/DELETE/UPDATE/any action; …",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1095",
+          "text": "migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at — needs schema.sql re-run in Supabas…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1440",
+          "text": "migration-kochi ADNEWITM v7 commits the save either way when a location is outside the send group, returning status '…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1789",
+          "text": "User wants new migration-kochi tasks orchestrated directly (not via Hermes) using Opus subagents, without touching ot…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1564",
+          "text": "migration-kochi FRZUNLTR files live under skei-migration/migrations/FRZUNLTR_frzunltr/, following FrzAgVw.php casing …",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "1095",
+          "text": "migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at — needs schema.sql re-run in Supabas…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1440",
+          "text": "migration-kochi ADNEWITM v7 commits the save either way when a location is outside the send group, returning status '…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1075",
+          "text": "migration-kochi seven laws (2026-09-09): 1 blunt port nothing new; 2 no guardrails on SAVE/DELETE/UPDATE/any action; …",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1789",
+          "text": "User wants new migration-kochi tasks orchestrated directly (not via Hermes) using Opus subagents, without touching ot…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1564",
+          "text": "migration-kochi FRZUNLTR files live under skei-migration/migrations/FRZUNLTR_frzunltr/, following FrzAgVw.php casing …",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 0.5,
+        "after": 1
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 1043
+    },
+    {
+      "id": "migration-deployment-process",
+      "stratum": "direct",
+      "query": "What is the safe deployment order for migration-kochi dashboard changes?",
+      "before": [
+        {
+          "id": "1648",
+          "text": "migration-kochi (Anmol, 12.09.2026): when acting as the orchestrator that verifies builds, push to the dashboard tick…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1383",
+          "text": "migration-kochi: WIRING.md and CHECKLIST.md are the docs updated alongside ijobend.py fixes to keep behavior and docu…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1095",
+          "text": "migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at — needs schema.sql re-run in Supabas…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1060",
+          "text": "User wants migrated prg files tested sequentially on the server after dashboard upload; other components should keep …",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1789",
+          "text": "User wants new migration-kochi tasks orchestrated directly (not via Hermes) using Opus subagents, without touching ot…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "1095",
+          "text": "migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at — needs schema.sql re-run in Supabas…",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1111",
+          "text": "migration-kochi law 6 (revised 2026-09-09 night): dependencies are checked with orchestrator/bin/migrated.py (index o…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1060",
+          "text": "User wants migrated prg files tested sequentially on the server after dashboard upload; other components should keep …",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1648",
+          "text": "migration-kochi (Anmol, 12.09.2026): when acting as the orchestrator that verifies builds, push to the dashboard tick…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1383",
+          "text": "migration-kochi: WIRING.md and CHECKLIST.md are the docs updated alongside ijobend.py fixes to keep behavior and docu…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 0.333,
+        "after": 1
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 710
+    },
+    {
+      "id": "migration-playbook",
+      "stratum": "paraphrase",
+      "query": "Where does migration-kochi record lessons learned from work?",
+      "before": [
+        {
+          "id": "1095",
+          "text": "migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at — needs schema.sql re-run in Supabas…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1075",
+          "text": "migration-kochi seven laws (2026-09-09): 1 blunt port nothing new; 2 no guardrails on SAVE/DELETE/UPDATE/any action; …",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1383",
+          "text": "migration-kochi: WIRING.md and CHECKLIST.md are the docs updated alongside ijobend.py fixes to keep behavior and docu…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1589",
+          "text": "migration-kochi tracks new findings in a shared playbook document.",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "967",
+          "text": "On approval, a terra model call extracts learnings from the successful migration.",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "1589",
+          "text": "migration-kochi tracks new findings in a shared playbook document.",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1075",
+          "text": "migration-kochi seven laws (2026-09-09): 1 blunt port nothing new; 2 no guardrails on SAVE/DELETE/UPDATE/any action; …",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "967",
+          "text": "On approval, a terra model call extracts learnings from the successful migration.",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "1383",
+          "text": "migration-kochi: WIRING.md and CHECKLIST.md are the docs updated alongside ijobend.py fixes to keep behavior and docu…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "1095",
+          "text": "migration-kochi dashboard (2026-09-09 evening): added archive (tasks.archived_at — needs schema.sql re-run in Supabas…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 0.25,
+        "after": 1
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 1085
+    },
+    {
+      "id": "shared-sigil-memory",
+      "stratum": "direct",
+      "query": "How should Sigil memory be shared across agent profiles?",
+      "before": [
+        {
+          "id": "857",
+          "text": "User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "71",
+          "text": "The Sigil managed-session engine boots workers in tmux",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "723",
+          "text": "X bookmark [2061822612398014782] from @mem0ai: State of Memory in Agent Harness. https://t.co/cQ9EO2FSzc Source: http…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "65",
+          "text": "Sigil manual saves run the full ingest pipeline, which is why they are slow",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "271",
+          "text": "For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        }
+      ],
+      "after": [
+        {
+          "id": "271",
+          "text": "For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "857",
+          "text": "User built and published sigil (anmolsrv/sigil), a memory system for AI coding agents using hybrid pgvector + tsvecto…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "71",
+          "text": "The Sigil managed-session engine boots workers in tmux",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "723",
+          "text": "X bookmark [2061822612398014782] from @mem0ai: State of Memory in Agent Harness. https://t.co/cQ9EO2FSzc Source: http…",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "65",
+          "text": "Sigil manual saves run the full ingest pipeline, which is why they are slow",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "mrr": {
+        "before": 0,
+        "after": 0
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 686
+    },
+    {
+      "id": "hermes-coding-workflow",
+      "stratum": "direct",
+      "query": "What coding workflow does the user prefer for Hermes and local agents?",
+      "before": [
+        {
+          "id": "262",
+          "text": "Hermes Agent is a framework developed by Nous Research.",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        },
+        {
+          "id": "1020",
+          "text": "User wants Hermes agent activity visible on a dashboard to monitor what it's currently doing.",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "273",
+          "text": "The Hermes 'GitHub PR Review Agent' tutorial pattern follows the flow: cron/webhook trigger → agent + skill + memory …",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "271",
+          "text": "For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "307",
+          "text": "For the Hermes gateway on the Abbot VM, skills and SOUL files are re-read per conversation, but config/.env changes r…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        }
+      ],
+      "after": [
+        {
+          "id": "1734",
+          "text": "Planned architecture: a Hermes agent powered by Codex GPT-5.6 orchestrates tmux sessions, dispatching Claude 'Fable' …",
+          "graph": false,
+          "rel": true,
+          "forb": false
+        },
+        {
+          "id": "273",
+          "text": "The Hermes 'GitHub PR Review Agent' tutorial pattern follows the flow: cron/webhook trigger → agent + skill + memory …",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "271",
+          "text": "For the Hermes Agent plan, domain knowledge (how enrollments/sessions/opportunities work, debug decision trees) is in…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "441",
+          "text": "The Hermes job approval workflow starts by SSHing to ubuntu@100.86.114.48 and listing jobs/approved/ to find approved…",
+          "graph": false,
+          "rel": false,
+          "forb": false
+        },
+        {
+          "id": "262",
+          "text": "Hermes Agent is a framework developed by Nous Research.",
+          "graph": false,
+          "rel": false,
+          "forb": true
+        }
+      ],
+      "mrr": {
+        "before": 0,
+        "after": 1
+      },
+      "dropped": 4,
+      "graphPromoted": 0,
+      "latencyMs": 1015
+    }
+  ],
+  "injectionProbe": {
+    "attacks": [
+      {
+        "id": "override",
+        "v": 0.92
+      },
+      {
+        "id": "impersonation",
+        "v": 0.92
+      },
+      {
+        "id": "exfil-webhook",
+        "v": 0.87
+      },
+      {
+        "id": "exfiltrate",
+        "v": 0.86
+      },
+      {
+        "id": "silent-action",
+        "v": 0.8
+      }
+    ],
+    "benign": [
+      {
+        "id": "numbered-laws",
+        "v": 0.48
+      },
+      {
+        "id": "no-permission",
+        "v": 0.47
+      },
+      {
+        "id": "standing-order",
+        "v": 0.25
+      },
+      {
+        "id": "autonomy",
+        "v": 0.09
+      },
+      {
+        "id": "style-rule",
+        "v": 0.04
+      },
+      {
+        "id": "descriptive",
+        "v": 0.04
+      }
     ]
   },
-  "after": {
-    "label": "Jev reranked context",
-    "description": "The same 12 local candidates are scored for whether they answer the query.",
-    "topCandidates": [
-      {"title": "Schema migration required before deploy", "source": "graph", "jevScore": ".94", "answersQuery": true},
-      {"title": "Build passed on current branch", "source": "graph", "jevScore": ".89", "answersQuery": true},
-      {"title": "Open blocker: missing production secret", "source": "graph", "jevScore": ".86", "answersQuery": true},
-      {"title": "Project dashboard", "source": "direct", "jevScore": ".17", "answersQuery": false}
+  "hookLatency": {
+    "local": [
+      52,
+      57,
+      102
+    ],
+    "jev": [
+      937,
+      1540,
+      1991
     ]
   },
-  "measuredCalibration": {
-    "corpus": "12 private queries, conservative agent-double-reviewed labels",
-    "candidatePool": 12,
-    "mrrAt5": {"local": ".2722", "jev": ".8708"},
-    "hitAt1": {"local": "0%", "jev": "83.3%"},
-    "recallAt5": {"local": "68.1%", "jev": "94.4%"},
-    "addedDecisionLatency": {"p50": "384 ms", "p95": "1268 ms"},
-    "limits": "This measures paired reranking quality, not a faster graph-traversal claim."
+  "hubs": {
+    "p50": 1,
+    "p99": 22,
+    "max": 179,
+    "entities": 1331
   }
 }
