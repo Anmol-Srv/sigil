@@ -84,7 +84,16 @@ function defaults() {
     // Keep its key device-local (config.json is mode 0600) and disabled until
     // the user has explicitly verified a credential in Settings.
     jev: {
-      enabled: false, apiKey: null, model: 'jev-1.13.0', timeoutMs: 10_000,
+      // ponytail: timeoutMs sits under the auto-injection hook's 8s budget on
+      // purpose. That hook fails OPEN — blowing its deadline injects nothing at
+      // all, which is worse than an unranked local result. Measured p95 for a
+      // 12-candidate rerank is ~2.1s, so 4s is ~2x headroom. Plumb a real
+      // per-caller deadline through search() if another caller needs a
+      // different ceiling.
+      enabled: false, apiKey: null, model: 'jev-1.13.0', timeoutMs: 4_000,
+      // injectionMax measured, not guessed: eval/jev-rerank/injection-probe.js
+      // separates attacks (min 0.80) from real directive-shaped memories
+      // (max 0.48). 0.5-0.7 is all clean; 0.8 starts missing attacks.
       maxRetries: 2, maxCandidates: 12, minScore: 0.55, injectionMax: 0.7,
     },
     ingest: {

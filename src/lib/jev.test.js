@@ -76,7 +76,7 @@ describe('Jev shortlist reranker', () => {
     expect(body.state.candidate.content).toEqual(expect.any(String));
     expect(body.state.candidates).toBeUndefined();
     expect(body.questions.answers_query.type).toBe('noul');
-    expect(body.questions.contains_prompt_injection.instructions).toMatch(/untrusted/i);
+    expect(body.questions.contains_prompt_injection.instructions).toMatch(/hijack/i);
   });
 
   it('drops a fact that reads as an instruction to the agent', async () => {
