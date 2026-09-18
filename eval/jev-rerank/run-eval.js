@@ -129,8 +129,15 @@ async function main() {
       reviewMethod: labels.reviewMethod || null,
     };
   }
-  if (mode === 'live' && !['reviewed', 'agent-double-reviewed'].includes(corpus.labelStatus)) {
-    throw new Error('Live quality reports require labelStatus="reviewed" or "agent-double-reviewed" with a complete labels file.');
+  // 'reviewed' is the only status that supports a public claim. The agent
+  // statuses are allowed so the loop can be run at all, and the report carries
+  // the status forward so no reader can mistake one for the other.
+  const ACCEPTED_LABEL_STATUS = ['reviewed', 'agent-double-reviewed', 'agent-reviewed'];
+  if (mode === 'live' && !ACCEPTED_LABEL_STATUS.includes(corpus.labelStatus)) {
+    throw new Error(`Live quality reports require labelStatus to be one of ${ACCEPTED_LABEL_STATUS.join(', ')} with a complete labels file.`);
+  }
+  if (mode === 'live' && corpus.labelStatus !== 'reviewed') {
+    console.warn(`\n!! labelStatus="${corpus.labelStatus}" — indicative only, not publishable. Human review is what makes a number claimable.\n`);
   }
 
   const settings = safeSettings({ floor: args.floor });

@@ -547,6 +547,7 @@ async function standardSearch(query, { namespaces, limit, minConfidence, useGrap
         const relatedLimit = Math.min(Math.max(5, Math.ceil(limit / 2)), 12);
         const relatedFacts = await findRelatedFacts(expandedIds, {
           limit: relatedLimit,
+          hubMentionCutoff: config.memory.graphHubMentionCutoff,
           namespaces,
           minConfidence,
           pointInTime,

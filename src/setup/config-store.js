@@ -78,6 +78,10 @@ function defaults() {
     memory: {
       skipThreshold: 0.88, ambiguousThreshold: 0.78, supersedeThreshold: 0.72,
       supersedeScanLimit: 8, minFactSimilarity: 0.45, injectionFloor: 0.6,
+      // Graph traversal ignores entities mentioned by more than this many facts.
+      // A project name that tags a sixth of the store is a hub, not a
+      // relationship. Measured: p99 of entity mention counts is ~22.
+      graphHubMentionCutoff: 25,
     },
     search: { synthesize: true, synthesizeModel: '' },
     // Jev is an opt-in remote decision layer over an already-local shortlist.

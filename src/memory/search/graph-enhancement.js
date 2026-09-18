@@ -60,7 +60,7 @@ async function extractEntitiesFromFacts(facts) {
     .select('id', 'uid', 'name', 'entityType', 'description');
 }
 
-async function findRelatedFacts(mentionedEntityIds, { limit = 10, ...scope } = {}) {
+async function findRelatedFacts(mentionedEntityIds, { limit = 10, hubMentionCutoff, ...scope } = {}) {
   if (!mentionedEntityIds.length) return [];
 
   const relations = await cortexDb('relation')
@@ -89,18 +89,33 @@ async function findRelatedFacts(mentionedEntityIds, { limit = 10, ...scope } = {
   const relatedEntities = await cortexDb('entity')
     .whereIn('id', [...relatedEntityIds])
     .whereNull('mergedWith')
-    .select('id', 'name');
+    .select('id', 'name', 'mentionCount');
 
-  const entityNameById = new Map(relatedEntities.map((e) => [e.id, e.name]));
+  // Hub entities carry no relatedness. Measured on a real 1331-entity store:
+  // the median entity is mentioned by 1 fact and p99 by 22, but a handful of
+  // project-name topics reach 179. Two facts "related" because both mention
+  // `hermes` are not related at all, and traversal through those hubs is what
+  // returned a Slack channel id for a query about dependency checks.
+  const hubCutoff = Number(hubMentionCutoff) > 0 ? Number(hubMentionCutoff) : Infinity;
+  const specific = relatedEntities.filter((e) => (e.mentionCount ?? 1) <= hubCutoff);
+  if (!specific.length) return [];
+
+  const entityNameById = new Map(specific.map((e) => [e.id, e.name]));
+  // Inverse-frequency weight: a bridge entity shared by two facts says more the
+  // rarer it is. Same intuition as IDF, and the reason the old
+  // `ORDER BY fact_entity.mention_count DESC` was backwards — it ranked the
+  // most generic association first.
+  const specificity = new Map(specific.map((e) => [e.id, 1 / Math.log2(2 + (e.mentionCount ?? 1))]));
+  const specificIds = specific.map((e) => e.id);
 
   const factsQuery = cortexDb('fact')
     .join('fact_entity', 'fact.id', 'fact_entity.factId')
-    .whereIn('fact_entity.entityId', [...relatedEntityIds]);
+    .whereIn('fact_entity.entityId', specificIds);
   applyFactScope(factsQuery, scope);
-  const facts = await factsQuery
+  const rows = await factsQuery
     .select('fact.*', 'fact_entity.entityId')
-    .orderBy('fact_entity.mentionCount', 'desc')
-    .limit(limit * 3);
+    .limit(limit * 6);
+  const facts = rows.sort((a, b) => (specificity.get(b.entityId) ?? 0) - (specificity.get(a.entityId) ?? 0));
 
   const seenFactIds = new Set();
   const relatedFacts = [];

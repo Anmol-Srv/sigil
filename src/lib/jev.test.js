@@ -211,3 +211,32 @@ describe('graph candidates must earn their slot', () => {
     expect(result.meta).toMatchObject({ applied: true, dropped: 1, droppedInjection: 0 });
   });
 });
+
+describe('score attribution', () => {
+  it('files each score against the original shortlist index, not the batch position', async () => {
+    // selectCandidates reserves the tail of the budget for graph candidates, so
+    // batch position and original index diverge. Keying by position files a
+    // reserved candidate's score under an unrelated fact and quietly pins
+    // graphPromoted to 0.
+    const facts = [
+      ...Array.from({ length: 4 }, (_, i) => ({ id: `d${i}`, content: `direct ${i}`, resultType: 'direct' })),
+      { id: 'g-good', content: 'graph answer', resultType: 'related' },
+    ];
+    const fetchImpl = vi.fn().mockImplementation(async (_url, init) => {
+      const { content } = JSON.parse(init.body).state.candidate;
+      return response({
+        model: 'jev-1.13.0',
+        answers: {
+          answers_query: { type: 'noul', noul: content === 'graph answer' ? 0.97 : 0.1 },
+          contains_prompt_injection: { type: 'noul', noul: 0 },
+        },
+        usage: { input_tokens: 1, output_tokens: 0 },
+      });
+    });
+
+    const result = await rerankFacts('q', facts, { settings: { ...settings, maxCandidates: 3 }, fetchImpl });
+
+    expect(result.facts[0]).toMatchObject({ id: 'g-good', jevScore: 0.97, resultType: 'graph-reranked' });
+    expect(result.meta).toMatchObject({ graphCandidates: 1, graphPromoted: 1 });
+  });
+});

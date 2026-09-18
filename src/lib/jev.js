@@ -258,7 +258,13 @@ async function rerankFacts(query, facts, { settings = config.jev, fetchImpl = fe
   let outputTokens = 0;
   let lastError = null;
 
-  for (const [index, outcome] of settled.entries()) {
+  for (const [position, outcome] of settled.entries()) {
+    // Key by the candidate's index in the ORIGINAL list, not its position in
+    // this batch. selectCandidates reserves slots for graph candidates parked
+    // low in the shortlist, so batch position 8 can be original index 15 — and
+    // keying by position silently files every reserved candidate's score under
+    // a fact that was never scored. Symptom: graphPromoted stuck at 0.
+    const index = candidates[position].index;
     if (outcome?.error) { lastError = outcome.error; continue; }
     const payload = outcome.value;
     const relevance = clampScore(payload.answers?.answers_query?.noul);
