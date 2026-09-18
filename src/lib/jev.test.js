@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { callSystemOne, rerankFacts } from './jev.js';
+import { callSystemOne, rerankFacts, selectCandidates } from './jev.js';
 
 const settings = {
   enabled: true,
@@ -88,8 +88,10 @@ describe('Jev shortlist reranker', () => {
 
     const result = await rerankFacts('Why was the cache removed?', facts, { settings, fetchImpl });
 
-    expect(result.facts.map((fact) => fact.id)).toEqual([1, 3]);
-    expect(result.meta).toMatchObject({ applied: true, dropped: 1, reranked: 1 });
+    // 2 is the injection drop; 3 is a below-floor GRAPH candidate, which is
+    // removed rather than demoted (see "graph candidates must earn their slot").
+    expect(result.facts.map((fact) => fact.id)).toEqual([1]);
+    expect(result.meta).toMatchObject({ applied: true, dropped: 2, droppedInjection: 1, reranked: 1 });
   });
 
   it('isolates a single failed candidate instead of abandoning the rerank', async () => {
@@ -150,5 +152,62 @@ describe('Jev shortlist reranker', () => {
       sleepImpl,
     })).rejects.toThrow(/time budget/);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('candidate budget', () => {
+  const pool = (directCount, relatedCount) => [
+    ...Array.from({ length: directCount }, (_, i) => ({ id: `d${i}`, content: `direct ${i}`, resultType: 'direct' })),
+    ...Array.from({ length: relatedCount }, (_, i) => ({ id: `r${i}`, content: `related ${i}`, resultType: 'related' })),
+  ];
+
+  it('reserves budget for graph candidates the local ranker parked below the cut', async () => {
+    // The exact shape measured on a real store: 12 direct then 6 related, and a
+    // 12-candidate budget. A plain head-slice sends zero graph candidates.
+    const fetchImpl = vi.fn().mockResolvedValue(response({
+      model: 'jev-1.13.0',
+      answers: { answers_query: { type: 'noul', noul: 0.9 }, contains_prompt_injection: { type: 'noul', noul: 0 } },
+      usage: { input_tokens: 1, output_tokens: 0 },
+    }));
+
+    await rerankFacts('why?', pool(12, 6), { settings: { ...settings, maxCandidates: 12 }, fetchImpl });
+
+    const sent = fetchImpl.mock.calls.map(([, init]) => JSON.parse(init.body).state.candidate.content);
+    expect(sent).toHaveLength(12);
+    expect(sent.filter((c) => c.startsWith('related'))).toHaveLength(4);
+  });
+
+  it('sends everything when the pool fits the budget', () => {
+    expect(selectCandidates(pool(3, 2), 12)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('falls back to a plain head-slice when there are no graph candidates', () => {
+    expect(selectCandidates(pool(20, 0), 5)).toEqual([0, 1, 2, 3, 4]);
+  });
+});
+
+describe('graph candidates must earn their slot', () => {
+  const mixed = [
+    { id: 'd1', content: 'direct hit', resultType: 'direct' },
+    { id: 'r1', content: 'graph reached this', resultType: 'related' },
+  ];
+
+  it('removes a below-floor graph candidate but only demotes a below-floor direct one', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async (_url, init) => {
+      const { content } = JSON.parse(init.body).state.candidate;
+      return response({
+        model: 'jev-1.13.0',
+        answers: {
+          answers_query: { type: 'noul', noul: content.startsWith('direct') ? 0.2 : 0.1 },
+          contains_prompt_injection: { type: 'noul', noul: 0 },
+        },
+        usage: { input_tokens: 1, output_tokens: 0 },
+      });
+    });
+
+    const result = await rerankFacts('why?', mixed, { settings, fetchImpl });
+
+    expect(result.facts.map((f) => f.id)).toEqual(['d1']);
+    expect(result.meta).toMatchObject({ applied: true, dropped: 1, droppedInjection: 0 });
   });
 });

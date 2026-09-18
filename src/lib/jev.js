@@ -176,6 +176,35 @@ async function probeJev({ apiKey, model = DEFAULT_MODEL, timeoutMs = 10_000, fet
 }
 
 /**
+ * Choose which shortlist positions to spend the candidate budget on.
+ *
+ * NOT simply the first `maxCandidates`. The local ranker emits every direct hit
+ * before every graph-expanded one, so with a pool of 18 and a budget of 12 the
+ * graph candidates sit at positions 13-18 and are never scored — Jev's
+ * graph-promotion rate is then structurally zero no matter how good the model
+ * is. Measured on a real store: 6 related facts found per query, 0 ever sent.
+ *
+ * So reserve part of the budget for graph candidates the local ranker parked
+ * below the cut. They are the only candidates Jev can actually *add*; the
+ * direct hits it displaces are the lowest-ranked ones and keep their local
+ * position in the unscored remainder.
+ */
+function selectCandidates(facts, maxCandidates) {
+  const all = facts.map((_, index) => index);
+  if (all.length <= maxCandidates) return all;
+
+  const related = all.filter((i) => facts[i].resultType === 'related');
+  // ponytail: a third. Enough that a graph answer can win, small enough that a
+  // query with no good graph candidates doesn't lose much direct coverage.
+  const reserve = Math.min(related.length, Math.max(1, Math.floor(maxCandidates / 3)));
+  if (!reserve) return all.slice(0, maxCandidates);
+
+  const reserved = new Set(related.slice(0, reserve));
+  const rest = all.filter((i) => !reserved.has(i)).slice(0, maxCandidates - reserve);
+  return [...rest, ...reserved].sort((a, b) => a - b);
+}
+
+/**
  * Re-rank an already-local shortlist, and drop candidates that read as an
  * instruction to the agent rather than a memory.
  *
@@ -198,11 +227,11 @@ async function rerankFacts(query, facts, { settings = config.jev, fetchImpl = fe
   // 12-candidate shortlist can never cost 12 timeouts.
   const deadline = Date.now() + timeoutMs;
 
-  const candidates = original.slice(0, maxCandidates).map((fact, index) => ({
+  const candidates = selectCandidates(original, maxCandidates).map((index) => ({
     index,
-    id: String(fact.id),
-    content: String(fact.content || '').slice(0, MAX_FACT_CHARS),
-    category: fact.category || null,
+    id: String(original[index].id),
+    content: String(original[index].content || '').slice(0, MAX_FACT_CHARS),
+    category: original[index].category || null,
   }));
 
   const settled = await mapPool(candidates, CONCURRENCY, (candidate) => callSystemOne({
@@ -267,6 +296,7 @@ async function rerankFacts(query, facts, { settings = config.jev, fetchImpl = fe
   for (const [index, score] of injection) {
     if (score > injectionMax) droppedIds.add(String(candidates[index].id));
   }
+  const injectionDropped = droppedIds.size;
 
   const decorate = (candidate) => {
     const fact = original[candidate.index];
@@ -284,7 +314,21 @@ async function rerankFacts(query, facts, { settings = config.jev, fetchImpl = fe
     .filter((c) => scores.get(c.index) >= floor)
     .sort((a, b) => (scores.get(b.index) - scores.get(a.index)) || a.index - b.index)
     .map(decorate);
-  const belowFloor = new Map(scored.filter((c) => scores.get(c.index) < floor).map((c) => [c.id, decorate(c)]));
+
+  // A graph candidate that misses the floor is REMOVED; a direct one is only
+  // demoted. Asymmetric on purpose: a direct hit passed local retrieval and the
+  // similarity floor, so it earned its slot and Jev's doubt shouldn't delete it.
+  // A graph candidate passed neither — it exists only because traversal reached
+  // it, and the similarity floor structurally exempts it (no `similarity` to
+  // test). Measured on the auto-injection path: the floor stripped every direct
+  // fact, leaving a result made entirely of graph candidates Jev had scored
+  // below the floor, none of which anything removed. "Better to inject nothing
+  // than something off-topic" is the rule this restores.
+  const below = scored.filter((c) => scores.get(c.index) < floor);
+  for (const c of below) {
+    if (original[c.index].resultType === 'related') droppedIds.add(c.id);
+  }
+  const belowFloor = new Map(below.filter((c) => !droppedIds.has(c.id)).map((c) => [c.id, decorate(c)]));
 
   const promoted = new Set(ranked.map((fact) => String(fact.id)));
   const remainder = original
@@ -297,9 +341,12 @@ async function rerankFacts(query, facts, { settings = config.jev, fetchImpl = fe
       applied: true,
       model: usedModel,
       candidates: candidates.length,
+      graphCandidates: candidates.filter((c) => original[c.index].resultType === 'related').length,
+      graphPromoted: ranked.filter((f) => f.resultType === 'graph-reranked').length,
       scored: scores.size,
       reranked: ranked.length,
       dropped: droppedIds.size,
+      droppedInjection: injectionDropped,
       failed: candidates.length - scores.size,
       floor,
       injectionMax,
@@ -309,4 +356,4 @@ async function rerankFacts(query, facts, { settings = config.jev, fetchImpl = fe
   };
 }
 
-export { API_BASE_URL, DEFAULT_MODEL, QUESTIONS, callSystemOne, probeJev, rerankFacts };
+export { API_BASE_URL, DEFAULT_MODEL, QUESTIONS, callSystemOne, probeJev, rerankFacts, selectCandidates };

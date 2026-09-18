@@ -26,7 +26,7 @@ import cortexDb from '../../db/cortex.js';
 // Entity detection only for short, name-like queries — not full sentences
 const MAX_ENTITY_QUERY_LENGTH = 60;
 
-async function search(query, { namespaces, limit = 5, minConfidence = 'medium', useGraph = false, includeChunks = false, pointInTime, expand = false, route = true, categories, synthesize = config.search.synthesize, podScope = null, applyFloor = true, viewer = null, ctx = {} } = {}) {
+async function search(query, { namespaces, limit = 5, minConfidence = 'medium', useGraph = false, includeChunks = false, pointInTime, expand = false, route = true, categories, synthesize = config.search.synthesize, podScope = null, applyFloor = true, viewer = null, includeCandidatePool = false, ctx = {} } = {}) {
   const _t0 = Date.now();
   if (!isSearchableQuery(query)) {
     const empty = emptySearchResult();
@@ -51,6 +51,13 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
     pointInTime = pointInTime || routing.pointInTime;
     categories = categories || (routing.categories.length ? routing.categories : undefined);
   }
+
+  // Opting into Jev opts into graph expansion. Without it the candidate pool is
+  // exactly `limit`, so the decision layer can only reorder what local search
+  // already chose — it can never surface the related fact that answers the
+  // question. Expansion is pure SQL (entity links + relations), so this costs
+  // no LLM call and stays inside the auto-injection hook's LLM-free contract.
+  useGraph = useGraph || config.jev?.enabled === true;
 
   const matchedEntity = await detectEntity(query, namespaces);
 
@@ -105,7 +112,13 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
   }
   // Public search promises `limit` facts. The wider graph candidate pool exists
   // only between local expansion and this decision stage.
-  result.facts = result.facts.slice(0, limit);
+  //
+  // `includeCandidatePool` returns it unsliced. Local ranking emits every
+  // direct hit before every graph-expanded one, and direct hits always fill
+  // `limit` — so a corpus captured from the public result can never contain a
+  // graph candidate, and graph promotion becomes unmeasurable. Evaluation
+  // tooling only; nothing on a user-facing path sets it.
+  if (!includeCandidatePool) result.facts = result.facts.slice(0, limit);
   result.jev = jev;
 
   // Fire-and-forget access tracking + Hebbian co-retrieval edge strengthening.
@@ -209,6 +222,7 @@ function buildSearchTrace({ query, namespaces, limit, minConfidence, useGraph, e
       facts: rankedFacts,
       chunks: rankedChunks,
     },
+    graph: result.graph || { ran: false },
     jev: jev || { applied: false, reason: 'not_run' },
     synthesized: result.synthesized || null,
     relatedEntities: result.relatedEntities || [],
@@ -228,6 +242,7 @@ function emptySearchResult() {
     chunks: [],
     matchedEntity: null,
     relatedEntities: [],
+    graph: { ran: false, reason: 'unsearchable' },
   };
 }
 
@@ -502,14 +517,21 @@ async function standardSearch(query, { namespaces, limit, minConfidence, useGrap
     }
   }
 
+  // Pool provenance. "Graph expansion returned nothing" and "graph expansion
+  // was never reached" look identical in the results, and an eval can't tell a
+  // reranker that ignored graph candidates from one that never saw any.
+  const graph = { ran: false, seedEntities: 0, expandedEntities: 0, relatedFound: 0, poolSize: facts.length };
   if (useGraph && facts.length) {
     try {
+      graph.ran = true;
       const mentionedEntities = await extractEntitiesFromFacts(facts.slice(0, 5));
+      graph.seedEntities = mentionedEntities.length;
       if (mentionedEntities.length) {
         // Expand the seed entity set with their top co-retrieved neighbors so
         // findRelatedFacts can pull in facts linked to associatively-linked
         // entities, not just relation-linked ones.
         const expandedIds = await expandWithCoRetrievedEntities(mentionedEntities.map((e) => e.id));
+        graph.expandedEntities = expandedIds.length;
         const relatedLimit = Math.min(Math.max(5, Math.ceil(limit / 2)), 12);
         const relatedFacts = await findRelatedFacts(expandedIds, {
           limit: relatedLimit,
@@ -523,9 +545,12 @@ async function standardSearch(query, { namespaces, limit, minConfidence, useGrap
         // Keep a small local candidate pool so Jev can promote a related fact.
         // The final `slice(limit)` below preserves the old direct-first local
         // result when Jev is disabled or unavailable.
+        graph.relatedFound = relatedFacts.length;
         facts = rerank(facts, relatedFacts, expandedIds, limit + relatedLimit);
+        graph.poolSize = facts.length;
       }
     } catch (err) {
+      graph.error = err.message;
       console.error('[graph-enhancement] Failed:', err.message);
     }
   }
@@ -543,6 +568,7 @@ async function standardSearch(query, { namespaces, limit, minConfidence, useGrap
     chunks,
     matchedEntity: null,
     relatedEntities: [],
+    graph,
   };
 }
 

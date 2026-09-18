@@ -59,6 +59,9 @@ export function registerSearch(registry) {
     // the precision floor is for unprompted auto-injection (hooks), not for a
     // human/agent who deliberately asked. Opt in with applyFloor:true.
     const applyFloor = params.applyFloor ?? false;
+    // Evaluation-only: return the pre-slice candidate pool so a corpus can
+    // contain the graph-expanded candidates the public limit always cuts.
+    const includeCandidatePool = Boolean(params.includeCandidatePool);
     // Visibility scope. 'own' (the default) means the caller sees shared facts
     // plus the private ones addressed to it; 'any' lifts scoping entirely and
     // is for a human reading their own store. Defaulting to 'own' is what
@@ -81,6 +84,7 @@ export function registerSearch(registry) {
       podScope,
       applyFloor,
       viewer,
+      includeCandidatePool,
       ctx,
     });
 
@@ -101,6 +105,7 @@ export function registerSearch(registry) {
       matchedEntity: result.matchedEntity || null,
       relatedEntities: result.relatedEntities || [],
       jev: result.jev || null,
+      graph: result.graph || null,
     };
 
     // Persist + broadcast the full causal trace (routing → entity → ranked

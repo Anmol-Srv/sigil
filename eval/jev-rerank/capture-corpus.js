@@ -100,6 +100,10 @@ async function main() {
         route: false,
         limit,
         podScope: 'global',
+        // Synthesis is an LLM call per case and plays no part in which
+        // candidates come back or in what order.
+        synthesize: false,
+        includeCandidatePool: true,
       });
       if (response.jev?.applied) throw new Error(`Jev unexpectedly ran while capturing ${question.id}`);
       captured.push({

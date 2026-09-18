@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 
 // Mock all external deps before importing hybrid
 vi.mock('../../ingestion/embedder.js', () => ({
@@ -94,6 +94,12 @@ import { routeQuery } from '../cognitive/query-router.js';
 import { extractEntitiesFromFacts, findRelatedFacts, rerank } from './graph-enhancement.js';
 import { rerankFacts } from '../../lib/jev.js';
 import { search } from './hybrid.js';
+import { __setTestConfig, __resetTestConfig } from '../../setup/config-store.js';
+
+// Jev now implies useGraph, so these tests must not read the developer's real
+// ~/.sigil/config.json — CI behaviour would depend on whether Jev is enabled
+// on the machine running it.
+afterAll(() => __resetTestConfig());
 
 const makeFactList = (ids) =>
   ids.map((id, i) => ({
@@ -110,6 +116,7 @@ const makeFactList = (ids) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __setTestConfig({ jev: { enabled: false } });
   routeQuery.mockResolvedValue({
     intent: 'factual',
     categories: [],
@@ -265,6 +272,19 @@ describe('search — facade behavior', () => {
       { id: 1 },
     ]);
     expect(result.jev).toMatchObject({ applied: true, model: 'fixture-system-one', reranked: 1 });
+  });
+
+  it('turns graph expansion on whenever Jev is enabled', async () => {
+    // Without expansion the pool is exactly `limit`, so Jev could only reorder
+    // what local search already picked.
+    __setTestConfig({ jev: { enabled: true } });
+    hybridSearchFacts.mockResolvedValue(makeFactList([1]));
+    extractEntitiesFromFacts.mockResolvedValue([{ id: 44 }]);
+    findRelatedFacts.mockResolvedValue([]);
+
+    await search('test', { namespaces: ['default'], limit: 5, useGraph: false, route: false });
+
+    expect(findRelatedFacts).toHaveBeenCalled();
   });
 
   it('re-ranks the auto-injection path too, where useGraph is false', async () => {
