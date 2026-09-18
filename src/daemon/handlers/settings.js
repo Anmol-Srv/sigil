@@ -59,6 +59,12 @@ export function registerSettings(registry) {
       if (!r.ok) { errors[path] = r.error; continue; }
       accepted.push({ def, path, value: r.value });
     }
+    // The generic settings surface must not create a switch that looks enabled
+    // while every graph query silently falls back because no credential exists.
+    // The key itself is deliberately handled by the Jev page, never here.
+    if (accepted.some((a) => a.path === 'jev.enabled' && a.value === true) && !getConfig().jev?.apiKey) {
+      errors['jev.enabled'] = 'Save a Jev API key in the Connect Jev panel above before enabling this.';
+    }
     if (Object.keys(errors).length) return { ok: false, errors };
 
     // Group by top-level section: patchConfig merges shallowly, so a nested

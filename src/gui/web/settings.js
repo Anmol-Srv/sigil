@@ -38,7 +38,7 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => (
 
 const CATEGORY_ICON = {
   general: 'home', ingest: 'plus', memory: 'layers', search: 'search',
-  hebbian: 'graph', providers: 'database', engine: 'cpu', server: 'monitor',
+  jev: 'graph', hebbian: 'graph', providers: 'database', engine: 'cpu', server: 'monitor',
   output: 'doc', developer: 'terminal', danger: 'alert',
 };
 
@@ -107,7 +107,7 @@ function row(d) {
   </div>`;
 }
 
-export function initSettings({ rpc, toast, mount, extras = [] }) {
+export function initSettings({ rpc, toast, mount, extras = [], sectionExtras = {} }) {
   const host = typeof mount === 'string' ? document.querySelector(mount) : mount;
   if (!host) return { refresh: () => {} };
 
@@ -167,8 +167,9 @@ export function initSettings({ rpc, toast, mount, extras = [] }) {
   function parkExtras() {
     const holder = document.getElementById('settings-extras');
     if (!holder) return;
-    for (const x of extras) {
-      const node = document.querySelector(x.node);
+    const nodes = [...extras.map((x) => x.node), ...Object.values(sectionExtras)];
+    for (const selector of nodes) {
+      const node = document.querySelector(selector);
       if (node && node.parentElement !== holder) holder.appendChild(node);
     }
   }
@@ -209,6 +210,7 @@ export function initSettings({ rpc, toast, mount, extras = [] }) {
     };
 
     const sec = sections.find((x) => x.id === active);
+    const sectionExtraNode = sec.extra ? null : sectionExtras[sec.id];
     const rows = sec.extra ? '' : sec.settings
       .filter((d) => !query || (`${d.label} ${d.help || ''} ${d.path}`).toLowerCase().includes(query))
       .map(row).join('');
@@ -230,7 +232,7 @@ export function initSettings({ rpc, toast, mount, extras = [] }) {
               : tierOf?.help ? `<p>${esc(tierOf.help)}</p>` : ''}
           </header>
           <div class="set-body${sec.extra ? ' set-body-extra' : ''}">
-            ${sec.extra ? '' : rows || `<div class="empty">No setting matches “${esc(query)}”. Try a different word, or clear the search.</div>`}
+            ${sec.extra ? '' : `${sectionExtraNode ? '<div class="set-inline-extra"></div>' : ''}${rows || `<div class="empty">No setting matches “${esc(query)}”. Try a different word, or clear the search.</div>`}`}
           </div>
         </div>
       </div>
@@ -245,6 +247,9 @@ export function initSettings({ rpc, toast, mount, extras = [] }) {
       const node = document.querySelector(sec.node);
       if (node) el('.set-body').appendChild(node);
       else el('.set-body').innerHTML = '<div class="empty">This section failed to mount.</div>';
+    } else if (sectionExtraNode) {
+      const node = document.querySelector(sectionExtraNode);
+      if (node) el('.set-inline-extra').appendChild(node);
     }
     syncBar();
   }

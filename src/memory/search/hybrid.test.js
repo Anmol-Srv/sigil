@@ -40,6 +40,16 @@ vi.mock('./graph-enhancement.js', () => ({
   rerank: vi.fn((facts) => facts),
 }));
 
+// The remote decision layer has its own adapter suite. Hybrid tests pin the
+// production candidate handoff without requiring a configured credential or a
+// network call in CI.
+vi.mock('../../lib/jev.js', () => ({
+  rerankFacts: vi.fn(async (_query, facts) => ({
+    facts,
+    meta: { applied: false, reason: 'disabled' },
+  })),
+}));
+
 vi.mock('./query-expander.js', () => ({
   expandQuery: vi.fn().mockResolvedValue(['original query']),
 }));
@@ -81,6 +91,8 @@ vi.mock('../../lib/llm.js', () => ({
 
 import { hybridSearchFacts } from './hybrid-sql.js';
 import { routeQuery } from '../cognitive/query-router.js';
+import { extractEntitiesFromFacts, findRelatedFacts, rerank } from './graph-enhancement.js';
+import { rerankFacts } from '../../lib/jev.js';
 import { search } from './hybrid.js';
 
 const makeFactList = (ids) =>
@@ -107,6 +119,11 @@ beforeEach(() => {
     pointInTime: null,
     reasoning: '',
   });
+  rerankFacts.mockImplementation(async (_query, facts) => ({
+    facts,
+    meta: { applied: false, reason: 'disabled' },
+  }));
+  rerank.mockImplementation((facts) => facts);
 });
 
 describe('search — facade behavior', () => {
@@ -196,6 +213,88 @@ describe('search — facade behavior', () => {
 
     expect(byId[10].importance).toBe('vital');
     expect(byId[11].importance).toBe('supplementary');
+  });
+
+  it('carries the authorized search scope into graph expansion', async () => {
+    hybridSearchFacts.mockResolvedValue(makeFactList([1]));
+    extractEntitiesFromFacts.mockResolvedValue([{ id: 44 }]);
+    findRelatedFacts.mockResolvedValue([]);
+    const viewer = { agent: 'reviewer', deviceId: 7 };
+
+    await search('test', {
+      namespaces: ['project-a'],
+      limit: 5,
+      minConfidence: 'high',
+      categories: ['decision'],
+      useGraph: true,
+      viewer,
+      podScope: 'global',
+    });
+
+    expect(findRelatedFacts).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({
+      namespaces: ['project-a'], minConfidence: 'high', categories: ['decision'], viewer,
+    }));
+  });
+
+  it('hands the graph-expanded local pool to Jev before applying the public limit', async () => {
+    hybridSearchFacts.mockResolvedValue(makeFactList([1, 2]));
+    extractEntitiesFromFacts.mockResolvedValue([{ id: 44 }]);
+    findRelatedFacts.mockResolvedValue([{ id: 3, content: 'Related graph evidence', rrfScore: 0.5, relationPath: 'Cache (depends_on)' }]);
+    rerank.mockImplementation((direct, related) => [
+      ...direct.map((fact) => ({ ...fact, resultType: 'direct' })),
+      ...related.map((fact) => ({ ...fact, resultType: 'related' })),
+    ]);
+    rerankFacts.mockImplementation(async (_query, candidates) => ({
+      facts: [
+        { ...candidates[2], resultType: 'graph-reranked', reranker: 'jev', jevScore: 0.94 },
+        ...candidates.slice(0, 2),
+      ],
+      meta: { applied: true, model: 'fixture-system-one', candidates: 3, reranked: 1, floor: 0.7 },
+    }));
+
+    const result = await search('how did the cache decision affect dependencies?', {
+      namespaces: ['default'], useGraph: true, limit: 2, route: false,
+    });
+
+    expect(rerankFacts).toHaveBeenCalledWith(
+      'how did the cache decision affect dependencies?',
+      expect.arrayContaining([expect.objectContaining({ id: 1 }), expect.objectContaining({ id: 2 }), expect.objectContaining({ id: 3 })]),
+    );
+    expect(result.facts).toMatchObject([
+      { id: 3, resultType: 'graph-reranked', reranker: 'jev', jevScore: 0.94 },
+      { id: 1 },
+    ]);
+    expect(result.jev).toMatchObject({ applied: true, model: 'fixture-system-one', reranked: 1 });
+  });
+
+  it('re-ranks the auto-injection path too, where useGraph is false', async () => {
+    // The hook that feeds agents passes useGraph:false. Gating Jev on useGraph
+    // meant the one path that matters never reached it.
+    hybridSearchFacts.mockResolvedValue(makeFactList([1, 2]));
+    rerankFacts.mockImplementation(async (_query, candidates) => ({
+      facts: [...candidates].reverse(),
+      meta: { applied: true, model: 'fixture-system-one', candidates: 2, reranked: 2 },
+    }));
+
+    const result = await search('test', { namespaces: ['default'], limit: 5, useGraph: false, route: false });
+
+    expect(rerankFacts).toHaveBeenCalled();
+    expect(result.facts.map((f) => f.id)).toEqual([2, 1]);
+    expect(result.jev).toMatchObject({ applied: true });
+  });
+
+  it('runs the relevance floor before Jev, so dropped facts are never sent', async () => {
+    // Graph facts carry no `similarity` and are floor-exempt; ordering Jev
+    // first would let one reach injection without passing any gate.
+    const facts = makeFactList([1, 2]);
+    facts[0].similarity = 0.9;
+    facts[1].similarity = 0.1;
+    hybridSearchFacts.mockResolvedValue(facts);
+
+    await search('test', { namespaces: ['default'], limit: 5, route: false, applyFloor: true });
+
+    const [, sent] = rerankFacts.mock.calls[0];
+    expect(sent.map((f) => f.id)).toEqual([1]);
   });
 
   it('respects limit parameter from router override', async () => {

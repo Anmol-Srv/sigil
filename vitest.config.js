@@ -12,6 +12,6 @@ export default defineConfig({
     // it only reproduces on a loaded machine. The tests themselves stay on the
     // 10s budget; only setup gets the room it genuinely needs.
     hookTimeout: 60000,
-    include: ['src/**/*.test.js'],
+    include: ['src/**/*.test.js', 'eval/jev-rerank/**/*.test.js'],
   },
 });

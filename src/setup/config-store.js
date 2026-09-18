@@ -80,6 +80,13 @@ function defaults() {
       supersedeScanLimit: 8, minFactSimilarity: 0.45, injectionFloor: 0.6,
     },
     search: { synthesize: true, synthesizeModel: '' },
+    // Jev is an opt-in remote decision layer over an already-local shortlist.
+    // Keep its key device-local (config.json is mode 0600) and disabled until
+    // the user has explicitly verified a credential in Settings.
+    jev: {
+      enabled: false, apiKey: null, model: 'jev-1.13.0', timeoutMs: 10_000,
+      maxRetries: 2, maxCandidates: 12, minScore: 0.55, injectionMax: 0.7,
+    },
     ingest: {
       eagerExtract: true,
       // Relation discovery is maintenance work. Entity enrichment is durable

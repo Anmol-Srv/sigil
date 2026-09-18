@@ -1,5 +1,47 @@
 import cortexDb from '../../db/cortex.js';
 import { getEntityIdsForFacts } from '../facts/entity-linker.js';
+import { buildFactFilters } from './filters.js';
+import { scopeVisibility } from '../visibility.js';
+
+const GRAPH_CONFIDENCE_CASE = `CASE fact.confidence
+  WHEN 'high' THEN 2
+  WHEN 'medium' THEN 1
+  ELSE 0
+END`;
+
+// Graph traversal broadens *relationships*, never the caller's authorization
+// boundary. Keep this in the graph module (rather than trusting callers to
+// pre-filter) so every future graph-backed retrieval path inherits the guard.
+function applyFactScope(query, { namespaces, minConfidence = 'medium', pointInTime, categories, podIds, viewer } = {}) {
+  const { minRank } = buildFactFilters({ minConfidence, pointInTime, categories, viewer });
+  if (!Array.isArray(namespaces) || !namespaces.length) {
+    return query.whereRaw('FALSE');
+  }
+
+  query
+    .whereIn('fact.namespace', namespaces)
+    .where('fact.status', 'active')
+    .whereRaw(`${GRAPH_CONFIDENCE_CASE} >= ?`, [minRank]);
+
+  if (pointInTime) {
+    query.whereRaw('fact.valid_from <= ? AND (fact.valid_until IS NULL OR fact.valid_until > ?)', [pointInTime, pointInTime]);
+  }
+  if (categories?.length) query.whereIn('fact.category', categories);
+  scopeVisibility(query, viewer, 'fact');
+
+  if (Array.isArray(podIds)) {
+    const unpodded = `NOT EXISTS (
+      SELECT 1 FROM pod_membership pm
+      WHERE pm.member_type = 'fact' AND pm.member_id = fact.id
+    )`;
+    if (!podIds.length) query.whereRaw(unpodded);
+    else query.whereRaw(`(fact.id = ANY(
+      SELECT member_id FROM pod_membership
+      WHERE member_type = 'fact' AND pod_id = ANY(?::int[])
+    ) OR ${unpodded})`, [podIds]);
+  }
+  return query;
+}
 
 async function extractEntitiesFromFacts(facts) {
   const factIds = facts.map((f) => f.id);
@@ -18,7 +60,7 @@ async function extractEntitiesFromFacts(facts) {
     .select('id', 'uid', 'name', 'entityType', 'description');
 }
 
-async function findRelatedFacts(mentionedEntityIds, { limit = 10 } = {}) {
+async function findRelatedFacts(mentionedEntityIds, { limit = 10, ...scope } = {}) {
   if (!mentionedEntityIds.length) return [];
 
   const relations = await cortexDb('relation')
@@ -51,10 +93,11 @@ async function findRelatedFacts(mentionedEntityIds, { limit = 10 } = {}) {
 
   const entityNameById = new Map(relatedEntities.map((e) => [e.id, e.name]));
 
-  const facts = await cortexDb('fact')
+  const factsQuery = cortexDb('fact')
     .join('fact_entity', 'fact.id', 'fact_entity.factId')
-    .whereIn('fact_entity.entityId', [...relatedEntityIds])
-    .where('fact.status', 'active')
+    .whereIn('fact_entity.entityId', [...relatedEntityIds]);
+  applyFactScope(factsQuery, scope);
+  const facts = await factsQuery
     .select('fact.*', 'fact_entity.entityId')
     .orderBy('fact_entity.mentionCount', 'desc')
     .limit(limit * 3);
@@ -99,4 +142,4 @@ function rerank(directFacts, relatedFacts, mentionedEntityIds, limit) {
   return [...boosted, ...related].slice(0, limit);
 }
 
-export { extractEntitiesFromFacts, findRelatedFacts, rerank };
+export { applyFactScope, extractEntitiesFromFacts, findRelatedFacts, rerank };

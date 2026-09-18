@@ -100,6 +100,7 @@ export function registerSearch(registry) {
       synthesized: result.synthesized || null,
       matchedEntity: result.matchedEntity || null,
       relatedEntities: result.relatedEntities || [],
+      jev: result.jev || null,
     };
 
     // Persist + broadcast the full causal trace (routing → entity → ranked
@@ -170,6 +171,14 @@ function serializeFact(f) {
     device: f.createdByDeviceId ?? null,
     sourceDocumentIds: Array.isArray(f.sourceDocumentIds) ? f.sourceDocumentIds : [],
     sourceSection: f.sourceSection ?? null,
+    // Retrieval provenance is data, not decoration: callers need to know
+    // whether a fact was direct, graph-expanded, and/or Jev-promoted.
+    resultType: f.resultType ?? 'direct',
+    relationPath: f.relationPath ?? null,
+    graphDistance: numOrNull(f.graphDistance),
+    reranker: f.reranker ?? null,
+    rerankScore: numOrNull(f.jevScore),
+    injectionScore: numOrNull(f.jevInjectionScore),
   };
 }
 

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sigil × Jev — search result demo</title>
+  <style>
+    :root { color-scheme:dark; --ink:#090a0c; --surface:#101317; --line:#242a31; --line-hi:#3a444e; --text:#f2f5f7; --muted:#8d97a2; --dim:#56616d; --blue:#0084ff; --sky:#a7dcff; --mint:#4ee0a0; --sans:Geist,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
+    * { box-sizing:border-box; } body { min-height:100vh; margin:0; overflow:hidden; background:radial-gradient(circle at 68% 45%,rgba(0,132,255,.12),transparent 30%),var(--ink); color:var(--text); font-family:var(--sans); } main { width:min(1120px,calc(100vw - 48px)); min-height:100vh; margin:auto; display:flex; flex-direction:column; justify-content:center; padding:30px 0; }
+    nav { display:flex; justify-content:space-between; align-items:center; color:var(--muted); font:10px var(--mono); letter-spacing:.1em; } .brand { display:flex; align-items:center; gap:9px; color:var(--text); font:700 14px var(--sans); letter-spacing:-.02em; } .mark { width:16px; height:16px; position:relative; border:2px solid var(--blue); } .mark:after { content:""; width:5px; height:5px; position:absolute; top:-4px; right:-4px; background:var(--blue); }
+    h1 { margin:28px 0 17px; font-size:clamp(34px,4.6vw,60px); line-height:.93; letter-spacing:-.06em; } h1 span { color:var(--muted); font-weight:400; }
+    .search { display:flex; align-items:center; height:54px; border:1px solid var(--line-hi); background:rgba(255,255,255,.025); } .search-icon { width:53px; display:grid; place-items:center; color:var(--sky); font:20px var(--mono); } input { width:100%; height:100%; border:0; outline:0; background:transparent; color:var(--text); font:15px var(--sans); letter-spacing:-.01em; } .search-state { padding-right:15px; color:var(--muted); white-space:nowrap; font:10px var(--mono); }
+    .results { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:22px; } .column { min-width:0; } .column.after { border-left:1px solid var(--line); padding-left:18px; } .head { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; border-bottom:1px solid var(--line); } .head b { font-size:12px; } .head span { color:var(--muted); font:9px var(--mono); letter-spacing:.08em; } .after .head b,.after .head span { color:var(--sky); }
+    .row { display:grid; grid-template-columns:27px minmax(0,1fr) auto; align-items:center; gap:9px; min-height:55px; border-bottom:1px solid var(--line); opacity:0; transform:translateY(7px); } .rank { color:var(--dim); font:10px var(--mono); } .content { min-width:0; } .title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#c4cbd2; font-size:12px; } .meta { display:flex; align-items:center; gap:5px; margin-top:4px; color:var(--dim); font:9px var(--mono); } .source { padding:2px 3px; border:1px solid #303940; } .score { color:var(--muted); font:10px var(--mono); } .row.answer .title { color:#eff8ff; font-weight:600; } .row.answer .score { color:var(--sky); } .row.answer .source { color:var(--sky); border-color:rgba(0,132,255,.45); background:rgba(0,132,255,.1); } .row.show { animation:appear .24s ease forwards; }
+    .after .row:nth-child(2) { animation-delay:.12s; } .after .row:nth-child(3) { animation-delay:.2s; } .after .row:nth-child(4) { animation-delay:.28s; } .after .row:nth-child(5) { animation-delay:.36s; } .before .row:nth-child(2) { animation-delay:.06s; } .before .row:nth-child(3) { animation-delay:.12s; } .before .row:nth-child(4) { animation-delay:.18s; } .before .row:nth-child(5) { animation-delay:.24s; }
+    .notice { display:flex; align-items:center; justify-content:space-between; gap:14px; min-height:40px; margin-top:13px; padding:0 11px; border-left:2px solid var(--blue); background:linear-gradient(90deg,rgba(0,132,255,.12),transparent); color:var(--muted); font-size:10px; opacity:0; transform:translateY(5px); } .notice strong { color:var(--sky); font:10px var(--mono); } .notice.show { animation:appear .24s ease forwards; }
+    .foot { display:flex; gap:23px; margin-top:22px; padding:12px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); color:var(--muted); font-size:10px; } .foot b { color:var(--sky); font:10px var(--mono); } .metrics { display:flex; gap:26px; padding-top:12px; color:var(--muted); font-size:10px; } .metrics b { color:var(--text); font:600 13px var(--mono); letter-spacing:-.05em; } .metrics em { color:var(--sky); font-style:normal; } footer { display:flex; justify-content:space-between; margin-top:auto; color:var(--dim); font-size:9px; }
+    @keyframes appear { to { opacity:1; transform:translateY(0); } } @media (max-width:700px) { body { overflow:auto; } main { width:min(100vw - 28px,1120px); min-height:100vh; padding:20px 0; } .results { grid-template-columns:1fr; } .column.after { border-left:0; border-top:1px solid var(--line); padding:18px 0 0; } .foot,.metrics { flex-wrap:wrap; gap:9px 18px; } footer { display:block; } footer span+span { display:block; margin-top:4px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <nav><div class="brand"><span class="mark"></span>SIGIL <span style="color:var(--dim)">/</span> JEV</div><div>ILLUSTRATIVE SEARCH</div></nav>
+    <h1>Search memory.<br><span>Get the answer first.</span></h1>
+    <div class="search"><div class="search-icon">⌕</div><input id="query" aria-label="Search memory" autocomplete="off"><div class="search-state" id="state">SEARCHING</div></div>
+
+    <section class="results">
+      <article class="column before">
+        <div class="head"><b>Without Jev</b><span>LOCAL GRAPH · 12 RESULTS</span></div>
+        <div class="row"><span class="rank">01</span><div class="content"><div class="title">Project dashboard</div><div class="meta"><span class="source">direct</span></div></div><span class="score">.91</span></div>
+        <div class="row"><span class="rank">02</span><div class="content"><div class="title">Weekly progress update</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.86</span></div>
+        <div class="row"><span class="rank">03</span><div class="content"><div class="title">Schema migration required</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.78</span></div>
+        <div class="row"><span class="rank">04</span><div class="content"><div class="title">Build passed on current branch</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.74</span></div>
+        <div class="notice" id="before-note"><span>Useful deployment evidence begins at rank 3.</span><strong>AGENT SCANS</strong></div>
+      </article>
+
+      <article class="column after">
+        <div class="head"><b>With Jev</b><span id="time">0.00s</span></div>
+        <div class="row answer"><span class="rank">01</span><div class="content"><div class="title">Schema migration required</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.94</span></div>
+        <div class="row answer"><span class="rank">02</span><div class="content"><div class="title">Build passed on current branch</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.89</span></div>
+        <div class="row answer"><span class="rank">03</span><div class="content"><div class="title">Open production blocker</div><div class="meta"><span class="source">graph</span></div></div><span class="score">.86</span></div>
+        <div class="row"><span class="rank">04</span><div class="content"><div class="title">Project dashboard</div><div class="meta"><span class="source">direct</span></div></div><span class="score">.17</span></div>
+        <div class="notice" id="after-note"><span><strong>Not yet.</strong> Run the schema migration before deploy.</span><strong>3 SIGNALS</strong></div>
+      </article>
+    </section>
+
+    <section class="foot"><div><b>LOCAL</b> scope + graph stay in Sigil</div><div><b>JEV</b> scores the same 12 local candidates</div><div><b>FALLBACK</b> local order remains available</div></section>
+    <section class="metrics"><span><b>.27 <em>→ .87</em></b> MRR@5</span><span><b>0% <em>→ 83%</em></b> Hit@1</span><span><b>+384ms</b> p50 decision time</span></section>
+    <footer><span>Private 12-query calibration · agent-double-reviewed</span><span>Animation replays every 5.5 seconds</span></footer>
+  </main>
+  <script>
+    const query = document.querySelector('#query');
+    const state = document.querySelector('#state');
+    const time = document.querySelector('#time');
+    const beforeRows = document.querySelectorAll('.before .row');
+    const afterRows = document.querySelectorAll('.after .row');
+    const beforeNote = document.querySelector('#before-note');
+    const afterNote = document.querySelector('#after-note');
+    const text = 'Can Project Delta deploy today?';
+    let timers = [];
+    function wait(fn, ms) { timers.push(setTimeout(fn, ms)); }
+    function replay() {
+      timers.forEach(clearTimeout); timers = [];
+      query.value = ''; state.textContent = 'SEARCHING'; time.textContent = '0.00s';
+      [...beforeRows, ...afterRows].forEach(row => row.classList.remove('show'));
+      beforeNote.classList.remove('show'); afterNote.classList.remove('show');
+      [...text].forEach((character, index) => wait(() => { query.value += character; }, index * 18));
+      const typed = text.length * 18;
+      wait(() => { beforeRows.forEach(row => row.classList.add('show')); beforeNote.classList.add('show'); }, typed + 80);
+      wait(() => { time.textContent = '0.09s'; }, typed + 90);
+      wait(() => { time.textContent = '0.21s'; }, typed + 210);
+      wait(() => { time.textContent = '0.38s'; afterRows.forEach(row => row.classList.add('show')); afterNote.classList.add('show'); state.textContent = 'DECIDED'; }, typed + 384);
+    }
+    query.addEventListener('keydown', event => { if (event.key === 'Enter') replay(); });
+    replay(); setInterval(replay, 5500);
+  </script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "description": "Illustrative fixture only. Replace this with a manually judged corpus before making quality claims.",
+  "cases": [
+    {
+      "id": "cache-removal",
+      "stratum": "graph-related",
+      "query": "Why was the cache removed?",
+      "relevantIds": ["decision", "support"],
+      "forbiddenIds": [],
+      "candidates": [
+        { "id": "ui", "category": "preference", "resultType": "direct", "content": "The dashboard uses a dark visual system." },
+        { "id": "support", "category": "decision", "resultType": "related", "content": "Cache invalidation was difficult to reason about." },
+        { "id": "decision", "category": "decision", "resultType": "direct", "content": "The cache was removed because stale reads were unsafe." }
+      ],
+      "fixtureScores": [0.03, 0.77, 0.91]
+    },
+    {
+      "id": "session-expiry",
+      "stratum": "paraphrase",
+      "query": "How long can a user stay logged in before being signed out?",
+      "relevantIds": ["session"],
+      "forbiddenIds": [],
+      "candidates": [
+        { "id": "reset", "category": "workflow", "resultType": "direct", "content": "Password reset links are single-use and expire in one hour." },
+        { "id": "jwt", "category": "architecture", "resultType": "direct", "content": "Login issues JWT access tokens signed with RS256." },
+        { "id": "session", "category": "workflow", "resultType": "related", "content": "User sessions expire after 30 minutes of inactivity." }
+      ],
+      "fixtureScores": [0.05, 0.08, 0.94]
+    }
+  ]
+}

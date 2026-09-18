@@ -41,6 +41,7 @@ import { registerSetup } from './setup.js';
 import { registerRepair } from './repair.js';
 import { registerRelations } from './relations.js';
 import { registerSettings } from './settings.js';
+import { registerJev } from './jev.js';
 import { registerLlmLog } from './llm-log.js';
 import { registerManagedSession } from './managed-session.js';
 import { registerIngestionJobs } from './ingestion-jobs.js';
@@ -81,6 +82,7 @@ export function registerAll(registry, { startedAt }) {
   registerRepair(registry);
   registerRelations(registry);
   registerSettings(registry);
+  registerJev(registry);
   registerLlmLog(registry);
   registerManagedSession(registry);
   registerIngestionJobs(registry);

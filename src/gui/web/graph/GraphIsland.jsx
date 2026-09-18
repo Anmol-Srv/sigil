@@ -114,7 +114,13 @@ function GraphView({ api }) {
         fitted.current = false;
         // Communities first: every node carries its cluster's anchor, which is
         // what the gravity forces below pull toward instead of a shared origin.
-        const { assignment, clusters } = clusterGraph(data.nodes, data.edges);
+        // Large stores need materially more room between community anchors.
+        // A fixed 150px spread let the outer communities overlap the centre
+        // once facts and their mention edges were present.
+        const n = data.nodes.length;
+        const { assignment, clusters } = clusterGraph(data.nodes, data.edges, {
+          spread: n > 400 ? 280 : n > 150 ? 220 : 160,
+        });
         const anchors = new Map(clusters.map((c) => [c.id, c]));
         const seeded = {
           // Sorted by connectivity, descending. force-graph paints in array
@@ -181,14 +187,13 @@ function GraphView({ api }) {
     return d;
   }, [graph]);
 
-  // Force tuning. The previous flat `link.strength(0.28)` was the main reason a
-  // real store collapsed into a hairball: it pulls EVERY edge equally hard, so
-  // a hub with 20 edges gets 20 units of inward pull and drags its whole
-  // neighbourhood into a knot. d3's own default is 1/min(deg), which is the
-  // standard anti-hairball heuristic — a well-connected node holds each
-  // individual neighbour loosely. Link distance also grows with degree so hubs
-  // get the room their labels need, and a longer distanceMax lets separate
-  // clusters actually push each other apart instead of stacking.
+  // Force tuning distinguishes the knowledge skeleton (entity relations) from
+  // supporting evidence (fact mentions). A single spring value turns a hub and
+  // hundreds of fact leaves into a compact star; longer, weaker mention springs
+  // plus stronger repulsion keep all nodes present without making that star the
+  // whole picture. Link distance also grows with degree so hubs get room for
+  // their labels, while wider anchors and a longer charge range keep regions
+  // from stacking on one another.
   useEffect(() => {
     const fg = fgRef.current;
     if (!fg || !graph.nodes.length) return;
@@ -196,11 +201,24 @@ function GraphView({ api }) {
     const deg = (node) => degrees.get(node.id ?? node) || 1;
 
     fg.d3Force('charge')
-      .strength(n > 400 ? -40 : n > 150 ? -75 : -110)
-      .distanceMax(n > 400 ? 300 : 420);
+      .strength(n > 400 ? -95 : n > 150 ? -125 : -150)
+      .distanceMax(n > 400 ? 720 : 560);
     fg.d3Force('link')
-      .distance((l) => 26 + Math.min(deg(l.source) + deg(l.target), 40) * 1.6)
-      .strength((l) => 1 / Math.max(1, Math.min(deg(l.source), deg(l.target))));
+      .distance((l) => {
+        const endpoints = deg(l.source) + deg(l.target);
+        // Relations establish the skeleton; fact mentions are its evidence.
+        // Give both enough air to avoid text and leaves collapsing on hubs.
+        return (l.kind === 'relation' ? 62 : 48) + Math.min(endpoints, 40) * 2;
+      })
+      .strength((l) => {
+        const endpointDegree = Math.max(1, Math.min(deg(l.source), deg(l.target)));
+        // The old inverse-degree rule still gives a fact leaf a strength of 1.
+        // Hundreds of those leaves form a tight star around a hub. Mentions are
+        // intentionally springier than explicit relations, while every node
+        // and edge remains in the graph.
+        const base = l.kind === 'relation' ? 0.34 : 0.13;
+        return base / Math.sqrt(endpointDegree);
+      });
 
     // Gravity. forceCenter (force-graph's default 'center') only re-centres the
     // centroid — it exerts no inward pull, so with repulsion raised to break the
@@ -212,14 +230,16 @@ function GraphView({ api }) {
     // Toward each node's CLUSTER anchor, not a single shared origin. Same
     // mechanism and same strengths as before — only the target moved. This is
     // what stops 78 components from stacking on one point.
-    const g = n > 400 ? 0.045 : n > 150 ? 0.07 : 0.09;
+    const g = n > 400 ? 0.02 : n > 150 ? 0.032 : 0.05;
     fg.d3Force('x', forceX((nd) => nd.cx ?? 0).strength(g));
     fg.d3Force('y', forceY((nd) => nd.cy ?? 0).strength(g));
 
     // d3's quadtree collide — O(n log n) against the previous hand-rolled
     // O(n²) pass, and it is the implementation force-graph's own simulation
     // expects. Radius leaves room for the label under each node.
-    fg.d3Force('collide', forceCollide().radius((nd) => nd.r + 10).strength(0.85));
+    fg.d3Force('collide', forceCollide()
+      .radius((nd) => nd.r + (n > 400 ? 16 : 13))
+      .strength(0.9));
   }, [graph, degrees]);
 
   const paintNode = useCallback((n, ctx, scale) => {

@@ -1,0 +1,40 @@
+{
+  "kind": "synthetic illustrative visualization",
+  "purpose": "Show a graph-aware local candidate pool before and after Jev reranking without exposing private memory.",
+  "query": "Can Project Delta deploy today?",
+  "graph": {
+    "root": "Project Delta",
+    "connectedNodes": ["Deploy runbook", "Schema migration", "Build result", "Open blocker", "Dashboard", "Old discussion"],
+    "candidatePool": 12,
+    "scope": "local authorization and namespace filtering completed before reranking"
+  },
+  "before": {
+    "label": "Local graph retrieval",
+    "description": "Same bounded graph-enabled candidate pool, sorted only by local retrieval signals.",
+    "topCandidates": [
+      {"title": "Project dashboard", "source": "direct", "localScore": ".91", "answersQuery": false},
+      {"title": "Weekly progress update", "source": "graph", "localScore": ".86", "answersQuery": false},
+      {"title": "Schema migration required before deploy", "source": "graph", "localScore": ".78", "answersQuery": true},
+      {"title": "Build passed on current branch", "source": "graph", "localScore": ".74", "answersQuery": true}
+    ]
+  },
+  "after": {
+    "label": "Jev reranked context",
+    "description": "The same 12 local candidates are scored for whether they answer the query.",
+    "topCandidates": [
+      {"title": "Schema migration required before deploy", "source": "graph", "jevScore": ".94", "answersQuery": true},
+      {"title": "Build passed on current branch", "source": "graph", "jevScore": ".89", "answersQuery": true},
+      {"title": "Open blocker: missing production secret", "source": "graph", "jevScore": ".86", "answersQuery": true},
+      {"title": "Project dashboard", "source": "direct", "jevScore": ".17", "answersQuery": false}
+    ]
+  },
+  "measuredCalibration": {
+    "corpus": "12 private queries, conservative agent-double-reviewed labels",
+    "candidatePool": 12,
+    "mrrAt5": {"local": ".2722", "jev": ".8708"},
+    "hitAt1": {"local": "0%", "jev": "83.3%"},
+    "recallAt5": {"local": "68.1%", "jev": "94.4%"},
+    "addedDecisionLatency": {"p50": "384 ms", "p95": "1268 ms"},
+    "limits": "This measures paired reranking quality, not a faster graph-traversal claim."
+  }
+}

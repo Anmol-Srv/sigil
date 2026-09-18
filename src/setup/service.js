@@ -150,6 +150,7 @@ export function getSetupConfig() {
     database: { mode: c.database.mode, host: c.database.host, port: c.database.port, name: c.database.name, urlHost },
     llm: { provider: c.llm.provider, model: c.llm.model, hasKey: Boolean(c.llm.apiKey) },
     embedding: { provider: c.embedding.provider, model: c.embedding.model, dim: EMBEDDING_DIM, hasKey: Boolean(c.embedding.apiKey) },
+    jev: { enabled: c.jev.enabled === true, model: c.jev.model, hasKey: Boolean(c.jev.apiKey) },
     identity: { name: c.identity.name },
     setup: c.setup,
   };

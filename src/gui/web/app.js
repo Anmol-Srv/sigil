@@ -1091,6 +1091,9 @@ async function refreshEnv() {
     $('#cfg-emb').textContent = c.embedding?.provider
       ? `${c.embedding.provider} · ${c.embedding.model} · ${c.embedding.dim}d`
       : 'not configured';
+    $('#cfg-jev').textContent = c.jev?.hasKey
+      ? `${c.jev.model || 'jev-1.13.0'} · ${c.jev.enabled ? 'enabled' : 'configured — enable under Jev enhancements'}`
+      : 'not configured';
     const tbody = $('#env-table tbody');
     if (tbody) {
       const rows = [
@@ -1102,6 +1105,9 @@ async function refreshEnv() {
         ['Embedding model', c.embedding?.model || '—'],
         ['Embedding dim', String(c.embedding?.dim || '—')],
         ['Embedding key', c.embedding?.hasKey ? 'configured' : '—'],
+        ['Jev model', c.jev?.model || '—'],
+        ['Jev key', c.jev?.hasKey ? 'configured' : '—'],
+        ['Jev enhancements', c.jev?.enabled ? 'enabled' : 'disabled'],
         ['Name', c.identity?.name || '—'],
       ];
       tbody.innerHTML = rows.map(([k, v]) => `<tr><td class="mono">${escape(k)}</td><td>${escape(v)}</td></tr>`).join('');
@@ -1263,6 +1269,36 @@ $('#cfg-switch-apply')?.addEventListener('click', async () => {
     restartAndClose(out);
   } catch (err) {
     out.classList.add('err'); out.textContent = `✗ ${err.message}`;
+  }
+});
+
+// Jev has a dedicated credential flow rather than the generic setting setter:
+// saving is local-only, so no search data is sent until the user separately
+// enables the schema-driven feature switch. The key is never returned.
+$('#cfg-jev-save')?.addEventListener('click', async (e) => {
+  const key = $('#cfg-jev-key')?.value?.trim();
+  const model = $('#cfg-jev-model')?.value?.trim() || 'jev-1.13.0';
+  const out = $('#cfg-jev-result');
+  if (!key) {
+    out.style.display = 'block'; out.className = 'result err'; out.textContent = 'Enter a Jev API key to save it locally.';
+    return;
+  }
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  out.style.display = 'block'; out.className = 'result'; out.textContent = 'Saving Jev key locally…';
+  try {
+    const result = await rpc('jev.configure', { apiKey: key, model });
+    $('#cfg-jev-key').value = '';
+    out.classList.add('ok');
+    out.textContent = result.warning
+      ? `⚠ ${result.warning} Enable it under Memory pipeline › Jev enhancements.`
+      : `✓ Jev key verified and saved · ${result.model}. Enable it under Memory pipeline › Jev enhancements.`;
+    await Promise.all([refreshEnv(), settingsPanel.refresh()]);
+  } catch (err) {
+    out.classList.add('err');
+    out.textContent = `✗ ${err.message}${err.hint ? `\n  → ${err.hint}` : ''}`;
+  } finally {
+    btn.disabled = false;
   }
 });
 
@@ -1995,7 +2031,15 @@ const SETTINGS_EXTRAS = [
     node: '#settings-extra-danger' },
 ];
 
-const settingsPanel = initSettings({ rpc, toast, mount: '#settings-host', extras: SETTINGS_EXTRAS });
+const settingsPanel = initSettings({
+  rpc,
+  toast,
+  mount: '#settings-host',
+  extras: SETTINGS_EXTRAS,
+  // Jev is a memory-pipeline setting, so its credential form belongs alongside
+  // the switch and tuning knobs rather than among LLM/embedding providers.
+  sectionExtras: { jev: '#settings-section-jev' },
+});
 
 /**
  * Ingest one or more documents from the machine.

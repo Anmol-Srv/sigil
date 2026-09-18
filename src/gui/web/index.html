@@ -490,6 +490,7 @@
             <a href="#setup" class="btn" data-route="setup">Change database</a>
           </div>
 
+
           <!-- Inline provider switcher (hidden until "Change" clicked) -->
           <div id="cfg-switch" class="panel" style="padding: var(--s-5); display:none; margin-top: var(--s-5);">
             <h3 id="cfg-switch-title" style="margin-top:0;">Change provider</h3>
@@ -505,6 +506,22 @@
 
           <!-- Coding agents live on their own page (Connections › Agents). -->
           <p class="muted text-sm" style="margin-top: var(--s-5);">Connect coding tools to this memory on the <a href="#agents" data-route="agents">Agents</a> page. Turn warm <code>claude</code> workers on or off under <strong>System › LLM engine</strong>.</p>
+        </div>
+
+        <div id="settings-section-jev" class="panel" style="padding: var(--s-5);">
+          <h3 class="set-extra-head" style="margin-top:0;">Connect Jev</h3>
+          <p class="muted text-sm">Jev is off until you enable it below. Saving a key is local-only; an enabled graph-enhanced search sends only its bounded local shortlist and query.</p>
+          <div class="kv kv-flush" style="margin-top: var(--s-4);">
+            <div class="row"><div class="k">Connection</div><div class="v" id="cfg-jev" role="status">not configured</div></div>
+          </div>
+          <div class="row-2col" style="margin-top: var(--s-4);">
+            <label class="field"><span class="label">Jev API key</span><input id="cfg-jev-key" type="password" autocomplete="new-password" placeholder="paste API key"></label>
+            <label class="field"><span class="label">Model</span><input id="cfg-jev-model" type="text" autocomplete="off" spellcheck="false" value="jev-1.13.0"></label>
+          </div>
+          <div class="flex-row" style="margin-top: var(--s-4);">
+            <button type="button" class="btn primary" id="cfg-jev-save">Save Jev key</button>
+          </div>
+          <pre id="cfg-jev-result" class="result" style="display:none" role="status"></pre>
         </div>
 
         <div id="settings-extra-developer">

@@ -184,6 +184,9 @@ const config = {
   // tuned values; change via patchConfig('memory', {...}) or the GUI.
   get memory() { return store().memory; },
   get search() { return store().search; },
+  // Optional remote System One reranker. It never replaces local retrieval:
+  // src/lib/jev.js returns the original local ordering on any unavailable path.
+  get jev() { return store().jev; },
   get ingest() { return store().ingest; },
   get hebbian() { return store().hebbian; },
   // User preferences (noUpdateCheck, …) — was SIGIL_NO_UPDATE_CHECK env.

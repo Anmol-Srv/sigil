@@ -15,6 +15,7 @@ import * as vectorSearch from './vector.js';
 import * as keywordSearch from './keyword.js';
 import { hybridSearchFacts } from './hybrid-sql.js';
 import { extractEntitiesFromFacts, findRelatedFacts, rerank } from './graph-enhancement.js';
+import { rerankFacts as rerankWithJev } from '../../lib/jev.js';
 import { expandQuery } from './query-expander.js';
 import { routeQuery } from '../cognitive/query-router.js';
 import { prompt as llmPrompt } from '../../lib/llm.js';
@@ -83,6 +84,30 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
     floored = { threshold, dropped: before - result.facts.length, kept: result.facts.length };
   }
 
+  // Jev decision stage. It sits HERE, not inside standardSearch, for three
+  // reasons the earlier placement got wrong:
+  //   1. It ran only under `useGraph`, so the auto-injection hook — the path
+  //      that actually feeds an agent — never reached it.
+  //   2. It ran only in standardSearch, so an entity-matched query (exactly the
+  //      route that sets useGraph) skipped it.
+  //   3. It ran BEFORE the relevance floor. Graph facts carry no `similarity`,
+  //      so the floor exempts them; a promoted graph fact could reach injection
+  //      without passing any gate. After the floor, Jev screens what survived.
+  // Everything before this point is local and authoritative; a failed or
+  // disabled Jev returns the local order untouched.
+  let jev = { applied: false, reason: 'disabled' };
+  if (Array.isArray(result.facts) && result.facts.length) {
+    const reranked = await rerankWithJev(query, result.facts);
+    result.facts = reranked.facts;
+    jev = reranked.meta;
+  } else {
+    jev = { applied: false, reason: 'empty' };
+  }
+  // Public search promises `limit` facts. The wider graph candidate pool exists
+  // only between local expansion and this decision stage.
+  result.facts = result.facts.slice(0, limit);
+  result.jev = jev;
+
   // Fire-and-forget access tracking + Hebbian co-retrieval edge strengthening.
   // Both run off the hot path (no await). Edge writes are O(K²) per query but K is
   // small (default top-5), so it's tens of upserts at most. Per Ogham §G.
@@ -112,7 +137,7 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
   result._trace = buildSearchTrace({
     query, namespaces, limit, minConfidence, useGraph, expand, route,
     routing, matchedEntity, podScope, podIds, result, factIds, floored,
-    durationMs: Date.now() - _t0,
+    jev: result.jev, durationMs: Date.now() - _t0,
   });
 
   return result;
@@ -124,7 +149,7 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
 // RRF fusion score, the ACT-R activation (frequency + recency decay), the
 // importance/confidence multipliers' net effect (final_score), the
 // post-merge normalized rrfScore, and any entity co-retrieval boost.
-function buildSearchTrace({ query, namespaces, limit, minConfidence, useGraph, expand, route, routing, matchedEntity, podScope, podIds, result, factIds, floored, durationMs }) {
+function buildSearchTrace({ query, namespaces, limit, minConfidence, useGraph, expand, route, routing, matchedEntity, podScope, podIds, result, factIds, floored, jev, durationMs }) {
   const num = (v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n * 1e4) / 1e4 : null; };
 
   const rankedFacts = (result.facts || []).map((f, i) => ({
@@ -143,6 +168,7 @@ function buildSearchTrace({ query, namespaces, limit, minConfidence, useGraph, e
     finalScore: num(f.final_score),            // rrf × activation × importance × confidence
     rrfScore: num(f.rrfScore),                 // normalized score the ranker sorted on
     coRetrievalBoost: num(f.coRetrievalBoost), // entity-Hebbian bump, if any
+    jevScore: num(f.jevScore),                 // optional System One relevance score
   }));
 
   const rankedChunks = (result.chunks || []).map((c, i) => ({
@@ -183,6 +209,7 @@ function buildSearchTrace({ query, namespaces, limit, minConfidence, useGraph, e
       facts: rankedFacts,
       chunks: rankedChunks,
     },
+    jev: jev || { applied: false, reason: 'not_run' },
     synthesized: result.synthesized || null,
     relatedEntities: result.relatedEntities || [],
     reinforced: { factIds, note: 'access_count bumped + Hebbian co-retrieval edges strengthened (off hot path)' },
@@ -483,13 +510,29 @@ async function standardSearch(query, { namespaces, limit, minConfidence, useGrap
         // findRelatedFacts can pull in facts linked to associatively-linked
         // entities, not just relation-linked ones.
         const expandedIds = await expandWithCoRetrievedEntities(mentionedEntities.map((e) => e.id));
-        const relatedFacts = await findRelatedFacts(expandedIds, { limit: 5 });
-        facts = rerank(facts, relatedFacts, expandedIds, limit);
+        const relatedLimit = Math.min(Math.max(5, Math.ceil(limit / 2)), 12);
+        const relatedFacts = await findRelatedFacts(expandedIds, {
+          limit: relatedLimit,
+          namespaces,
+          minConfidence,
+          pointInTime,
+          categories,
+          podIds,
+          viewer,
+        });
+        // Keep a small local candidate pool so Jev can promote a related fact.
+        // The final `slice(limit)` below preserves the old direct-first local
+        // result when Jev is disabled or unavailable.
+        facts = rerank(facts, relatedFacts, expandedIds, limit + relatedLimit);
       }
     } catch (err) {
       console.error('[graph-enhancement] Failed:', err.message);
     }
   }
+
+  // NOT sliced to `limit` here. The wider graph candidate pool has to survive
+  // as far as the Jev stage in search(), which is the only thing that can
+  // promote a related fact past a direct one. search() owns the final slice.
 
   const chunks = includeChunks
     ? multiQueryMerge(results.map((r) => r.chunks), limit)
