@@ -55,9 +55,19 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
   // Opting into Jev opts into graph expansion. Without it the candidate pool is
   // exactly `limit`, so the decision layer can only reorder what local search
   // already chose — it can never surface the related fact that answers the
-  // question. Expansion is pure SQL (entity links + relations), so this costs
-  // no LLM call and stays inside the auto-injection hook's LLM-free contract.
-  useGraph = useGraph || config.jev?.enabled === true;
+  // question. Expansion is pure SQL (entity links + relations), so it costs no
+  // LLM call.
+  //
+  // `applyFloor` is what marks an auto-injection path (the prompt hook,
+  // hot-context) as opposed to someone explicitly asking. Measured: the rerank
+  // costs 937-1991ms against 20-30ms for local-only retrieval, and that hook
+  // fires on EVERY prompt — a second of dead air on prompts where memory is
+  // irrelevant. So auto-injection stays local unless jev.autoInject says
+  // otherwise; explicit search, MCP and the GUI get the full stage.
+  const autoInjection = applyFloor === true;
+  const jevAllowed = config.jev?.enabled === true
+    && (!autoInjection || config.jev?.autoInject === true);
+  useGraph = useGraph || jevAllowed;
 
   const matchedEntity = await detectEntity(query, namespaces);
 
@@ -102,8 +112,10 @@ async function search(query, { namespaces, limit = 5, minConfidence = 'medium', 
   //      without passing any gate. After the floor, Jev screens what survived.
   // Everything before this point is local and authoritative; a failed or
   // disabled Jev returns the local order untouched.
-  let jev = { applied: false, reason: 'disabled' };
-  if (Array.isArray(result.facts) && result.facts.length) {
+  let jev;
+  if (!jevAllowed) {
+    jev = { applied: false, reason: config.jev?.enabled === true ? 'auto_injection_excluded' : 'disabled' };
+  } else if (Array.isArray(result.facts) && result.facts.length) {
     const reranked = await rerankWithJev(query, result.facts);
     result.facts = reranked.facts;
     jev = reranked.meta;

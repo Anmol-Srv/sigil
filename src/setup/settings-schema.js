@@ -101,6 +101,8 @@ export const SETTINGS_SECTIONS = [
     settings: [
       { path: 'jev.enabled', label: 'Use Jev to re-rank recalled facts', type: 'boolean',
         help: 'Sends the local shortlist and query to Jev for relevance and prompt-injection decisions. It never writes facts or changes the graph. Applies to auto-injected recall as well as explicit search.' },
+      { path: 'jev.autoInject', label: 'Also re-rank memory injected automatically', type: 'boolean',
+        help: 'Off by default. The prompt hook runs on every message you send and local-only recall answers in ~30ms; adding Jev measured 1-2s. Explicit search, MCP and this dashboard always use Jev when it is enabled.' },
       { path: 'jev.maxCandidates', label: 'Candidates sent per recall', type: 'number', min: 1, max: 50, step: 1,
         help: 'Bound the data and latency of each remote decision. The local ranker still produces this shortlist first.' },
       { path: 'jev.minScore', label: 'Minimum Jev relevance', type: 'number', min: 0, max: 1, step: 0.01,

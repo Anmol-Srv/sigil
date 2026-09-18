@@ -95,6 +95,9 @@ function defaults() {
       // separates attacks (min 0.80) from real directive-shaped memories
       // (max 0.48). 0.5-0.7 is all clean; 0.8 starts missing attacks.
       maxRetries: 2, maxCandidates: 12, minScore: 0.55, injectionMax: 0.7,
+      // Off: auto-injection fires on every prompt and the rerank measures ~1-2s
+      // against ~30ms local. Explicit search pays it happily; a keystroke does not.
+      autoInject: false,
     },
     ingest: {
       eagerExtract: true,

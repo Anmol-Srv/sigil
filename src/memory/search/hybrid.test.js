@@ -116,7 +116,7 @@ const makeFactList = (ids) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
-  __setTestConfig({ jev: { enabled: false } });
+  __setTestConfig({ jev: { enabled: false, autoInject: false } });
   routeQuery.mockResolvedValue({
     intent: 'factual',
     categories: [],
@@ -244,6 +244,7 @@ describe('search — facade behavior', () => {
   });
 
   it('hands the graph-expanded local pool to Jev before applying the public limit', async () => {
+    __setTestConfig({ jev: { enabled: true } });
     hybridSearchFacts.mockResolvedValue(makeFactList([1, 2]));
     extractEntitiesFromFacts.mockResolvedValue([{ id: 44 }]);
     findRelatedFacts.mockResolvedValue([{ id: 3, content: 'Related graph evidence', rrfScore: 0.5, relationPath: 'Cache (depends_on)' }]);
@@ -260,7 +261,7 @@ describe('search — facade behavior', () => {
     }));
 
     const result = await search('how did the cache decision affect dependencies?', {
-      namespaces: ['default'], useGraph: true, limit: 2, route: false,
+      namespaces: ['default'], useGraph: true, limit: 2, route: false, applyFloor: false,
     });
 
     expect(rerankFacts).toHaveBeenCalledWith(
@@ -274,6 +275,25 @@ describe('search — facade behavior', () => {
     expect(result.jev).toMatchObject({ applied: true, model: 'fixture-system-one', reranked: 1 });
   });
 
+  it('leaves auto-injection on the local path unless jev.autoInject is set', async () => {
+    __setTestConfig({ jev: { enabled: true, autoInject: false } });
+    hybridSearchFacts.mockResolvedValue(makeFactList([1, 2]));
+
+    const result = await search('test', { namespaces: ['default'], limit: 5, route: false, applyFloor: true });
+
+    expect(rerankFacts).not.toHaveBeenCalled();
+    expect(result.jev).toMatchObject({ applied: false, reason: 'auto_injection_excluded' });
+  });
+
+  it('re-ranks auto-injection once jev.autoInject is turned on', async () => {
+    __setTestConfig({ jev: { enabled: true, autoInject: true } });
+    hybridSearchFacts.mockResolvedValue(makeFactList([1, 2]));
+
+    await search('test', { namespaces: ['default'], limit: 5, route: false, applyFloor: true });
+
+    expect(rerankFacts).toHaveBeenCalled();
+  });
+
   it('turns graph expansion on whenever Jev is enabled', async () => {
     // Without expansion the pool is exactly `limit`, so Jev could only reorder
     // what local search already picked.
@@ -282,21 +302,22 @@ describe('search — facade behavior', () => {
     extractEntitiesFromFacts.mockResolvedValue([{ id: 44 }]);
     findRelatedFacts.mockResolvedValue([]);
 
-    await search('test', { namespaces: ['default'], limit: 5, useGraph: false, route: false });
+    await search('test', { namespaces: ['default'], limit: 5, useGraph: false, route: false, applyFloor: false });
 
     expect(findRelatedFacts).toHaveBeenCalled();
   });
 
-  it('re-ranks the auto-injection path too, where useGraph is false', async () => {
-    // The hook that feeds agents passes useGraph:false. Gating Jev on useGraph
-    // meant the one path that matters never reached it.
+  it('re-ranks an explicit search even when the caller asked for no graph', async () => {
+    // Gating Jev on useGraph meant a caller who passed useGraph:false skipped
+    // the decision layer entirely, however explicitly they had asked.
+    __setTestConfig({ jev: { enabled: true } });
     hybridSearchFacts.mockResolvedValue(makeFactList([1, 2]));
     rerankFacts.mockImplementation(async (_query, candidates) => ({
       facts: [...candidates].reverse(),
       meta: { applied: true, model: 'fixture-system-one', candidates: 2, reranked: 2 },
     }));
 
-    const result = await search('test', { namespaces: ['default'], limit: 5, useGraph: false, route: false });
+    const result = await search('test', { namespaces: ['default'], limit: 5, useGraph: false, route: false, applyFloor: false });
 
     expect(rerankFacts).toHaveBeenCalled();
     expect(result.facts.map((f) => f.id)).toEqual([2, 1]);
@@ -306,6 +327,7 @@ describe('search — facade behavior', () => {
   it('runs the relevance floor before Jev, so dropped facts are never sent', async () => {
     // Graph facts carry no `similarity` and are floor-exempt; ordering Jev
     // first would let one reach injection without passing any gate.
+    __setTestConfig({ jev: { enabled: true, autoInject: true } });
     const facts = makeFactList([1, 2]);
     facts[0].similarity = 0.9;
     facts[1].similarity = 0.1;
