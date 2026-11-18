@@ -114,3 +114,27 @@ export async function isServiceInstalled() {
     return false;
   }
 }
+
+/** Does a service unit run some other copy of the daemon than `daemonScript`? */
+export function serviceUnitIsStale(unitContent, daemonScript) {
+  return !String(unitContent || '').includes(daemonScript);
+}
+
+/**
+ * A service unit records the daemon script path when it is installed. When
+ * Sigil moves — a legacy npm install migrating onto ~/.sigil/app — the unit
+ * still launches the old copy (and KeepAlive would crash-loop it). Re-install
+ * it so it runs this copy. Returns true when the unit was re-pointed (the
+ * service is then running the new daemon).
+ */
+export async function repointServiceIfStale() {
+  if (!platformSupported()) return false;
+  const { supervisor } = await serviceStatus();
+  if (!supervisor?.installed || !supervisor.unitPath) return false;
+  const { resolveDaemonScript } = await import('./entry-path.js');
+  let unit = '';
+  try { unit = readFileSync(supervisor.unitPath, 'utf8'); } catch { /* unreadable → re-point */ }
+  if (!serviceUnitIsStale(unit, resolveDaemonScript())) return false;
+  await installService();
+  return true;
+}

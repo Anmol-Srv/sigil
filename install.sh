@@ -1,15 +1,20 @@
 #!/bin/sh
-# Sigil installer — the blessed, persistent install path. Git IS the source of
-# truth: there is no npm package. This clones the release branch and runs from it.
+# Sigil installer. Every way in lands on the same single install at ~/.sigil/app:
 #
 #   curl -fsSL https://raw.githubusercontent.com/Anmol-Srv/sigil/master/install.sh | sh
+#   npm i -g @anmol-srv/sigil        (the npm `sigil` runs THIS script, bundled)
+#   npx @anmol-srv/sigil             (same)
 #
-# Why git, not npm: pushing to the `release` branch is the release — no `npm
-# publish`, no version bump to keep in sync. The installer drops a git clone at
-# ~/.sigil/app, installs its runtime deps once, and `sigil update` later just
-# fast-forwards that clone. (`npx`/`pnpx` were never viable anyway: they run from
-# a throwaway cache the package manager deletes, silently breaking the daemon +
-# hooks that are pinned to a path.)
+# One owner matters: the daemon + embedded DB are single-process, and two copies
+# of Sigil fighting over ~/.sigil/db corrupt it. So npm never runs Sigil from its
+# own directory (see src/lib/npm-door.js). This script clones the `release`
+# branch into ~/.sigil/app, installs its runtime deps, and `sigil update` later
+# fast-forwards that clone. CI publishes the same version to npm and the release
+# branch on every release, so both channels always carry the latest Sigil.
+#
+# Environment overrides (mostly for testing):
+#   SIGIL_BRANCH=master   track another branch      SIGIL_REPO=<url|path>  clone from elsewhere
+#   SIGIL_NO_LAUNCH=1     install only, no setup    SIGIL_SKIP_TMUX=1      skip the optional tmux step
 #
 # Division of labour (deliberate — see init.js: "the terminal wizard and the
 # browser wizard can never diverge"):
@@ -22,11 +27,11 @@
 
 set -e
 
-REPO="https://github.com/Anmol-Srv/sigil.git"
+REPO="${SIGIL_REPO:-https://github.com/Anmol-Srv/sigil.git}"
 BRANCH="${SIGIL_BRANCH:-release}"   # override: SIGIL_BRANCH=master curl ... | sh
 SIGIL_HOME="${SIGIL_HOME:-$HOME/.sigil}"
 APP_DIR="$SIGIL_HOME/app"
-BIN_DIR="$SIGIL_HOME/bin"
+BIN_DIR="$HOME/.sigil/bin"
 MIN_NODE_MAJOR=20
 
 # ── output helpers ────────────────────────────────────────────────────────────
@@ -101,46 +106,56 @@ step "Installing runtime dependencies…"
 ( cd "$APP_DIR" && npm install --omit=dev --no-audit --no-fund --loglevel=error ) \
   || die "\`npm install\` failed in $APP_DIR. Re-run the installer, or cd there and inspect."
 
-# ── 3b. evict any leftover GLOBAL npm install ─────────────────────────────────
-# Before git-native, Sigil shipped via npm. A stale `npm i -g @anmol-srv/sigil`
-# carries its own daemon + PGlite version; two installs fighting over the
-# single-process embedded DB (~/.sigil/db) is what corrupts it ("Aborted()").
-# The git clone is now the sole owner, so remove the global package. Best-effort,
-# never fatal.
+# ── 3b. evict a LEGACY global npm install ─────────────────────────────────────
+# npm releases before 0.22 were full installs that ran their own daemon + PGlite
+# version; two installs fighting over the single-process embedded DB
+# (~/.sigil/db) is what corrupts it ("Aborted()"). Remove those. Newer npm
+# releases only hand off to ~/.sigil/app, so they stay. Best-effort, never fatal.
 NPM_GLOBAL_ROOT="$(npm root -g 2>/dev/null || echo '')"
-if [ -n "$NPM_GLOBAL_ROOT" ] && [ -d "$NPM_GLOBAL_ROOT/@anmol-srv/sigil" ]; then
-  step "Removing legacy global npm install (git is now the sole owner)…"
-  npm rm -g @anmol-srv/sigil >/dev/null 2>&1 \
-    || warn "Could not remove the global npm install — remove it with: npm rm -g @anmol-srv/sigil"
+NPM_GLOBAL_PKG="$NPM_GLOBAL_ROOT/@anmol-srv/sigil"
+if [ -n "$NPM_GLOBAL_ROOT" ] && [ -d "$NPM_GLOBAL_PKG" ]; then
+  if ! node -e 'const v=require(process.argv[1]).version.split(".").map(Number);process.exit(v[0]>0||v[1]>=22?0:1)' "$NPM_GLOBAL_PKG/package.json" 2>/dev/null; then
+    step "Removing an old global npm install of Sigil (it ran its own copy)…"
+    npm rm -g @anmol-srv/sigil >/dev/null 2>&1 \
+      || warn "Could not remove the old global npm install — remove it with: npm rm -g @anmol-srv/sigil"
+  fi
 fi
 
-# ── 4. put ~/.sigil/bin on PATH ───────────────────────────────────────────────
-# `sigil init` writes the launcher shims into $BIN_DIR; that dir is the single
-# interactive + harness entry point now (no npm global bin to lean on). Wire it
-# into the user's shell rc so `sigil` resolves in new shells. Idempotent via a
-# marker line. The current piped shell hands off by absolute path below, so it
-# doesn't depend on this taking effect immediately.
-mkdir -p "$BIN_DIR"
+# ── 4. install launchers and put them on PATH ─────────────────────────────────
+# Launchers must work before setup, including on headless installs and when the
+# user chooses to connect no agents. Reuse the same renderer as sigil connect.
+CLI="$APP_DIR/dist/cli.js"
+[ -f "$CLI" ] || die "Install looks incomplete — $CLI is missing. Re-run the installer."
+(
+  cd "$APP_DIR" || exit 1
+  node --input-type=module - <<'NODE'
+import { writeLauncherShim } from './src/lib/clients/shim.js';
+await writeLauncherShim();
+NODE
+) || die 'Could not install Sigil launchers. Re-run the installer.'
+
 ensure_path() {
   rc="$1"
   marker="# added by sigil installer"
-  [ -f "$rc" ] || return 0
   if grep -qF "$marker" "$rc" 2>/dev/null; then return 0; fi
   {
     printf '\n%s\n' "$marker"
     printf '%s\n' 'export PATH="$HOME/.sigil/bin:$PATH"'
-  } >> "$rc"
+  } >> "$rc" || die "Could not add Sigil to PATH in $rc."
   step "Added ~/.sigil/bin to PATH in $rc"
 }
-# Wire whichever rc files exist for the user's likely shells. POSIX `sh` reads
-# none of these, so we target interactive shells (zsh/bash) explicitly.
+# Create the active shell's rc file if missing. For bash login shells, use the
+# first profile bash reads so an existing login configuration keeps running.
 case "${SHELL:-}" in
   *zsh)  ensure_path "${ZDOTDIR:-$HOME}/.zshrc" ;;
-  *bash) ensure_path "$HOME/.bashrc"; ensure_path "$HOME/.bash_profile" ;;
-  *)     ensure_path "$HOME/.zshrc"; ensure_path "$HOME/.bashrc" ;;
+  *bash)
+    ensure_path "$HOME/.bashrc"
+    if [ -f "$HOME/.bash_profile" ]; then ensure_path "$HOME/.bash_profile"
+    elif [ -f "$HOME/.bash_login" ]; then ensure_path "$HOME/.bash_login"
+    else ensure_path "$HOME/.profile"
+    fi ;;
+  *) ensure_path "$HOME/.profile" ;;
 esac
-# Also a generic profile fallback so non-login edge cases still resolve it.
-ensure_path "$HOME/.profile"
 PATH="$BIN_DIR:$PATH"; export PATH
 
 # ── 4b. optional: tmux for the managed-session engine ─────────────────────────
@@ -149,6 +164,7 @@ PATH="$BIN_DIR:$PATH"; export PATH
 # per LLM call. tmux is OPTIONAL: without it the engine silently uses the
 # one-shot path. Best-effort install on macOS/Linux; never fatal.
 ensure_tmux() {
+  [ "${SIGIL_SKIP_TMUX:-}" = "1" ] && return 0
   have tmux && return 0
   say "Installing tmux (optional — powers the warm managed-session engine)..."
   case "$OS" in
@@ -170,24 +186,22 @@ ensure_tmux() {
 }
 ensure_tmux
 
-# ── 5. hand off to the SHARED Node first-run flow ─────────────────────────────
-# Zero-arg `sigil` opens the browser dashboard (the marketed experience) and
-# auto-falls back to the terminal `sigil init` wizard when headless — both drive
-# the same step engine that does the rich DB + connector detection AND writes the
-# launcher shims into ~/.sigil/bin. We invoke it by ABSOLUTE PATH (the shims don't
-# exist yet on a first install), so this works before PATH is wired.
-CLI="$APP_DIR/dist/cli.js"
-[ -f "$CLI" ] || die "Install looks incomplete — $CLI is missing. Re-run the installer."
+VERSION="$(node -p 'require(process.argv[1]).version' "$APP_DIR/package.json" 2>/dev/null || echo '')"
+step "Sigil ${VERSION} installed at $APP_DIR"
 
-say ""
-say "${B}Starting Sigil${R} — it will detect your database and AI clients next."
-say ""
+# The npm entry point runs this script, then launches Sigil itself.
+[ "${SIGIL_NO_LAUNCH:-}" = "1" ] && exit 0
+
+# ── 5. hand off to the SHARED Node first-run flow ─────────────────────────────
 # Piped installs (curl … | sh) have the script on stdin, not the terminal — so
-# reconnect to the controlling TTY for the interactive prompts / browser launch.
-# When there's no TTY (CI / non-interactive), print the next step instead.
-if [ -r /dev/tty ]; then
-  exec node "$CLI" < /dev/tty
+# reconnect to the controlling TTY. Test opening it: the device file can be
+# readable in a headless shell even when this process has no controlling TTY.
+if (exec 3</dev/tty) 2>/dev/null; then
+  say ""
+  say "${B}Starting Sigil${R} — it will detect your database and AI clients next."
+  say ""
+  exec "$BIN_DIR/sigil" < /dev/tty
 else
-  say "Non-interactive shell — finish setup with: ${B}node $CLI init${R}"
-  say "(or open a new shell so \`sigil\` is on PATH, then run: ${B}sigil init${R})"
+  say "Sigil installed. To configure it from an interactive terminal, run:"
+  say "  ${B}\"$BIN_DIR/sigil\" init${R}"
 fi
