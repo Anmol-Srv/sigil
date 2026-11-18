@@ -20,6 +20,10 @@ try { PKG_VERSION = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8
 // An explicitly-set SIGIL_AGENT (e.g. a wrapper script) still wins.
 if (!process.env.SIGIL_AGENT) process.env.SIGIL_AGENT = 'cli';
 
+// Set by the npm door only to detect a door ↔ launcher loop; the real CLI has
+// started, so don't leak it into the daemon or anything else we spawn.
+delete process.env.SIGIL_DOOR_ACTIVE;
+
 const [command, ...rest] = process.argv.slice(2);
 
 const HELP = `sigil — Persistent memory for your Claude sessions
@@ -29,7 +33,7 @@ Usage:
 
 Commands:
   init                     Interactive setup wizard (DB, LLM, embeddings, agents)
-  update [--check]         Update Sigil from the git release branch
+  update [--check]         Update Sigil to the latest release
   connect [--clients ...]  Re-pin launcher shims + re-sync AI client configs (fix stale paths)
   uninstall [--dry-run]    Remove Sigil's entries from selected AI clients
   doctor                   Diagnose Sigil setup (DB, LLM, embeddings, hooks)
@@ -58,6 +62,7 @@ Commands:
 
 Options:
   --help                   Show this help message
+  --version                Print the installed version
 
 Run sigil <command> --help for command-specific options.`;
 
@@ -75,6 +80,11 @@ if (process.platform === 'win32') {
   console.error('Install and run it inside WSL (Windows Subsystem for Linux):');
   console.error('  https://learn.microsoft.com/windows/wsl/install');
   process.exit(1);
+}
+
+if (command === '--version' || command === '-v' || command === 'version') {
+  console.log(PKG_VERSION);
+  process.exit(0);
 }
 
 // Zero-arg launch ("npx sigil") is dispatched below through the same
@@ -99,9 +109,21 @@ async function launchAndOpenBrowser() {
     process.exit(1);
   }
 
+  const { canOpenBrowser, openBrowser } = await import('./lib/open-browser.js');
+  const hasBrowser = canOpenBrowser();
+  // The terminal wizard provisions the built-in database in its own process.
+  // Send first-time terminal users there before spawning a daemon that would
+  // prevent the wizard from opening that database.
+  if (!hasBrowser && process.stdin.isTTY) {
+    const { getSetupState } = await import('./setup/service.js');
+    if (!getSetupState().complete) {
+      console.log('No display detected — continuing setup in the terminal.\n');
+      return runInit([]);
+    }
+  }
+
   const { connectOrStartDaemon } = await import('./clients/auto-spawn.js');
   const { getGuiToken } = await import('./daemon/gui-token.js');
-  const { canOpenBrowser, openBrowser } = await import('./lib/open-browser.js');
   process.stderr.write('[sigil] starting daemon…\n');
   let client = await connectOrStartDaemon({ quiet: true });
   let { data } = await client.call('ping', {});
@@ -123,10 +145,7 @@ async function launchAndOpenBrowser() {
   const token = await getGuiToken();
   const url = `http://${config.http.host}:${config.http.port}/?t=${token}`;
 
-  // Headless (server / SSH / CI / no display): the browser wizard isn't
-  // reachable — print the URL and fall back to the terminal `init` flow if
-  // setup isn't done yet.
-  if (!canOpenBrowser()) {
+  if (!hasBrowser) {
     let setupComplete = false;
     try { const st = await client.call('setup.state', {}); setupComplete = st.data?.complete; }
     catch { /* daemon may be mid-init */ }
@@ -135,8 +154,7 @@ async function launchAndOpenBrowser() {
     console.log(`  Sigil is running on this machine (pid ${data.pid}).`);
     console.log(`  GUI URL (open from a machine with a browser): ${url}`);
     if (!setupComplete) {
-      console.log('  No display detected — continuing setup in the terminal.\n');
-      return runInit([]);
+      console.log('  Finish setup in the dashboard or run `sigil init` from an interactive terminal after stopping the daemon.');
     }
     return;
   }

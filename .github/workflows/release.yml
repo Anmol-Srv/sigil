@@ -1,14 +1,21 @@
 name: release
 
-# Git is Sigil's distribution channel — there is no npm publish. This workflow
-# IS the release: on every push to master it rebuilds dist/ and force-pushes the
-# tree to the `release` branch, which `install.sh` clones and `sigil update`
-# fast-forwards. So merging to master ships to users automatically — no version
-# bump, no manual publish.
+# Every push to master that changes what users run is a release. It ships to
+# BOTH channels with the SAME version:
+#   - git: the `release` branch + a vX.Y.Z tag and GitHub Release. install.sh
+#     clones that branch into ~/.sigil/app; `sigil update` fast-forwards it.
+#   - npm: @anmol-srv/sigil@X.Y.Z. Its `sigil` bin is a door into the same
+#     ~/.sigil/app install (src/lib/npm-door.js), so `npm i -g`/`npx` users run
+#     exactly what curl users run.
 #
-# The release branch = master's source + a freshly-CI-built dist/. We rebuild
-# here (rather than trusting the committed dist/) so users can never receive a
-# stale bundle, and we gate on the fast unit suite so a red push can't ship.
+# Versioning: package.json on master is the base. CI releases the base if it's
+# new, otherwise the next patch (src/lib/release-version.js). Bump the base by
+# hand for a minor/major release.
+#
+# npm auth: trusted publishing (OIDC) — configure it once on npmjs.com for this
+# repo + workflow file. An NPM_TOKEN repo secret works as a fallback.
+# npm is published BEFORE the git push, so a failed publish never leaves the two
+# channels on different versions.
 
 on:
   push:
@@ -17,10 +24,12 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
   group: release
-  cancel-in-progress: true
+  # Never cancel a run midway through publishing — queue the next one instead.
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -34,25 +43,79 @@ jobs:
         with:
           node-version: '20'
           cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1.
+      - run: npm install -g npm@^11.5.1
 
       - run: npm ci
 
-      # Gate: never force-push a red build to the branch users install from.
+      # Gate: never ship a red build to either channel.
       - name: Fast unit suite
         run: npx vitest run
 
-      - name: Build dist bundle
+      - name: Decide the release
+        id: plan
+        run: |
+          LAST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -1)"
+          # A release tag sits on the CI release commit, whose parent is the
+          # master commit it was built from. Skip pushes that change nothing
+          # users run (docs, research, benchmarks).
+          if [ -n "$LAST_TAG" ] && git rev-parse -q --verify "$LAST_TAG^" >/dev/null \
+            && git diff --quiet "$LAST_TAG^" HEAD -- \
+                 src prompts integrations knexfile.js install.sh build.js \
+                 scripts/build-gui.mjs package.json package-lock.json; then
+            echo "Nothing user-facing changed since $LAST_TAG — no release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION="$(node scripts/release-version.mjs)"
+          echo "Releasing v$VERSION"
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        if: steps.plan.outputs.release == 'true'
         run: npm run build
 
-      - name: Publish to release branch
+      - name: Commit the release
+        if: steps.plan.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # dist/ and the GUI island bundle are both tracked but may be stale on
-          # master — commit the freshly-built ones on top of this commit so the
-          # release tip always carries them. The GUI bundle matters as much as
-          # dist: the dashboard is served straight from src/gui/web, so a
-          # committed bundle that lags its JSX ships to users verbatim.
-          git add -f dist src/gui/web/vendor/graph-island.js
-          git commit -m "build: dist for release ${GITHUB_SHA::7} [skip ci]" || echo "build output unchanged — releasing master HEAD as-is"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          # dist/ and the GUI island bundle are tracked but may be stale on
+          # master — commit the freshly built ones so the release always carries
+          # them. The dashboard is served straight from src/gui/web, so a stale
+          # committed bundle would ship verbatim.
+          git add -f dist src/gui/web/vendor/graph-island.js package.json package-lock.json
+          # --allow-empty: the tag must always sit on a CI commit whose parent is
+          # the master commit it was built from (the skip check above relies on it).
+          git commit --allow-empty -m "release: v$VERSION (${GITHUB_SHA::7}) [skip ci]"
+          git tag -a "v$VERSION" -m "Sigil $VERSION"
+
+      - name: Publish to npm
+        if: steps.plan.outputs.release == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          node scripts/prepare-npm-package.mjs
+          npm publish --provenance --access public
+          git checkout -- package.json
+
+      - name: Publish to git
+        if: steps.plan.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
           git push --force origin HEAD:release
+          git push origin "v$VERSION"
+
+      - name: GitHub release
+        if: steps.plan.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v$VERSION" --verify-tag --title "Sigil $VERSION" --generate-notes

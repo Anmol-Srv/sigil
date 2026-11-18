@@ -4,7 +4,7 @@
 // existsSync / self-guard branches exercise real filesystem logic.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,6 +33,29 @@ describe('evictLegacyNpmInstall', () => {
 
     expect(r.evicted).toBe(true);
     expect(calls).toContainEqual(['rm', '-g', '@anmol-srv/sigil']);
+  });
+
+  it('removes a legacy full npm install (< 0.22)', async () => {
+    const dir = join(globalRoot, '@anmol-srv', 'sigil');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ version: '0.18.3' }));
+    const calls = [];
+
+    const r = await evictLegacyNpmInstall({ npm: fakeNpm(calls) });
+
+    expect(r.evicted).toBe(true);
+  });
+
+  it('keeps an npm door release (>= 0.22) — it hands off to the git install', async () => {
+    const dir = join(globalRoot, '@anmol-srv', 'sigil');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ version: '0.22.3' }));
+    const calls = [];
+
+    const r = await evictLegacyNpmInstall({ npm: fakeNpm(calls) });
+
+    expect(r).toEqual({ evicted: false, reason: 'npm-door' });
+    expect(calls).not.toContainEqual(['rm', '-g', '@anmol-srv/sigil']);
   });
 
   it('is a no-op when no global install exists', async () => {

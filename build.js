@@ -34,6 +34,8 @@ const EXTERNAL = [
 
 const ENTRIES = [
   { in: 'src/cli.js', out: 'cli.js', shebang: true },
+  // npm package bin — a dependency-free door into ~/.sigil/app (src/npm-entry.js).
+  { in: 'src/npm-entry.js', out: 'npm-entry.js', shebang: true },
   { in: 'src/server.js', out: 'server.js', shebang: true },
   { in: 'src/daemon/index.js', out: 'daemon.js', shebang: true },
   { in: 'src/hooks/user-prompt-submit.js', out: 'hooks/user-prompt-submit.js', shebang: true },

@@ -1,14 +1,17 @@
 /**
- * `sigil update` — pull the latest Sigil straight from the git release branch.
+ * `sigil update` — bring ~/.sigil/app up to the latest release.
  *
- * Sigil ships from git, not npm (see src/lib/git-update.js). This command is the
- * user-facing half of that: fast-forward the ~/.sigil/app clone, reinstall deps
+ * Every channel (curl installer, npm, npx) lands on the one git install at
+ * ~/.sigil/app (see src/lib/git-update.js and src/lib/npm-door.js). This
+ * command fast-forwards that clone, reinstalls deps
  * only if they changed, re-pin the launcher shims, and restart the daemon so the
  * new code is actually serving. The daemon's background staleness check is what
  * tells the user an update is available; this is what applies it.
  */
 import { execFile } from 'node:child_process';
 import { rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { PKG_ROOT, SIGIL_UPDATE_FLAG } from '../lib/paths.js';
@@ -18,7 +21,6 @@ import {
   applyUpdate,
   evictLegacyNpmInstall,
   revertInstall,
-  RELEASE_BRANCH,
 } from '../lib/git-update.js';
 
 const run = promisify(execFile);
@@ -35,7 +37,7 @@ async function restartDaemon() {
   await runDaemon(['restart']);
 }
 
-const HELP = `sigil update — update Sigil from the git release branch
+const HELP = `sigil update — update Sigil to the latest release
 
 Usage:
   sigil update [--check] [--force]
@@ -43,8 +45,13 @@ Usage:
   --check    Report whether an update is available; don't apply it.
   --force    Re-pull and reinstall even if already up to date.
 
-Sigil is installed as a git clone at ~/.sigil/app and updated by fast-forwarding
-it to the latest '${RELEASE_BRANCH}' branch — there is no npm package to bump.`;
+Sigil lives in one place, ~/.sigil/app, whether you installed it with the curl
+installer, npm, or npx. Updating fast-forwards it to the latest release. npm
+users can also run: npm i -g @anmol-srv/sigil@latest`;
+
+function installedVersion() {
+  try { return JSON.parse(readFileSync(join(PKG_ROOT, 'package.json'), 'utf8')).version || null; } catch { return null; }
+}
 
 export async function runUpdate(args) {
   if (args.includes('--help') || args.includes('-h')) {
@@ -53,12 +60,24 @@ export async function runUpdate(args) {
   }
 
   if (!isGitInstall()) {
-    console.error('sigil update needs a git install, but this copy is not a git clone:');
+    console.error('sigil update works on the Sigil install at ~/.sigil/app, but this copy runs from:');
     console.error(`  ${PKG_ROOT}`);
     console.error('');
-    console.error('Reinstall with the official installer so updates work:');
+    console.error('Install Sigil with either command, then update with `sigil update`:');
+    console.error('  npm i -g @anmol-srv/sigil');
     console.error('  curl -fsSL https://raw.githubusercontent.com/Anmol-Srv/sigil/master/install.sh | sh');
     process.exit(1);
+  }
+
+  // --finish: the code was already brought up to date by the installer (the npm
+  // entry point runs it). Only finish: shims, daemon restart, migrations.
+  if (args.includes('--finish')) {
+    const fromIdx = args.indexOf('--from');
+    const from = fromIdx >= 0 ? args[fromIdx + 1] || null : null;
+    const to = installedVersion();
+    await finishUpdate({ from, lockChanged: true });
+    console.log(`Sigil ${to} is ready. ✓`);
+    return;
   }
 
   const check = args.includes('--check');
@@ -73,23 +92,24 @@ export async function runUpdate(args) {
     process.exit(1);
   }
 
+  const current = installedVersion();
   if (check) {
     if (status.behind > 0) {
-      console.log(`Update available: ${status.local} → ${status.remote} (${status.behind} commit${status.behind > 1 ? 's' : ''} behind '${status.branch}')`);
+      console.log(`Update available for Sigil ${current} (${status.local} → ${status.remote}).`);
       console.log('Run `sigil update` to apply it.');
     } else {
-      console.log(`Up to date (${status.local}, '${status.branch}').`);
+      console.log(`Sigil ${current} is up to date (${status.local}).`);
     }
     return;
   }
 
   if (status.behind === 0 && !force) {
-    console.log(`Already up to date (${status.local}, '${status.branch}').`);
+    console.log(`Sigil ${current} is up to date (${status.local}).`);
     await clearFlag();
     return;
   }
 
-  console.log(`Updating ${status.local} → ${status.remote}…`);
+  console.log(`Updating Sigil ${current} (${status.local} → ${status.remote})…`);
   const { from, to, lockChanged, stashed } = await applyUpdate();
 
   if (stashed) {
@@ -102,10 +122,20 @@ export async function runUpdate(args) {
     await npmInstall();
   }
 
-  // Evict any leftover global npm install (S3). A pre-git-native `npm i -g`
-  // copy carries its own daemon + PGlite version; two installs fighting over the
-  // single-process embedded DB is what corrupts it. Do this BEFORE the restart
-  // below, which then stops the (possibly stale) daemon and starts ours.
+  await finishUpdate({ from, lockChanged: lockChanged || force });
+  console.log(`Updated Sigil ${current} → ${installedVersion()} (${from} → ${to}). ✓`);
+}
+
+/**
+ * Everything after the code itself has moved: evict a legacy npm install,
+ * re-pin the shims, restart the daemon on the new code, and migrate the
+ * database (reverting the code if the schema can't move forward).
+ */
+async function finishUpdate({ from, lockChanged }) {
+  // Evict a pre-door global npm install (<0.22). It carries its own daemon +
+  // PGlite version; two installs fighting over the single-process embedded DB
+  // is what corrupts it. Do this BEFORE the restart below, which then stops the
+  // (possibly stale) daemon and starts ours. Door releases are left alone.
   try {
     await evictLegacyNpmInstall({ log: (m) => console.log(m) });
   } catch { /* best-effort — never block the update */ }
@@ -119,11 +149,22 @@ export async function runUpdate(args) {
     console.error(`(warning) could not refresh launcher shims: ${err.message.split('\n')[0]}`);
   }
 
+  // A login service (launchd/systemd) installed by a legacy npm copy still runs
+  // that copy. Re-point it here; it then starts the new daemon itself.
+  let repointed = false;
+  try {
+    const { repointServiceIfStale } = await import('../supervisor/index.js');
+    repointed = await repointServiceIfStale();
+    if (repointed) console.log('Sigil login service now runs the updated install.');
+  } catch (err) {
+    console.error(`(warning) could not update the Sigil login service — run \`sigil service install\`: ${err.message.split('\n')[0]}`);
+  }
+
   // Restart the daemon so the freshly-pulled code is the code that serves. A
   // code-only change (no version bump) wouldn't trip the CLI's version-mismatch
   // auto-restart, so we do it explicitly here.
   try {
-    await restartDaemon();
+    if (!repointed) await restartDaemon();
   } catch (err) {
     console.error(`(warning) daemon restart failed — restart it with \`sigil daemon restart\`: ${err.message.split('\n')[0]}`);
   }
@@ -135,7 +176,6 @@ export async function runUpdate(args) {
   await applyMigrationsOrRevert({ from, lockChanged });
 
   await clearFlag();
-  console.log(`Updated ${from} → ${to}. ✓`);
 }
 
 /**
@@ -192,6 +232,13 @@ async function applyMigrationsOrRevert({ from, lockChanged }) {
   } else {
     console.error('  ⚠ Database rollback was incomplete.'
       + (res.snapshot ? ` A pre-update snapshot was saved (${res.snapshot}); restore it with \`sigil repair\` if writes misbehave.` : ''));
+  }
+  if (!from) {
+    console.error('  There is no earlier Sigil version on this machine to revert to.');
+    console.error('  Report the error above, then run `sigil migrate` once it is fixed.');
+    const e = new Error('database migration failed after installing Sigil.');
+    e.code = 'migration_failed';
+    throw e;
   }
   console.error(`  Reverting code to ${from} so it matches the schema…`);
 

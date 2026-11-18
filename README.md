@@ -11,20 +11,22 @@ Local-first memory shared across Claude Code, Codex CLI, Cursor, Kiro, and any a
 </div>
 
 ```bash
+npm i -g @anmol-srv/sigil && sigil
+```
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/Anmol-Srv/sigil/master/install.sh | sh
 ```
 
-That's it. The installer clones Sigil into `~/.sigil/app`, puts it on your PATH persistently, then launches it and opens a dashboard in your browser where you configure everything — database, LLM, and embedding provider — with live connection tests and one-click fixes. No config files to edit, no setup prompts in the terminal.
+Both commands install the same latest release into `~/.sigil` and start setup in your browser or terminal. So does `npx @anmol-srv/sigil`. Sigil needs Node.js 20+ and Git.
 
 Update any time with:
 
 ```bash
-sigil update
+sigil update                          # or: npm i -g @anmol-srv/sigil@latest
 ```
 
-It fast-forwards your install to the latest release — git is the source of truth, so there's no package to reinstall. The background daemon also checks periodically and tells you when an update is available.
-
-> **Why git, not npm?** Sigil is persistent infrastructure (a background daemon + editor hooks pinned to a path). It installs as a git clone and updates with `git pull` under the hood; pushing to the release branch *is* the release. `npx`/`pnpx` was never viable — it runs from a throwaway cache your package manager later deletes, which would silently break memory, so Sigil refuses to set up from there.
+The background daemon checks for updates and tells you when one is ready.
 
 <div align="center">
 
@@ -49,7 +51,7 @@ And every agent has its own walled memory. Claude doesn't see what you told Code
 
 Sigil fixes both problems with the same primitive: a local memory layer every agent connects to.
 
-- **In Claude Code:** four hooks (`UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionEnd`) auto-capture decisions, preferences, and observations as you work. Relevant memory is injected into every new prompt before Claude sees it. You write zero `sigil remember` calls.
+- **In Claude Code:** hooks warm up memory at session start, look up relevant context for each prompt, capture durable facts after turns, and finalize the session.
 - **Everywhere else, the `sigil` CLI is the universal interface.** Any agent that can run a shell command (Codex CLI, terminal-based assistants, CI runners, Hermes, your own scripts) can call `sigil search "..."` or `sigil remember "..."` directly. No client integration required: if the agent can shell out, it can read and write memory.
 - **For MCP-aware clients** (Cursor, Continue, Cline, Windsurf, Claude Desktop, Kiro): the same memory is also exposed as a 9-tool MCP server. Same brain, structured surface for clients that prefer it.
 - **Across machines:** point multiple installs at the same Postgres. A fact captured on your laptop surfaces in the agent running on your home server. No daemon, no sync protocol. Postgres handles consistency.
@@ -66,7 +68,7 @@ Sigil's wedge is one memory layer underneath everything. `sigil init` detects ev
 
 | Agent | Integration depth | Auto-wired |
 |---|---|---|
-| **Claude Code** | Native plugin · 4 hooks (`UserPromptSubmit`, `PostToolUse`, `Stop`, `SessionEnd`) · MCP server · `@~/.sigil/CLAUDE.md` hot-context import | ✓ |
+| **Claude Code** | Four hooks (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) · MCP server · `@~/.sigil/CLAUDE.md` context import | ✓ |
 | **Codex CLI** | `~/.codex/config.toml` MCP entry · `~/.codex/AGENTS.md` steering · MCP server | ✓ |
 | **Cursor** | `~/.cursor/mcp.json` MCP entry · MCP server | ✓ |
 | **Kiro** | `~/.kiro/settings/mcp.json` MCP entry · `~/.kiro/steering/sigil.md` steering rule · MCP server | ✓ |
@@ -137,7 +139,7 @@ Retrieval is hybrid: pgvector cosine + tsvector keyword fused via Reciprocal Ran
 | Hook | What runs |
 |---|---|
 | `UserPromptSubmit` | Hybrid search on your prompt → top-K facts injected as `additionalContext` before Claude sees it |
-| `PostToolUse` | Capture observations from `Edit` / `Write` / `Bash`; SHA-256 dedup against a 5-minute window |
+| `SessionStart` | Warm up the memory service and provide a short readiness and context preamble |
 | `Stop` | Classify the user's last message (preference / decision / constraint / claim), extract atomic facts + entities, AUDM (Add / Update / Delete / Merge) against existing memory to prevent duplicates |
 | `SessionEnd` | Summarize the session into its `claude_session` pod; promote sticky facts to higher importance |
 
@@ -163,23 +165,25 @@ Retrieval is hybrid: pgvector cosine + tsvector keyword fused via Reciprocal Ran
 
 ## Quickstart
 
-Sigil needs **Postgres 13+ with the `pgvector` extension** running somewhere reachable. You bring the server; the dashboard does everything else.
+Choose the **built-in database** to get started without installing Postgres or Docker. You'll also need an LLM and an embedding provider. The setup wizard can use supported providers you already have.
 
 ### 1. Install & launch
 
 ```bash
+npm i -g @anmol-srv/sigil && sigil
+# or
 curl -fsSL https://raw.githubusercontent.com/Anmol-Srv/sigil/master/install.sh | sh
 ```
 
-This installs Sigil persistently (on your PATH), starts the daemon, and opens the dashboard in your browser. The daemon runs even before anything is configured, so the setup wizard is always reachable. Everything below happens in the UI — no terminal prompts, no editing `~/.sigil/.env` by hand.
+Either way, Sigil installs into `~/.sigil`. On a desktop, this opens the setup wizard in your browser. On a headless machine with an interactive terminal, setup runs in the terminal. If you install from CI or a shell without a terminal, open a new shell and run `sigil init` when you're ready.
 
 ### 2. Configure in the dashboard
 
-The first-run wizard walks you through three things, each with a live test before it's saved:
+The wizard walks you through storage and providers with live checks:
 
-1. **Database** — paste a connection URL (Neon, Supabase, AWS RDS, Render, Railway, CockroachDB, …) or point at a local Postgres. The dashboard tests the connection, offers one-click **Install pgvector** if the extension is missing, and runs migrations. Pooled connection URLs (e.g. Neon's `-pooler` host) are handled automatically — migrations run against the direct endpoint.
+1. **Database** — use the built-in database, connect to local Postgres, use Docker, or provide a connection URL for an external Postgres instance. The wizard can set up the database schema and enable pgvector when the database role has permission.
 2. **LLM provider** — OpenRouter, OpenAI, Anthropic, Ollama, or your Claude Code subscription. Tested with a live call.
-3. **Embedding provider** — OpenAI, Voyage, or Ollama. If your database already holds vectors at a different dimension than the provider produces, the dashboard tells you exactly how many rows are affected and lets you wipe and start fresh or cancel — never a silent failure.
+3. **Embedding provider** — OpenAI, Voyage, OpenRouter, or Ollama. Setup tests a compatible 1024-dimensional embedding before saving the provider.
 
 When a step fails, the dashboard shows the real cause and the fix, not a generic error. Switch any provider later from **Settings → Change** — it re-tests, applies, and restarts the daemon for you.
 
@@ -189,28 +193,28 @@ docker run -d --name sigil-pg -p 5432:5432 \
   -e POSTGRES_PASSWORD=sigil_dev pgvector/pgvector:pg15
 ```
 
-Finishing the wizard auto-detects every AI client on your machine (Claude Code, Codex CLI, Cursor, Kiro) and wires Sigil into each: hooks for Claude Code, MCP server registration + steering rules for the rest, plus `@~/.sigil/CLAUDE.md` in your global Claude config so hot-context is always loaded.
+Choose which detected agents to connect, then enter your name to save your first memory. You can connect more agents later from the **Agents** page or with `sigil connect`.
 
 ### Prefer the terminal?
 
-The same `curl … | sh` installer auto-falls back to the terminal wizard when there's no browser (headless / SSH / CI). After installing, the CLI setup is fully equivalent:
+The installer auto-falls back to the terminal wizard when there's no browser (headless / SSH / CI). After installing, the CLI setup is fully equivalent:
 ```bash
 sigil init                                                    # interactive
-sigil init --url "postgres://user:pass@ep-foo.neon.tech/sigil?sslmode=require"  # non-interactive (CI / dotfiles)
+sigil init --url "postgres://user:pass@ep-foo.neon.tech/sigil?sslmode=require"  # skips database selection
 sigil doctor                                                  # verify everything's wired
 ```
-Re-running `sigil init` is idempotent — existing `~/.sigil/.env` keys are preserved.
+Setup saves settings in `~/.sigil/config.json`. Use `sigil connect` to refresh agent wiring for an existing setup.
 ```
 Sigil diagnostic
 
-  ✓ Config file: ~/.sigil/.env
+  ✓ Config file: ~/.sigil/config.json
   ✓ Config validation: no provider/model mismatches
   ✓ Database: Postgres @ localhost:5432/sigil
   ✓ Stored data: 0 docs, 0 chunks, 0 facts
   ✓ LLM provider: openrouter (model=google/gemini-flash-latest)
   ✓ Embedding provider: openai / text-embedding-3-large
+  ✓ SessionStart hook: registered
   ✓ UserPromptSubmit hook: registered
-  ✓ PostToolUse hook: registered
   ✓ Stop hook: registered
   ✓ SessionEnd hook: registered
   ✓ Sigil CLAUDE.md
@@ -229,7 +233,7 @@ sigil remember "Project uses Postgres LISTEN/NOTIFY for events, not Redis pubsub
 
 Open Claude Code in any project tomorrow. Ask "what's our event delivery setup?" and Claude answers correctly. The `UserPromptSubmit` hook injected the fact before Claude saw your prompt.
 
-In practice you rarely call `sigil remember` directly. The `Stop` hook runs a classifier on every user message and auto-saves anything memorable (preferences, decisions, constraints, factual claims). The `PostToolUse` hook captures observations from Edit/Write/Bash.
+The Claude Code `Stop` hook classifies user messages and can save durable preferences, decisions, constraints, and facts. Use `sigil remember` to save a specific fact explicitly.
 
 ---
 

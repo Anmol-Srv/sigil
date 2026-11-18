@@ -2,21 +2,22 @@
  * Git-native install plumbing — the engine behind `sigil update` and the
  * daemon's background staleness check.
  *
- * Sigil is distributed FROM GIT, not npm: the installer (`install.sh`) clones
- * this repo's `release` branch into ~/.sigil/app, and an update is just a
- * fast-forward of that clone. There is no `npm publish` step — pushing to the
- * release branch IS the release. This module is the single place that knows how
+ * Sigil runs from ONE git install: the installer (`install.sh`) clones this
+ * repo's `release` branch into ~/.sigil/app, and an update is a fast-forward of
+ * that clone. The npm package is a door into the same install (npm-door.js) —
+ * CI publishes it with the same version on every release. This module is the single place that knows how
  * to talk to that clone (is it a git install? how far behind is it? pull it),
  * so the CLI command and the daemon check can't drift in how they detect/apply
  * updates.
  */
 
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 import { PKG_ROOT } from './paths.js';
+import { isLegacyNpmVersion } from './npm-door.js';
 
 // The legacy npm package name — the pre-git-native distribution channel.
 const LEGACY_NPM_PKG = '@anmol-srv/sigil';
@@ -196,6 +197,15 @@ export async function evictLegacyNpmInstall({ log = () => {}, npm } = {}) {
 
   const globalPkg = join(globalRoot, ...LEGACY_NPM_PKG.split('/'));
   if (!existsSync(globalPkg)) return { evicted: false, reason: 'not-installed' };
+
+  // Door releases (>= 0.22) never run Sigil themselves — they hand off to this
+  // git install — so they're a legitimate way in. Only evict the old, full npm
+  // installs that run a daemon of their own.
+  let globalVersion = null;
+  try { globalVersion = JSON.parse(readFileSync(join(globalPkg, 'package.json'), 'utf8')).version; } catch { /* unreadable → treat as legacy */ }
+  if (globalVersion && !isLegacyNpmVersion(globalVersion)) {
+    return { evicted: false, reason: 'npm-door' };
+  }
 
   // Never evict the package we're running from (e.g. a user still ON the npm
   // install who hasn't migrated). The update command only runs for git installs,

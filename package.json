@@ -1,11 +1,10 @@
 {
   "name": "@anmol-srv/sigil",
-  "version": "0.21.0",
-  "private": true,
+  "version": "0.22.0",
   "type": "module",
   "description": "Local-first memory infrastructure for AI coding agents. One brain shared across Claude Code, Codex CLI, Cursor, Kiro, Continue, Cline, Windsurf, or any MCP client. Organized in pluggable pods, stored in your own Postgres. No cloud, no telemetry. Auto-captured from Claude Code via hooks; surfaced everywhere else as a 9-tool MCP server.",
   "bin": {
-    "sigil": "dist/cli.js"
+    "sigil": "dist/npm-entry.js"
   },
   "scripts": {
     "dev": "node --watch src/server.js",
@@ -27,6 +26,7 @@
   },
   "files": [
     "dist/",
+    "install.sh",
     "prompts/",
     "src/db/migrations/",
     "src/db/drivers/",
@@ -36,6 +36,9 @@
     "LICENSE",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "sigil",
     "memory",
