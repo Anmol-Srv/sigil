@@ -74,6 +74,15 @@ function usageFooter(transport) {
       '- When you use a stored fact, name it in one short clause so the user sees their context being applied.',
     ].join('\n');
   }
+  if (transport === 'session-hooks') {
+    // Cursor: hooks load memory at session start and save each turn, but its
+    // prompt hook can't add context, so per-prompt recall is a tool call.
+    return [
+      '## Using Sigil',
+      '- Memory above was loaded at session start, and each turn is saved automatically. Nothing is added per prompt here: call the `search` tool BEFORE answering anything that depends on the user, their preferences, or this project.',
+      '- When you use a stored fact, name it in one short clause so the user sees their context being applied.',
+    ].join('\n');
+  }
   // Claude Code / hooks-capable: the hooks already inject + save.
   return [
     '## Using Sigil',

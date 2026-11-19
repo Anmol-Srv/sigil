@@ -21,6 +21,7 @@ import { existsSync } from 'node:fs';
 
 import { safeWrite } from '../safe-write.js';
 import { detectInstalled } from './detect.js';
+import { upsertJsonMcpServer, removeJsonMcpServer, hasJsonMcpServer } from './config-files.js';
 import { buildSharedInstructions } from './instructions.js';
 import { MCP_SHIM_PATH, writeLauncherShim, resolveServerPath } from './shim.js';
 
@@ -31,7 +32,10 @@ const KIRO_STEERING_PATH = join(KIRO_HOME, 'steering', 'sigil.md');
 const meta = {
   id: 'kiro',
   label: 'Kiro',
-  hint: 'MCP + steering file (steering auto-applies)',
+  hint: 'MCP tools + steering file',
+  capabilities: { sessionStart: 'none', recall: 'tool', capture: 'tool', tools: 'mcp' },
+  firstRunHint: 'Open Kiro and start a chat',
+  requiresRestart: true,
 };
 
 async function detect() {
@@ -39,37 +43,11 @@ async function detect() {
 }
 
 
-// Merge the sigil entry into ~/.kiro/settings/mcp.json. Same JSON shape +
-// merge logic as Cursor; preserves any other MCP servers the user has.
+// Merge the sigil entry into ~/.kiro/settings/mcp.json (same JSON shape as
+// Cursor), keeping the user's other servers. An unreadable file is left alone.
 async function writeMcpEntry({ dryRun = false } = {}) {
-  const fs = await import('node:fs/promises');
-
-  let config = {};
-  try {
-    const raw = await fs.readFile(KIRO_MCP_PATH, 'utf8');
-    config = JSON.parse(raw);
-  } catch { /* file doesn't exist or invalid — start fresh */ }
-
-  const existedBefore = existsSync(KIRO_MCP_PATH);
-  config.mcpServers = config.mcpServers || {};
-  // Point `command` at the stable MCP shim (~/.sigil/bin/sigil-mcp), not a
-  // baked `node /abs/dist/server.js` — survives Node-version switches /
-  // reinstalls. config.json remains the source of truth for runtime config.
   await writeLauncherShim({ dryRun });
-  config.mcpServers.sigil = {
-    command: MCP_SHIM_PATH,
-    args: [],
-  };
-
-  if (!dryRun) await fs.mkdir(dirname(KIRO_MCP_PATH), { recursive: true });
-  const result = await safeWrite(KIRO_MCP_PATH, JSON.stringify(config, null, 2), { dryRun });
-  return {
-    action: result.action,
-    path: KIRO_MCP_PATH,
-    detail: existedBefore
-      ? '+sigil MCP server (other entries preserved)'
-      : 'new mcp.json with sigil entry',
-  };
+  return upsertJsonMcpServer(KIRO_MCP_PATH, 'kiro', { dryRun });
 }
 
 // Kiro reads all *.md files under ~/.kiro/steering/ as always-on context.
@@ -99,36 +77,25 @@ async function install({ dryRun = false } = {}) {
 }
 
 async function verify({ deep = false } = {}) {
-  const fs = await import('node:fs/promises');
-
-  if (!existsSync(KIRO_MCP_PATH)) {
-    return { installed: false, reason: '~/.kiro/settings/mcp.json missing' };
-  }
-  let config;
-  try {
-    config = JSON.parse(await fs.readFile(KIRO_MCP_PATH, 'utf8'));
-  } catch {
-    return { installed: false, reason: '~/.kiro/settings/mcp.json is not valid JSON' };
-  }
-  if (!config.mcpServers?.sigil) {
-    return { installed: false, reason: 'sigil entry missing from ~/.kiro/settings/mcp.json' };
-  }
-
-  if (!existsSync(KIRO_STEERING_PATH)) {
-    return { installed: false, reason: '~/.kiro/steering/sigil.md missing' };
-  }
+  const mcp = await hasJsonMcpServer(KIRO_MCP_PATH);
+  if (mcp.error) return { installed: false, partial: false, reason: `~/.kiro/settings/mcp.json ${mcp.error}` };
+  const steering = existsSync(KIRO_STEERING_PATH);
+  const missing = [];
+  if (!mcp.present) missing.push('MCP entry in ~/.kiro/settings/mcp.json');
+  if (!steering) missing.push('steering file ~/.kiro/steering/sigil.md');
+  if (missing.length) return { installed: false, partial: mcp.present || steering, reason: `missing: ${missing.join('; ')}` };
 
   if (!existsSync(MCP_SHIM_PATH)) {
-    return { installed: false, reason: `MCP launcher missing at ${MCP_SHIM_PATH} — run \`sigil connect\`` };
+    return { installed: false, partial: true, reason: `MCP launcher missing at ${MCP_SHIM_PATH} — run \`sigil connect\`` };
   }
   const serverPath = resolveServerPath();
   if (!existsSync(serverPath)) {
-    return { installed: false, reason: `MCP server missing at ${serverPath} — run \`sigil connect\` to refresh` };
+    return { installed: false, partial: true, reason: `MCP server missing at ${serverPath} — run \`sigil connect\`` };
   }
   if (deep) {
     const { verifyMcpRoundTrip } = await import('./roundtrip.js');
     const rt = await verifyMcpRoundTrip(serverPath);
-    if (!rt.ok) return { installed: false, reason: `MCP round-trip failed: ${rt.reason}` };
+    if (!rt.ok) return { installed: false, partial: true, reason: `MCP round-trip failed: ${rt.reason}` };
   }
 
   return { installed: true };
@@ -138,22 +105,8 @@ async function uninstall({ dryRun = false } = {}) {
   const fs = await import('node:fs/promises');
   const actions = [];
 
-  if (existsSync(KIRO_MCP_PATH)) {
-    let config;
-    try {
-      config = JSON.parse(await fs.readFile(KIRO_MCP_PATH, 'utf8'));
-    } catch {
-      actions.push({ action: 'skip', path: KIRO_MCP_PATH, detail: 'invalid JSON — not touched' });
-      return { actions };
-    }
-    if (config.mcpServers?.sigil) {
-      delete config.mcpServers.sigil;
-      const result = await safeWrite(KIRO_MCP_PATH, JSON.stringify(config, null, 2), { dryRun });
-      actions.push({ action: result.action, path: KIRO_MCP_PATH, detail: '-sigil MCP entry' });
-    } else {
-      actions.push({ action: 'skip', path: KIRO_MCP_PATH, detail: 'sigil entry not present' });
-    }
-  }
+  const mcp = await removeJsonMcpServer(KIRO_MCP_PATH, { dryRun });
+  if (mcp) actions.push(mcp);
 
   if (existsSync(KIRO_STEERING_PATH)) {
     if (!dryRun) await fs.unlink(KIRO_STEERING_PATH);

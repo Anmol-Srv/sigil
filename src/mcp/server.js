@@ -14,6 +14,13 @@ async function startMcp() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
+  // Each connector names its agent in the MCP entry's env (SIGIL_AGENT). The
+  // agent starting this server is proof its MCP config is live.
+  const agent = process.env.SIGIL_AGENT;
+  if (agent && agent !== 'mcp') {
+    import('../hooks/host.js').then(({ markSeen }) => markSeen(agent, 'start', 'mcp')).catch(() => {});
+  }
+
   // Best-effort: close the shared daemon socket when the MCP client
   // disconnects so we don't leak a half-open socket on the daemon side.
   const { closeDaemonConnection } = await import('./daemon-call.js');

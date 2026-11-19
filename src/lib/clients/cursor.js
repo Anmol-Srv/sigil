@@ -1,103 +1,89 @@
 /**
  * Cursor client integration.
  *
- * Cursor has no Claude-Code-style hook system, so memory auto-injection
- * isn't available. The next-best surface is:
- *
- *   1. ~/.cursor/mcp.json              — registers Sigil's MCP server so the
- *                                         agent can call `search` and `remember`
- *                                         as tools
- *   2. ~/.cursor/rules/sigil.mdc       — global Cursor rule, always applied,
- *                                         telling the agent to consult Sigil
- *                                         before answering and to save in batches
- *
- * Without (2), Cursor users would have to manually ask the agent to search
- * memory every turn. With it, the agent is told (via system prompt) to call
- * sigil's MCP tools proactively — closing most of the UX gap vs. Claude Code's
- * UserPromptSubmit hook.
- *
- * Idempotent: re-running detects prior sigil entries in mcp.json and replaces
- * them in place; rules file is rewritten with safeWrite's backup behavior.
+ * Writes three things under ~/.cursor:
+ *   1. hooks.json        — sessionStart loads memory into the new session,
+ *                          beforeSubmitPrompt keeps the prompt, stop saves the
+ *                          turn. Cursor's prompt hook can only allow or block, so
+ *                          there is no automatic recall per prompt.
+ *   2. mcp.json          — Sigil's MCP server, for recall during a session (the
+ *                          `search` tool) and explicit saves.
+ *   3. rules/sigil.mdc   — an always-applied rule telling the agent to search
+ *                          memory before answering.
  */
 
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
+import { mkdir, unlink } from 'node:fs/promises';
 
 import { safeWrite } from '../safe-write.js';
 import { detectInstalled } from './detect.js';
 import { buildSharedInstructions } from './instructions.js';
-import { MCP_SHIM_PATH, writeLauncherShim, resolveServerPath } from './shim.js';
+import { HOOK_SHIM_PATH, MCP_SHIM_PATH, writeLauncherShim, resolveServerPath } from './shim.js';
+import {
+  readJsonConfig, writeJsonConfig, upsertJsonMcpServer, removeJsonMcpServer, hasJsonMcpServer,
+  stripFlatSigilHooks, isSigilHookCommand,
+} from './config-files.js';
 
+const AGENT = 'cursor';
 const CURSOR_HOME = join(homedir(), '.cursor');
 const CURSOR_MCP_PATH = join(CURSOR_HOME, 'mcp.json');
+const CURSOR_HOOKS_PATH = join(CURSOR_HOME, 'hooks.json');
 const CURSOR_RULES_PATH = join(CURSOR_HOME, 'rules', 'sigil.mdc');
 
 const meta = {
-  id: 'cursor',
+  id: AGENT,
   label: 'Cursor',
-  hint: 'global MCP + always-applied rule (no native hooks)',
+  hint: 'hooks load + save memory; MCP tools for recall',
+  capabilities: { sessionStart: 'auto', recall: 'tool', capture: 'auto', tools: 'mcp' },
+  firstRunHint: 'Start a new Cursor agent chat',
+  requiresRestart: true,
 };
 
 async function detect() {
-  return detectInstalled({ dirs: [CURSOR_HOME], apps: ['Cursor'], bins: ['cursor'] });
+  return detectInstalled({ dirs: [CURSOR_HOME], apps: ['Cursor'], bins: ['cursor', 'cursor-agent'] });
 }
 
-// Pick the MCP server file Cursor should spawn. dist/server.js if the
-// package was built (real installs); src/server.js otherwise (dev).
+// ── Hooks ─────────────────────────────────────────────────────────────────────
 
-// Merge the sigil entry into ~/.cursor/mcp.json. Preserves any other MCP
-// servers the user has configured; replaces a stale sigil entry if present.
-async function writeMcpEntry({ dryRun = false } = {}) {
-  const fs = await import('node:fs/promises');
+const hookCommand = (name) => `'${HOOK_SHIM_PATH}' ${name} --agent=${AGENT}`;
 
-  let config = {};
-  try {
-    const raw = await fs.readFile(CURSOR_MCP_PATH, 'utf8');
-    config = JSON.parse(raw);
-  } catch (err) {
-    // ENOENT is fine — a fresh mcp.json is the correct outcome. But a parse
-    // error means the file exists with content we can't understand; clobbering
-    // it would wipe every other MCP server the user configured. Mirror the
-    // uninstall() path and refuse to touch it.
-    if (err.code !== 'ENOENT') {
-      return {
-        action: 'skip',
-        path: CURSOR_MCP_PATH,
-        detail: `invalid JSON — not touched (${err.message})`,
-      };
-    }
-  }
-
-  const existedBefore = existsSync(CURSOR_MCP_PATH);
-  config.mcpServers = config.mcpServers || {};
-  // Point `command` at the stable MCP shim (~/.sigil/bin/sigil-mcp), not a
-  // baked `node /abs/dist/server.js` — the shim re-resolves the real server at
-  // runtime, so a Node-version switch / reinstall can't break this entry.
-  // No env block: config.json is the source of truth (the MCP server reads it
-  // via getConfig()).
-  await writeLauncherShim({ dryRun });
-  config.mcpServers.sigil = {
-    command: MCP_SHIM_PATH,
-    args: [],
+function sigilHooks() {
+  return {
+    sessionStart: { command: hookCommand('session-start'), timeout: 15 },
+    beforeSubmitPrompt: { command: hookCommand('user-prompt-submit'), timeout: 5 },
+    // The hook hands the save to a background process and returns at once.
+    stop: { command: hookCommand('stop'), timeout: 10 },
   };
+}
+export const CURSOR_HOOK_EVENTS = Object.keys(sigilHooks());
 
-  if (!dryRun) await fs.mkdir(CURSOR_HOME, { recursive: true });
-  const result = await safeWrite(CURSOR_MCP_PATH, JSON.stringify(config, null, 2), { dryRun });
+async function writeHooks({ dryRun = false } = {}) {
+  const { data, missing, error } = await readJsonConfig(CURSOR_HOOKS_PATH);
+  if (error) return { action: 'skip', path: CURSOR_HOOKS_PATH, detail: `${error} — not touched; fix or move it, then re-run` };
+
+  const before = JSON.stringify(data);
+  if (data.version == null) data.version = 1;
+  data.hooks = data.hooks && typeof data.hooks === 'object' ? data.hooks : {};
+  stripFlatSigilHooks(data.hooks);
+  for (const [event, entry] of Object.entries(sigilHooks())) {
+    data.hooks[event] = [...(data.hooks[event] || []), entry];
+  }
+  if (JSON.stringify(data) === before) return { action: 'skip', path: CURSOR_HOOKS_PATH, detail: 'sigil hooks up to date' };
+
+  const result = await writeJsonConfig(CURSOR_HOOKS_PATH, data, { dryRun });
   return {
     action: result.action,
-    path: CURSOR_MCP_PATH,
-    detail: existedBefore
-      ? '+sigil MCP server (other entries preserved)'
-      : 'new mcp.json with sigil entry',
+    path: CURSOR_HOOKS_PATH,
+    detail: missing ? 'new hooks.json with sigil hooks' : `+${CURSOR_HOOK_EVENTS.join(', +')} hooks (other hooks preserved)`,
   };
 }
 
-// Build the .mdc body: YAML frontmatter + shared instructions text.
-//
-// Cursor reads frontmatter to decide whether a rule auto-applies. We set
-// `alwaysApply: true` so these instructions surface on every prompt —
-// the closest equivalent to Claude Code's @import behavior.
+// ── Rule ──────────────────────────────────────────────────────────────────────
+
+// `alwaysApply: true` puts the instructions in every prompt — the closest
+// thing Cursor has to per-prompt recall.
 function buildRulesFile() {
   const frontmatter = [
     '---',
@@ -110,90 +96,82 @@ function buildRulesFile() {
 }
 
 async function writeRulesFile({ dryRun = false } = {}) {
-  const fs = await import('node:fs/promises');
-  if (!dryRun) await fs.mkdir(dirname(CURSOR_RULES_PATH), { recursive: true });
+  if (!dryRun) await mkdir(dirname(CURSOR_RULES_PATH), { recursive: true });
   const result = await safeWrite(CURSOR_RULES_PATH, buildRulesFile(), { dryRun });
-  return {
-    action: result.action,
-    path: CURSOR_RULES_PATH,
-    detail: `${result.bytes ?? 0} bytes, alwaysApply=true`,
-  };
+  return { action: result.action, path: CURSOR_RULES_PATH, detail: `${result.bytes ?? 0} bytes, alwaysApply=true` };
+}
+
+// ── Contract ──────────────────────────────────────────────────────────────────
+
+async function writeMcpEntry({ dryRun = false } = {}) {
+  await writeLauncherShim({ dryRun });
+  return upsertJsonMcpServer(CURSOR_MCP_PATH, AGENT, { dryRun });
 }
 
 async function install({ dryRun = false } = {}) {
   const actions = [];
-
-  const mcp = await writeMcpEntry({ dryRun });
-  if (mcp) actions.push(mcp);
-
-  const rules = await writeRulesFile({ dryRun });
-  if (rules) actions.push(rules);
-
-  return { actions };
+  actions.push(await writeMcpEntry({ dryRun }));
+  actions.push(await writeHooks({ dryRun }));
+  actions.push(await writeRulesFile({ dryRun }));
+  return { actions: actions.filter(Boolean) };
 }
 
 async function verify({ deep = false } = {}) {
-  const fs = await import('node:fs/promises');
+  const missing = [];
+  let anyPresent = false;
 
-  if (!existsSync(CURSOR_MCP_PATH)) {
-    return { installed: false, reason: '~/.cursor/mcp.json missing' };
-  }
-  let config;
-  try {
-    config = JSON.parse(await fs.readFile(CURSOR_MCP_PATH, 'utf8'));
-  } catch {
-    return { installed: false, reason: '~/.cursor/mcp.json is not valid JSON' };
-  }
-  if (!config.mcpServers?.sigil) {
-    return { installed: false, reason: 'sigil entry missing from ~/.cursor/mcp.json' };
-  }
+  const mcp = await hasJsonMcpServer(CURSOR_MCP_PATH);
+  if (mcp.error) return { installed: false, partial: false, reason: `~/.cursor/mcp.json ${mcp.error}` };
+  if (mcp.present) anyPresent = true;
+  else missing.push('MCP entry in mcp.json');
 
-  if (!existsSync(CURSOR_RULES_PATH)) {
-    return { installed: false, reason: '~/.cursor/rules/sigil.mdc missing' };
-  }
+  const { data: hooksFile, error } = await readJsonConfig(CURSOR_HOOKS_PATH);
+  if (error) return { installed: false, partial: anyPresent, reason: `~/.cursor/hooks.json ${error}` };
+  const missingHooks = CURSOR_HOOK_EVENTS.filter((e) => !(hooksFile?.hooks?.[e] || []).some((h) => isSigilHookCommand(h?.command)));
+  if (missingHooks.length < CURSOR_HOOK_EVENTS.length) anyPresent = true;
+  if (missingHooks.length) missing.push(`hooks (${missingHooks.join(', ')})`);
 
-  // The registered command is the stable shim; it must exist on disk.
-  if (!existsSync(MCP_SHIM_PATH)) {
-    return { installed: false, reason: `MCP launcher missing at ${MCP_SHIM_PATH} — run \`sigil connect\`` };
+  if (existsSync(CURSOR_RULES_PATH)) anyPresent = true;
+  else missing.push('rule ~/.cursor/rules/sigil.mdc');
+
+  if (missing.length) return { installed: false, partial: anyPresent, reason: `missing: ${missing.join('; ')}` };
+
+  for (const shim of [MCP_SHIM_PATH, HOOK_SHIM_PATH]) {
+    if (!existsSync(shim)) return { installed: false, partial: true, reason: `launcher missing at ${shim} — run \`sigil connect\`` };
   }
   const serverPath = resolveServerPath();
   if (!existsSync(serverPath)) {
-    return { installed: false, reason: `MCP server missing at ${serverPath} — run \`sigil connect\` to refresh` };
+    return { installed: false, partial: true, reason: `MCP server missing at ${serverPath} — run \`sigil connect\`` };
   }
   if (deep) {
     const { verifyMcpRoundTrip } = await import('./roundtrip.js');
     const rt = await verifyMcpRoundTrip(serverPath);
-    if (!rt.ok) return { installed: false, reason: `MCP round-trip failed: ${rt.reason}` };
+    if (!rt.ok) return { installed: false, partial: true, reason: `MCP round-trip failed: ${rt.reason}` };
   }
-
   return { installed: true };
 }
 
 async function uninstall({ dryRun = false } = {}) {
-  const fs = await import('node:fs/promises');
   const actions = [];
 
-  // Remove sigil entry from mcp.json, preserve other servers
-  if (existsSync(CURSOR_MCP_PATH)) {
-    let config;
-    try {
-      config = JSON.parse(await fs.readFile(CURSOR_MCP_PATH, 'utf8'));
-    } catch {
-      actions.push({ action: 'skip', path: CURSOR_MCP_PATH, detail: 'invalid JSON — not touched' });
-      return { actions };
-    }
-    if (config.mcpServers?.sigil) {
-      delete config.mcpServers.sigil;
-      const result = await safeWrite(CURSOR_MCP_PATH, JSON.stringify(config, null, 2), { dryRun });
-      actions.push({ action: result.action, path: CURSOR_MCP_PATH, detail: '-sigil MCP entry' });
+  const mcp = await removeJsonMcpServer(CURSOR_MCP_PATH, { dryRun });
+  if (mcp) actions.push(mcp);
+
+  if (existsSync(CURSOR_HOOKS_PATH)) {
+    const { data, error } = await readJsonConfig(CURSOR_HOOKS_PATH);
+    if (error) {
+      actions.push({ action: 'skip', path: CURSOR_HOOKS_PATH, detail: `${error} — not touched` });
+    } else if (stripFlatSigilHooks(data.hooks || {})) {
+      const result = await writeJsonConfig(CURSOR_HOOKS_PATH, data, { dryRun });
+      actions.push({ action: result.action, path: CURSOR_HOOKS_PATH, detail: 'sigil hooks removed (other hooks preserved)' });
     } else {
-      actions.push({ action: 'skip', path: CURSOR_MCP_PATH, detail: 'sigil entry not present' });
+      actions.push({ action: 'skip', path: CURSOR_HOOKS_PATH, detail: 'no sigil hooks to remove' });
     }
   }
 
-  // Delete the rules file outright — we own this file (no other tool writes here)
+  // We own this file; no other tool writes it.
   if (existsSync(CURSOR_RULES_PATH)) {
-    if (!dryRun) await fs.unlink(CURSOR_RULES_PATH);
+    if (!dryRun) await unlink(CURSOR_RULES_PATH);
     actions.push({ action: 'delete', path: CURSOR_RULES_PATH, detail: 'sigil rules file removed' });
   }
 
@@ -206,8 +184,8 @@ export {
   install,
   uninstall,
   verify,
-  // Exposed for low-level callers (uninstall, tests).
   writeMcpEntry,
+  writeHooks,
   writeRulesFile,
   resolveServerPath,
 };

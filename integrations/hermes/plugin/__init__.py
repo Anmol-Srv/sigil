@@ -52,6 +52,13 @@ from agent.memory_provider import MemoryProvider
 
 logger = logging.getLogger(__name__)
 
+# The `sigil` CLI tags every call with SIGIL_AGENT. Name Hermes on each call so
+# its recall and saves are attributed to it (and Sigil can show when Hermes last
+# used memory) instead of to a generic "cli". Per call, not os.environ: other
+# tools Hermes spawns must not inherit it.
+def _sigil_env() -> Dict[str, str]:
+    return {**os.environ, "SIGIL_AGENT": "hermes"}
+
 # Subprocess timeouts. Search is on the prompt-critical path → tight budget.
 # Remember is fire-and-forget via --bg, but we still cap the spawn-and-detach.
 _SEARCH_TIMEOUT_S = 5
@@ -178,6 +185,7 @@ class SigilProvider(MemoryProvider):
                 capture_output=True,
                 text=True,
                 check=False,
+                env=_sigil_env(),
             )
         except subprocess.TimeoutExpired:
             logger.warning("sigil search timed out after %ss", _SEARCH_TIMEOUT_S)
@@ -244,6 +252,7 @@ class SigilProvider(MemoryProvider):
                     timeout=_REMEMBER_TIMEOUT_S,
                     capture_output=True,
                     text=True,
+                    env=_sigil_env(),
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("sigil ingest-turn failed: %s", exc)
@@ -336,6 +345,7 @@ class SigilProvider(MemoryProvider):
                 capture_output=True,
                 text=True,
                 check=False,
+                env=_sigil_env(),
             )
         except Exception as exc:  # noqa: BLE001
             return _err(_clean_text(f"sigil search failed: {exc}"))
@@ -365,6 +375,7 @@ class SigilProvider(MemoryProvider):
                 capture_output=True,
                 text=True,
                 check=False,
+                env=_sigil_env(),
             )
         except Exception as exc:  # noqa: BLE001
             return _err(_clean_text(f"sigil remember failed: {exc}"))

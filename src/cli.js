@@ -34,7 +34,8 @@ Usage:
 Commands:
   init                     Interactive setup wizard (DB, LLM, embeddings, agents)
   update [--check]         Update Sigil to the latest release
-  connect [--clients ...]  Re-pin launcher shims + re-sync AI client configs (fix stale paths)
+  agents [--json]          Show each coding agent: connected, working, or needs repair
+  connect [--clients ...]  Connect or repair agents (re-pins launchers, re-syncs configs)
   uninstall [--dry-run]    Remove Sigil's entries from selected AI clients
   doctor                   Diagnose Sigil setup (DB, LLM, embeddings, hooks)
   remember "text"          Save a short, self-contained fact to memory
@@ -179,6 +180,7 @@ const WRITE_RPC_TIMEOUT_MS = 10 * 60 * 1000;
 
 const commands = {
   init: runInit,
+  agents: runAgents,
   connect: runConnect,
   setup: runInit, // alias: one native onboarding flow (no separate quickstart path)
   uninstall: runUninstall,
@@ -246,6 +248,12 @@ if (!handler) {
   console.error(`Unknown command: ${command}\n`);
   console.log(HELP);
   process.exit(1);
+}
+
+// Agents that reach Sigil through this CLI (the Hermes plugin) name themselves
+// in SIGIL_AGENT. Stamp it so the Agents page can show they really use memory.
+if (process.env.SIGIL_AGENT === 'hermes') {
+  try { (await import('./hooks/host.js')).markSeen('hermes', command || 'launch', 'cli'); } catch { /* best-effort */ }
 }
 
 // Proactive surfacing: print a one-line warning to stderr if hook errors
@@ -370,11 +378,11 @@ async function runConnect(args) {
 Usage:
   sigil connect [--clients <a,b,...>] [--all] [--dry-run]
 
-Re-pins the stable launcher shims (~/.sigil/bin/) to the current install and
-re-syncs each client's generated config (Claude Code hooks + CLAUDE.md, Cursor,
-Codex CLI, Kiro). Run this after upgrading, reinstalling, or switching Node
-versions if memory stops working — it fixes stale paths WITHOUT re-running the
-full setup wizard. Touches no database, provider, or API keys.
+Connects Sigil to each picked agent, or repairs it: re-pins the stable launcher
+shims (~/.sigil/bin/) and re-writes Sigil's hooks, MCP entry and instructions
+(Claude Code, Codex CLI, Cursor, Kiro, Hermes). Only Sigil's own entries change.
+Run it when \`sigil agents\` shows "needs repair", or after reinstalling or
+switching Node versions. Touches no database, provider, or API keys.
 
 Options:
   --clients <a,b,...>   Comma-separated client ids. Accepts: claude-code (claude),
@@ -485,11 +493,76 @@ skipped (agent/CI-friendly).`);
   const lines = planned.map((p) => `  ${pad(p.action, 8)} [${p.client}] ${p.path}${p.detail ? `  (${p.detail})` : ''}`);
   note(lines.join('\n') || '(no changes)', dryRun ? 'Plan' : 'Re-synced');
 
+  // What each agent still needs before memory works (e.g. Codex only runs a
+  // new hook once it's approved in /hooks). Silent agents would look broken.
+  if (!dryRun) {
+    try {
+      const { listConnectorStatus } = await import('./lib/clients/status.js');
+      const rows = await listConnectorStatus(clients.filter((c) => pickedIds.includes(c.id)));
+      const steps = rows.filter((r) => r.nextStep).map((r) => `  ${r.label}: ${r.nextStep}`);
+      if (steps.length) note(steps.join('\n'), 'Next step');
+    } catch { /* status is advisory */ }
+  }
+
   outro(dryRun
     ? 'Dry run complete. Re-run without --dry-run to apply.'
-    : 'Done. Open a new agent session to pick up the refreshed integration.');
+    : 'Done. Run `sigil agents` any time to see whether each agent is using memory.');
 
   process.exit(0);
+}
+
+// ─── Agents ──────────────────────────────────────────────────────────────────
+
+// One row per coding agent: what Sigil does there and whether it actually
+// works — config on disk plus proof the agent reached Sigil (see
+// src/lib/clients/status.js). Read-only; the same rows the dashboard shows.
+async function runAgents(args) {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(`sigil agents — Show Sigil's status in each coding agent
+
+Usage:
+  sigil agents [--json] [--deep]
+
+States:
+  working       connected, and the agent has used memory
+  not used yet  connected, no session has reached Sigil yet
+  needs repair  some of Sigil's settings are missing; run \`sigil connect\`
+  available     the agent is installed; run \`sigil connect\` to add memory
+  not installed the agent isn't on this machine
+
+--deep also starts the MCP server or runs a hook to prove it answers.
+--json prints the rows for scripts.`);
+    process.exit(0);
+  }
+
+  const { listClients } = await import('./lib/clients/index.js');
+  const { listConnectorStatus, ago } = await import('./lib/clients/status.js');
+  const rows = await listConnectorStatus(await listClients(), { deep: args.includes('--deep') });
+
+  if (args.includes('--json')) {
+    console.log(JSON.stringify({ agents: rows }, null, 2));
+    return;
+  }
+
+  const WORD = {
+    working: '✓ working',
+    waiting: '· not used yet',
+    'needs-repair': '⚠ needs repair',
+    available: '○ available',
+    unavailable: '  not installed',
+  };
+  const CHANNEL = { hook: 'hooks', mcp: 'MCP', cli: 'plugin' };
+  const width = Math.max(...rows.map((r) => r.label.length));
+  console.log('');
+  for (const r of rows) {
+    const seen = r.lastSeen?.at ? `  last used ${ago(r.lastSeen.at)} via ${CHANNEL[r.lastSeen.channel] || r.lastSeen.channel}` : '';
+    console.log(`  ${r.label.padEnd(width)}  ${(WORD[r.state] || r.state).padEnd(15)}${seen}`);
+    if (r.state !== 'unavailable') console.log(`  ${''.padEnd(width)}  ${r.hint}`);
+    if (r.nextStep) console.log(`  ${''.padEnd(width)}  → ${r.nextStep}`);
+  }
+  const fix = rows.filter((r) => r.state === 'needs-repair' || r.state === 'available');
+  console.log('');
+  if (fix.length) console.log(`Run \`sigil connect\` to ${fix.some((r) => r.state === 'needs-repair') ? 'repair' : 'connect'}: ${fix.map((r) => r.id).join(', ')}`);
 }
 
 // ─── Uninstall ──────────────────────────────────────────────────────────────
@@ -501,11 +574,12 @@ async function runUninstall(args) {
 Usage:
   sigil uninstall [--dry-run]
 
-Walks through every detected AI client (Claude Code, Cursor, Codex CLI, Kiro)
-and lets you pick which ones to remove Sigil from. Each picked client gets:
-  - its MCP entry removed from the client's config (other entries preserved)
-  - its instructions / rules / steering file deleted
-  - hook entries stripped (Claude Code only)
+Walks through every agent Sigil is connected to (Claude Code, Codex CLI, Cursor,
+Kiro, Hermes) and lets you pick which ones to remove Sigil from. Each picked
+agent gets:
+  - Sigil's hook entries removed (other hooks preserved)
+  - its MCP entry removed from the agent's config (other servers preserved)
+  - Sigil's instructions block / rule / steering file removed
 
 Sigil's own data — ~/.sigil/, the database, stored facts — is NOT touched.
 Use 'sigil reset' for a full wipe.
@@ -732,25 +806,26 @@ running the checks — use when you've seen them and don't want a full pass.`);
     log('warn', 'Stop-hook spool', `unreadable: ${err.message}`);
   }
 
-  // Client integrations — for each detected client, run verify() to confirm
-  // Sigil's config entries are actually present. Undetected clients are
-  // silent (no point warning about Cursor on a box that doesn't have it).
+  // Agents — for each detected agent: are Sigil's settings complete, and has
+  // the agent actually used memory? Undetected agents are skipped.
   try {
     const { listClients } = await import('./lib/clients/index.js');
-    const clients = await listClients();
-    let reported = 0;
-    for (const client of clients) {
-      if (!(await client.detect())) continue;
-      reported++;
-      const result = await client.verify({ deep });
-      if (result.installed) {
-        log('ok', `${client.label} integration`, deep ? 'configured + round-trip ok' : 'configured');
+    const { listConnectorStatus, ago } = await import('./lib/clients/status.js');
+    const rows = (await listConnectorStatus(await listClients(), { deep })).filter((r) => r.detected || r.installed || r.partial);
+    for (const r of rows) {
+      const label = `${r.label} integration`;
+      if (r.state === 'working') {
+        log('ok', label, `working — last used ${ago(r.lastSeen.at)}${deep ? ', round-trip ok' : ''}`);
+      } else if (r.state === 'waiting') {
+        log('ok', label, `connected, not used yet — ${r.nextStep}`);
+      } else if (r.state === 'needs-repair') {
+        log('warn', label, `${r.nextStep} — run \`sigil connect\` to repair`);
       } else {
-        log('warn', `${client.label} integration`, `${result.reason} — run 'sigil init' to refresh`);
+        log('warn', label, 'installed but not connected — run `sigil connect` to add memory');
       }
     }
-    if (reported === 0) {
-      log('warn', 'Client integrations', 'no AI clients detected (Claude Code / Cursor / Codex / Kiro)');
+    if (rows.length === 0) {
+      log('warn', 'Client integrations', 'no AI clients detected (Claude Code / Cursor / Codex / Kiro / Hermes)');
     }
   } catch (err) {
     log('warn', 'Client integrations', `check failed: ${err.message}`);

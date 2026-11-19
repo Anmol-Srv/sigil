@@ -48,7 +48,10 @@ const PLUGIN_SOURCE_DIR = join(PKG_DIR, 'integrations', 'hermes', 'plugin');
 const meta = {
   id: 'hermes',
   label: 'Hermes',
-  hint: 'Python memory-provider plugin + config.yaml flip',
+  hint: 'memory-provider plugin recalls + saves every turn',
+  capabilities: { sessionStart: 'auto', recall: 'auto', capture: 'auto', tools: 'plugin' },
+  firstRunHint: 'Start a new Hermes session',
+  requiresRestart: true,
 };
 
 async function detect() {
@@ -288,6 +291,27 @@ async function uninstall({ dryRun = false } = {}) {
 }
 
 async function verify() {
+  const res = await verifyInstall();
+  if (res.installed) return res;
+  // Needs repair only when Hermes is still set to use Sigil but the plugin is
+  // broken. If the user picked another memory provider, Sigil is simply not
+  // connected: never re-select it for them (the update re-sync repairs
+  // anything marked partial).
+  return { ...res, partial: (await currentProvider()) === 'sigil' };
+}
+
+async function currentProvider() {
+  try {
+    const fs = await import('node:fs/promises');
+    const content = await fs.readFile(HERMES_CONFIG_PATH, 'utf8');
+    const block = content.match(/^memory:\s*\n([\s\S]*?)(?=^[A-Za-z_])/m)?.[1] || '';
+    return block.match(/^\s+provider:\s*['"]?([^'"\n]*)['"]?/m)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function verifyInstall() {
   const fs = await import('node:fs/promises');
 
   if (!existsSync(HERMES_SIGIL_PLUGIN_DIR)) {

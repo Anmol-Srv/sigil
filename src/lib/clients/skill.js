@@ -22,7 +22,8 @@ import { homedir } from 'node:os';
 import { safeWrite } from '../safe-write.js';
 import { LAUNCHER_SHIM_PATH, writeLauncherShim } from './shim.js';
 
-const CLAUDE_SKILL_DIR = join(homedir(), '.claude', 'skills', 'sigil');
+// CLAUDE_CONFIG_DIR moves Claude Code's whole config folder, skills included.
+const CLAUDE_SKILL_DIR = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'skills', 'sigil');
 const SIGIL_SKILL_PATH = join(CLAUDE_SKILL_DIR, 'SKILL.md');
 
 // Bump when the skill text changes in a way existing installs should pick up.

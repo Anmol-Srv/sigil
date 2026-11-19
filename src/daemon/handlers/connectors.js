@@ -1,23 +1,20 @@
 /**
  * Connectors RPC — GUI-facing wrapper over the client registry
- * (src/lib/clients/*). Lets the wizard render click-to-connect cards and
- * connect/disconnect Sigil into Claude Code, Cursor, Kiro, etc.
+ * (src/lib/clients/*). Lets the dashboard render agent cards and connect,
+ * repair or disconnect Sigil in Claude Code, Codex, Cursor, Kiro and Hermes.
  *
- * UI status derived per card:
- *   connected   — Sigil is installed into this client (verify().installed)
- *   available   — client detected on the machine but Sigil not installed yet
- *   unavailable — client not detected here
- *   error       — surfaced by the GUI when a connect/verify call throws
- *
- * Reuses the registry contract unchanged: meta/detect/install/uninstall/verify.
+ * Each row carries `state` (working | waiting | needs-repair | available |
+ * unavailable — see src/lib/clients/status.js) plus the evidence behind it.
+ * `status` (connected | available | unavailable) is kept for older callers.
  */
 import { listClients } from '../../lib/clients/index.js';
+import { listConnectorStatus } from '../../lib/clients/status.js';
 import { AppError } from '../../lib/errors.js';
 
-function uiStatus(detected, installed) {
-  if (installed) return 'connected';
-  if (detected) return 'available';
-  return 'unavailable';
+function legacyStatus(state) {
+  if (state === 'working' || state === 'waiting') return 'connected';
+  if (state === 'unavailable') return 'unavailable';
+  return 'available';
 }
 
 async function findClient(id) {
@@ -32,26 +29,8 @@ async function findClient(id) {
 
 export function registerConnectors(registry) {
   registry.register('listConnectors', async () => {
-    const clients = await listClients();
-    const connectors = await Promise.all(
-      clients.map(async (c) => {
-        const [detected, verified] = await Promise.all([
-          Promise.resolve().then(() => c.detect()).catch(() => false),
-          Promise.resolve().then(() => c.verify()).catch((e) => ({ installed: false, reason: e?.message })),
-        ]);
-        const installed = Boolean(verified?.installed);
-        return {
-          id: c.id,
-          label: c.label,
-          hint: c.hint,
-          detected: Boolean(detected),
-          installed,
-          status: uiStatus(Boolean(detected), installed),
-          reason: verified?.reason || null,
-        };
-      }),
-    );
-    return { connectors };
+    const rows = await listConnectorStatus(await listClients());
+    return { connectors: rows.map((r) => ({ ...r, status: legacyStatus(r.state) })) };
   });
 
   // Install Sigil into a client, then verify it actually took.

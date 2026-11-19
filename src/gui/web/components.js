@@ -19,21 +19,40 @@ export function statusDot(kind, word) {
   return wrap;
 }
 
+// One pill per connector state (src/lib/clients/status.js), drawn from the
+// shared five-state vocabulary in DESIGN.md: Healthy, Idle, Warning, Error.
 const CONNECTOR_STATUS = {
-  connected: { kind: 'ok', word: 'connected' },
+  working: { kind: 'ok', word: 'working' },
+  waiting: { kind: 'muted', word: 'not used yet' },
+  'needs-repair': { kind: 'warn', word: 'needs repair' },
   available: { kind: 'muted', word: 'available' },
   unavailable: { kind: 'muted', word: 'not installed' },
   connecting: { kind: 'warn', word: 'connecting…' },
   error: { kind: 'danger', word: 'error' },
+  // Older daemons send only `status`.
+  connected: { kind: 'ok', word: 'connected' },
 };
+
+const CHANNEL_WORD = { hook: 'hooks', mcp: 'MCP', cli: 'plugin' };
+
+function agoText(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '';
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 48) return `${h} h ago`;
+  return `${Math.round(h / 24)} days ago`;
+}
 
 /**
  * Connector card. `onAction(id, action)` is called with action 'connect' |
- * 'disconnect' | 'retry'. `state` overrides the derived status (e.g. while a
- * connect is in flight pass 'connecting').
+ * 'repair' | 'disconnect' | 'retry'. `uiState` overrides the state (e.g. pass
+ * 'connecting' while a connect is in flight).
  */
 export function connectorCard(c, onAction) {
-  const status = c.uiState || c.status;
+  const status = c.uiState || c.state || c.status;
   const card = E('div', `connector-card ${status === 'unavailable' ? 'unavailable' : ''}`);
   card.dataset.id = c.id;
 
@@ -43,25 +62,36 @@ export function connectorCard(c, onAction) {
   top.append(statusDot(meta.kind, meta.word));
   card.append(top);
 
+  // What Sigil does in this agent, then the one thing the user should know now.
   card.append(E('div', 'cc-hint', c.reason && status === 'error' ? c.reason : c.hint));
+  const next = status === 'waiting' || status === 'needs-repair' ? c.nextStep : null;
+  if (next) card.append(E('div', 'cc-hint', next));
+  if (c.lastSeen?.at && status !== 'unavailable') {
+    card.append(E('div', 'cc-hint', `Last used ${agoText(c.lastSeen.at)} via ${CHANNEL_WORD[c.lastSeen.channel] || c.lastSeen.channel}`));
+  }
 
   const actions = E('div', 'cc-actions');
-  if (status === 'connected') {
-    const b = E('button', 'btn danger', 'Disconnect');
+  const button = (label, cls, action) => {
+    const b = E('button', cls, label);
     b.type = 'button';
-    b.onclick = () => onAction(c.id, 'disconnect');
+    b.onclick = () => onAction(c.id, action);
     actions.append(b);
+  };
+  if (status === 'working' || status === 'waiting' || status === 'connected') {
+    button('Disconnect', 'btn danger', 'disconnect');
+  } else if (status === 'needs-repair') {
+    button('Repair', 'btn primary', 'repair');
+    button('Disconnect', 'btn danger', 'disconnect');
   } else if (status === 'connecting') {
     const b = E('button', 'btn', 'Connecting…');
     b.type = 'button'; b.disabled = true;
     actions.append(b);
   } else if (status === 'unavailable') {
     // no action — not installed on this machine
+  } else if (status === 'error') {
+    button('Retry', 'btn', 'retry');
   } else {
-    const b = E('button', status === 'error' ? 'btn' : 'btn primary', status === 'error' ? 'Retry' : 'Connect');
-    b.type = 'button';
-    b.onclick = () => onAction(c.id, status === 'error' ? 'retry' : 'connect');
-    actions.append(b);
+    button('Connect', 'btn primary', 'connect');
   }
   card.append(actions);
   return card;

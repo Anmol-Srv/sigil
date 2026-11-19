@@ -263,6 +263,24 @@ export async function startDaemon({ foreground = false } = {}) {
     }
   } catch { /* best-effort — never block boot */ }
 
+  // After an update, bring connected agents up to what this version writes
+  // (new hooks etc.), once per version. Installed copies only: a daemon run
+  // from a source checkout must not re-point the user's agents at it.
+  // Delayed and unref'd so it never slows boot.
+  {
+    const t = setTimeout(async () => {
+      try {
+        const { isGitInstall } = await import('../lib/git-update.js');
+        if (!isGitInstall()) return;
+        const { resyncOncePerVersion } = await import('../lib/clients/resync.js');
+        await resyncOncePerVersion(getSigilVersion(), { log });
+      } catch (e) {
+        log(`agents: re-sync skipped: ${e.message.split('\n')[0]}`);
+      }
+    }, 5_000);
+    t.unref();
+  }
+
   // Background staleness check: tell the user when their git install has fallen
   // behind the release branch. Writes SIGIL_UPDATE_FLAG (read by the CLI
   // preamble → "update available") when behind, removes it when in sync. Git
