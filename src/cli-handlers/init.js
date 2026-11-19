@@ -258,7 +258,9 @@ async function stepConnectors(ctx) {
       await c.install({ dryRun: false });
       const v = await c.verify().catch((e) => ({ installed: false, reason: e?.message }));
       if (!v?.installed) throw new Error(v?.reason || 'verification failed');
-      s.stop(`${c.label} connected`);
+      // Some agents need one more step before memory works (Codex only runs
+      // a new hook after it's approved in /hooks).
+      s.stop(c.firstRunHint ? `${c.label} connected — next: ${c.firstRunHint}` : `${c.label} connected`);
     } catch (err) {
       s.stop(`${c.label} failed: ${err.message}`);
     }

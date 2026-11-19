@@ -25,8 +25,10 @@ import { recordHookError, failClosedOnBadConfig } from './error-log.js';
 import { loadHookEnv } from './env-loader.js';
 import { breakerOpen, tripBreaker, resetBreaker } from './daemon-breaker.js';
 import { readStdin } from './io.js';
+import { hookAgent, normalizeInput, contextReply, markSeen, rememberPrompt, DEFAULT_AGENT } from './host.js';
 
 loadHookEnv();
+const AGENT = hookAgent();
 
 const MIN_QUERY_LENGTH = 8;
 // Prompts had a floor but no ceiling, so a pasted spec sailed straight into the
@@ -126,8 +128,8 @@ async function searchViaDaemon(query, input) {
       synthesize: false,  // synthesis steals Claude's citation surface; off here
       podScope: 'auto',   // active session/project/person pods, not the whole brain
       applyFloor: true,   // precision-first: drop off-topic matches (auto-injection)
-      cwd: input.cwd || null,
-      sessionId: input.session_id || null,
+      cwd: normalizeInput(input).cwd,
+      sessionId: normalizeInput(input).sessionId,
       // namespaces omitted on purpose — the daemon resolves its own default
       // namespace, which is the authoritative one.
     });
@@ -143,6 +145,15 @@ async function main() {
 
   const input = JSON.parse(raw);
   const query = input.prompt || '';
+  markSeen(AGENT, 'prompt');
+
+  // Only Claude Code's Stop payload has a transcript we can read the turn from.
+  // For other agents, keep the prompt so the Stop hook can capture the turn.
+  if (AGENT !== DEFAULT_AGENT) rememberPrompt(AGENT, normalizeInput(input).sessionId, query);
+
+  // Cursor's prompt hook can't add context (it can only allow or block), so
+  // skip the search. Cursor recalls through its MCP tools instead.
+  if (AGENT === 'cursor') return respond();
 
   // Skip short/trivial prompts.
   if (query.length < MIN_QUERY_LENGTH) return respond();
@@ -212,12 +223,7 @@ async function main() {
 }
 
 function respond(additionalContext) {
-  const output = {
-    hookSpecificOutput: {
-      hookEventName: 'UserPromptSubmit',
-      ...(additionalContext && { additionalContext }),
-    },
-  };
+  const output = contextReply(AGENT, 'UserPromptSubmit', additionalContext);
   // Flush, then force-exit: a daemon socket / pending call timer could otherwise
   // keep the event loop alive past our work. The hook's job ends at this write.
   process.stdout.write(JSON.stringify(output), () => process.exit(0));

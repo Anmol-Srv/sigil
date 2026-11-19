@@ -15,9 +15,10 @@
  * user has already seen Claude's response, so user-facing latency is zero.
  */
 
-import { dirname } from 'node:path';
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { spawn } from 'node:child_process';
 
 import { loadHookEnv } from './env-loader.js';
 import { maskSecrets } from './secret-mask.js';
@@ -25,9 +26,11 @@ import { classifyTurn } from './stop-classify.js';
 import { appendSpool } from './stop-spool.js';
 import { breakerOpen, tripBreaker, resetBreaker } from './daemon-breaker.js';
 import { readStdin } from './io.js';
-import { SIGIL_STOP_CURSOR } from '../lib/paths.js';
+import { hookAgent, normalizeInput, markSeen, takePrompt, DEFAULT_AGENT } from './host.js';
+import { SIGIL_STOP_CURSOR, SIGIL_HOME } from '../lib/paths.js';
 
 loadHookEnv();
+const AGENT = hookAgent();
 
 const MIN_MESSAGE_LENGTH = 15;
 const MAX_MESSAGE_LENGTH = 8000;
@@ -37,12 +40,47 @@ const CURSOR_PATH = SIGIL_STOP_CURSOR;
 // spawn is capped at ~5s on top, leaving margin under the budget.
 const SAVE_TIMEOUT_MS = 20_000;
 
+// Agents whose Stop hook blocks would wait on the classifier before the user
+// can continue: Cursor has no background hooks, and Codex skipped its async
+// Stop hook in `codex exec`. Hand the turn to a detached copy of this hook and
+// answer at once. (Claude Code runs this hook with async: true.)
+const DETACH_AGENTS = new Set(['cursor', 'codex-cli']);
+const PAYLOAD_ENV = 'SIGIL_STOP_PAYLOAD';
+
+function detachSelf(raw) {
+  try {
+    const dir = join(SIGIL_HOME, 'run');
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = join(dir, `stop-${process.pid}-${randomBytes(4).toString('hex')}.json`);
+    writeFileSync(file, raw, { mode: 0o600 });
+    const child = spawn(process.execPath, [process.argv[1], ...process.argv.slice(2)], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, [PAYLOAD_ENV]: file },
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readPayload() {
+  const file = process.env[PAYLOAD_ENV];
+  try { return readFileSync(file, 'utf8').trim(); } catch { return ''; } finally { rmSync(file, { force: true }); }
+}
+
 async function main() {
-  const raw = await readStdin();
+  const raw = process.env[PAYLOAD_ENV] ? readPayload() : await readStdin();
   if (!raw) return respond();
+  if (DETACH_AGENTS.has(AGENT) && !process.env[PAYLOAD_ENV] && detachSelf(raw)) return respond();
 
   let input;
   try { input = JSON.parse(raw); } catch { return respond(); }
+  markSeen(AGENT, 'stop');
+  // Downstream code (spool, save) reads the Claude Code field names.
+  const { sessionId, cwd } = normalizeInput(input);
+  input = { ...input, session_id: sessionId, cwd };
 
   const userMessage = await extractLastUserMessage(input);
   if (!userMessage) return respond();
@@ -142,6 +180,10 @@ function respond() {
 // ─── Find the last user message from whatever Claude Code sends ──────────
 
 async function extractLastUserMessage(input) {
+  // Other agents: the prompt hook saved this turn's prompt. Their transcripts
+  // aren't in Claude Code's format (Codex documents its path as unstable).
+  if (AGENT !== DEFAULT_AGENT) return takePrompt(AGENT, input.session_id);
+
   // Path 1: transcript file (Claude Code's standard Stop hook input shape)
   if (input.transcript_path && existsSync(input.transcript_path)) {
     const msg = readLastUserMessageFromTranscript(input.transcript_path);

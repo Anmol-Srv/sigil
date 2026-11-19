@@ -64,17 +64,20 @@ The pod model (sessions, projects, people, playbooks, vitals, and any pluggable 
 
 ## Works with every agent on your machine
 
-Sigil's wedge is one memory layer underneath everything. `sigil init` detects every coding agent on your machine and wires Sigil into each one automatically: hooks for Claude Code, MCP server registration plus client-native steering rules for the rest.
+Sigil's wedge is one memory layer underneath everything. `sigil init` detects every coding agent on your machine and connects Sigil to each one: native hooks where the agent has them, plus MCP tools and its own instructions file.
 
-| Agent | Integration depth | Auto-wired |
-|---|---|---|
-| **Claude Code** | Four hooks (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) · MCP server · `@~/.sigil/CLAUDE.md` context import | ✓ |
-| **Codex CLI** | `~/.codex/config.toml` MCP entry · `~/.codex/AGENTS.md` steering · MCP server | ✓ |
-| **Cursor** | `~/.cursor/mcp.json` MCP entry · MCP server | ✓ |
-| **Kiro** | `~/.kiro/settings/mcp.json` MCP entry · `~/.kiro/steering/sigil.md` steering rule · MCP server | ✓ |
-| **Continue / Cline / Windsurf** | MCP server (one-line config from `sigil register --print`) | - |
-| **Hermes / OpenClaw / any custom agent** | MCP server, REST, or `sigil` CLI directly | - |
-| **Any MCP-spec client** | MCP server | - |
+| Agent | Memory at session start | Recall on every prompt | Saves each turn | Connected by |
+|---|---|---|---|---|
+| **Claude Code** | ✓ hook | ✓ hook | ✓ hook | `~/.claude/settings.json` hooks · `@~/.sigil/CLAUDE.md` · `/sigil` skill |
+| **Codex CLI** | ✓ hook | ✓ hook | ✓ hook | `~/.codex/hooks.json` · `[mcp_servers.sigil]` in `config.toml` · `AGENTS.md` block |
+| **Cursor** | ✓ hook | `search` tool (Cursor's prompt hook can't add context) | ✓ hook | `~/.cursor/hooks.json` · `~/.cursor/mcp.json` · `rules/sigil.mdc` |
+| **Hermes** | ✓ plugin | ✓ plugin | ✓ plugin | Sigil memory-provider plugin · `memory.provider: sigil` |
+| **Kiro** | — | `search` tool | `remember` tool | `~/.kiro/settings/mcp.json` · `steering/sigil.md` |
+| **Continue / Cline / Windsurf / any MCP client** | — | MCP tools | MCP tools | `sigil register --print` |
+
+Codex runs a new hook only after you approve it: open Codex and type `/hooks` once. Until then `sigil agents` shows Codex as **not used yet**.
+
+**Is it actually working?** `sigil agents` (and the dashboard's Agents page) shows each agent as *working*, *not used yet*, *needs repair*, *available* or *not installed*. "Working" means the agent has really reached Sigil. A config file on disk isn't proof. `sigil connect` repairs anything missing, and `sigil update` keeps connected agents current. Every change touches only Sigil's own entries, and the first edit to each file leaves a `.sigil.bak` copy.
 
 Works with **any** agent that speaks MCP or can run a shell command. One brain on your machine. Every agent reads and writes to it.
 
@@ -239,7 +242,7 @@ The Claude Code `Stop` hook classifies user messages and can save durable prefer
 
 ## Use with other MCP clients
 
-`sigil init` auto-wires Codex CLI, Cursor, and Kiro on first run if it detects them. No manual config needed. For everything else (Continue, Cline, Windsurf, your custom MCP-spec agent), `sigil register --print` outputs the standard MCP config JSON:
+`sigil init` connects Claude Code, Codex CLI, Cursor, Kiro and Hermes on first run if it detects them (see the table above). No manual config needed. For everything else (Continue, Cline, Windsurf, your custom MCP-spec agent), `sigil register --print` outputs the standard MCP config JSON:
 
 ```json
 {

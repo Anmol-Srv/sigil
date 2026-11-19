@@ -78,15 +78,31 @@ The first increment fixes launcher availability before setup and the handoff to 
 
 Extend the existing registry around detect → connect → verify → repair → disconnect. Track configuration, runtime activity, and available capabilities independently. Match each adapter to the host's event and trust model. Use a stable launcher and a shared memory service below the adapters. T3 Code is a reference for keeping agent-specific setup behind a common surface and supporting CLI and desktop entry points. Hermes is a reference for a first-class memory provider with per-profile lifecycle and a non-blocking write path. [T3 Code](https://github.com/pingdotgg/t3code) · [T3 Code provider implementation](https://github.com/pingdotgg/t3code/tree/main/apps/server/src/provider) · [Hermes memory provider contract](https://hermes-agent.nousresearch.com/docs/developer-guide/memory-provider-plugin)
 
-| Agent | Sigil today | Proposed next check |
+| Agent | Sigil today | Still to check |
 | --- | --- | --- |
-| Claude Code | Session-start preamble, per-prompt recall, capture at Stop, session cleanup, and MCP | Use as the reference implementation. Verify fresh and resumed sessions, capture deduplication, and fail-open hook timeouts. [Claude Code hook reference](https://code.claude.com/docs/en/hooks) |
-| Codex CLI | MCP and instructions in `AGENTS.md` | Test native `SessionStart`, `UserPromptSubmit`, and `Stop` on supported versions. Show pending hook approval and verify a real invocation after review. Preserve the MCP fallback. [Codex hooks](https://developers.openai.com/codex/hooks) |
-| Cursor | MCP and a steering rule | Test the scope and context output of `sessionStart`, `beforeSubmitPrompt`, and completion events in the desktop app and CLI before advertising any capability. Keep tool-based recall where a hook cannot inject context. [Cursor hooks](https://cursor.com/docs/agent/hooks) |
-| Hermes | Native Python memory provider using profile-scoped recall and capture | Verify the plugin in two active profiles and a background service. Test what happens when the executable is absent or the host is down, and preserve the prior provider on disconnect. [Sigil's Hermes integration](integrations/hermes/README.md) |
-| Kiro and other MCP clients | Kiro registration with steering, manual MCP or CLI for others | Verify the tools can read and write from real clients. Extend lifecycle support once the host's contract and the user demand justify it. |
+| Claude Code | Hooks: session-start preamble, per-prompt recall, save at Stop, session cleanup. Shared instructions and the `/sigil` skill | Resumed sessions and capture deduplication |
+| Codex CLI | Native hooks in `~/.codex/hooks.json` for session start, per-prompt recall and save at Stop. MCP and an `AGENTS.md` block as fallback. Status shows "not used yet" until Codex runs a hook, which needs approval in `/hooks` | Recall of stored facts and a saved turn with a configured store. The hooks themselves were tested with Codex 0.169 |
+| Cursor | `hooks.json` for session-start memory and save at Stop. MCP and an always-applied rule for recall, because `beforeSubmitPrompt` can't add context | The real Cursor app and `cursor-agent`. The hooks were tested only with payloads from Cursor's docs |
+| Hermes | Python memory provider: recall and capture per profile. Calls are now attributed to Hermes | Two active profiles, and preserving the previous provider on disconnect |
+| Kiro and other MCP clients | MCP entry and steering file for Kiro. `sigil register --print` for others | Kiro's hooks (CLI V3) once their contract is confirmed |
 
-Release criteria are a successful save and recall across two independent sessions, accurate degraded states, and repeatable connect, repair, and disconnect. Add Kiro and other integrations incrementally after Claude Code, Codex CLI, and Cursor have a common set of smoke checks.
+How it works:
+
+- **One status for each agent**, shared by the dashboard, `sigil agents` and `sigil doctor` ([status.js](src/lib/clients/status.js)):
+  - The states are *working*, *not used yet*, *needs repair*, *available* and *not installed*.
+  - "Working" needs proof that the agent ran a hook, started the MCP server or called the CLI. A config file on disk isn't enough.
+  - For Codex only a hook counts, because its MCP server starts even when its hooks were never approved.
+- **Agent identity:** each hook command names its agent (`--agent=<id>`), and each MCP entry sets `SIGIL_AGENT`. Recall and saves are attributed to the agent that made them, not to a generic "mcp".
+- **Config edits** touch only Sigil's own entries:
+  - `config.toml` is edited as text, so comments survive.
+  - An unreadable file is reported and never replaced.
+  - The first edit to each file leaves a `.sigil.bak` copy.
+- **Rollout:** after an update, the daemon re-syncs connected agents once per version ([resync.js](src/lib/clients/resync.js)). New hooks reach existing users without a manual `sigil connect`.
+- **Research behind this:** see claude-mem, Supermemory, basic-memory, ByteRover, add-mcp, Ruler and T3 Code. The patterns taken from them are:
+  - status built from evidence;
+  - one connector contract;
+  - surgical, format-preserving edits;
+  - fail-open hooks.
 
 ### 3. Skills and context injection
 

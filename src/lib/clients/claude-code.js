@@ -24,14 +24,18 @@ import { writeSharedInstructions, SHARED_INSTRUCTIONS_PATH } from './instruction
 import { writeSigilSkill, removeSigilSkill, SIGIL_SKILL_PATH } from './skill.js';
 import { HOOK_SHIM_PATH, LAUNCHER_SHIM_PATH, writeLauncherShim } from './shim.js';
 
-const CLAUDE_HOME = join(homedir(), '.claude');
+// CLAUDE_CONFIG_DIR moves Claude Code's config folder; honour it like Claude does.
+const CLAUDE_HOME = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
 const CLAUDE_MD_PATH = join(CLAUDE_HOME, 'CLAUDE.md');
 const CLAUDE_SETTINGS_PATH = join(CLAUDE_HOME, 'settings.json');
 
 const meta = {
   id: 'claude-code',
   label: 'Claude Code',
-  hint: 'hooks + @import — full auto-injection',
+  hint: 'hooks recall + save every turn',
+  capabilities: { sessionStart: 'auto', recall: 'auto', capture: 'auto', tools: 'cli' },
+  firstRunHint: 'Start a new Claude Code session',
+  requiresRestart: true,
 };
 
 // Recognise a hook command as ours, in any form we have ever written:
@@ -242,7 +246,28 @@ async function install({ dryRun = false } = {}) {
 // distinct from `detect()` which only asks "is Claude Code present on this
 // machine." `sigil doctor` uses this to flag drift (e.g., user edited
 // settings.json by hand and dropped a hook).
-async function verify({ deep = false } = {}) {
+async function verify(opts = {}) {
+  const res = await verifyInstall(opts);
+  if (res.installed) return res;
+  return { ...res, partial: await anySigilEntry() };
+}
+
+// Some of Sigil's entries are present (an older or hand-edited install), so
+// `sigil connect` should repair rather than freshly connect.
+async function anySigilEntry() {
+  const fs = await import('node:fs/promises');
+  try {
+    if ((await fs.readFile(CLAUDE_MD_PATH, 'utf8')).includes(`@${SHARED_INSTRUCTIONS_PATH}`)) return true;
+  } catch { /* absent */ }
+  try {
+    const hooks = JSON.parse(await fs.readFile(CLAUDE_SETTINGS_PATH, 'utf8')).hooks || {};
+    if (Object.values(hooks).some((groups) => Array.isArray(groups)
+      && groups.some((g) => g?.hooks?.some((h) => isSigilHook(h?.command))))) return true;
+  } catch { /* absent or invalid */ }
+  return existsSync(SIGIL_SKILL_PATH);
+}
+
+async function verifyInstall({ deep = false } = {}) {
   const fs = await import('node:fs/promises');
   const importLine = `@${SHARED_INSTRUCTIONS_PATH}`;
 
